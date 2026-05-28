@@ -1,8 +1,19 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.5.8 (Session #5 — 2026-05-28)
+  Version : 1.5.10 (Session #5 — 2026-05-28)
 =============================================================
+  1.5.10 2026-05-28
+         - Arrondi unitPa a 4 decimales pour formules X propres
+         - Fail explicite si sealedTxSheetNumId null (anomalie au lieu de comportement silencieux)
+
+  1.5.9  2026-05-28
+         - UNFORMATTED_VALUE pour full row read (contourne issues locale)
+         - Diagnostic complet log paTotalLot/unitPa/paForSale
+         - copyPaste PASTE_NORMAL pour copier formules N/P/U/Y/Z/AB/AC/AD/AE
+         - Col X : formule custom =unit_pa*H{row}
+         - Overwrite selectif des colonnes statiques uniquement
+
   1.5.8  2026-05-28
          - Fix find() apostrophes courbes U+2019
          - Fix formatage : insertDimension inheritFromBefore
@@ -446,7 +457,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.8';
+const APP_VERSION      = '1.5.10';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -738,8 +749,9 @@ async function sheetsRequest(method, url, body) {
   throw lastErr || new Error(method + ' failed after retries');
 }
 
-async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}`;
+async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID, valueRenderOption = null) {
+  let url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}`;
+  if (valueRenderOption) url += `?valueRenderOption=${valueRenderOption}`;
   return sheetsRequest('GET', url);
 }
 async function sheetsAppend(range, values, inputOption = 'USER_ENTERED', gsheetId = CENTRAL_GSHEET_ID) {
@@ -1216,7 +1228,7 @@ async function applySealedSale(rowIdx, salesRow) {
   }
   sealedRetryCount.delete(rowIdx);
   // Lecture de la ligne complète du lot (A:AF = 32 colonnes)
-  const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AG${sealed.sheetRow}`, CENTRAL_GSHEET_ID);
+  const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AG${sealed.sheetRow}`, CENTRAL_GSHEET_ID, 'UNFORMATTED_VALUE');
   const sr = (fullRowRes.values && fullRowRes.values[0]) || [];
 
   const currentQty = parseInt(sr[sealedColIdx.iQty]) || 0; // dynamique via sealedColIdx
@@ -1236,10 +1248,15 @@ async function applySealedSale(rowIdx, salesRow) {
   if (newQty === 0) stockCacheSealed.delete(key);
 
   // ── 2. Calculs dérivés ──────────────────────────────────────────────────
-  const paTotalLot = parsePrix(sr[sealedColIdx.iPa]);
-  const paForSale  = currentQty > 0
-    ? Math.round(paTotalLot / currentQty * qtySold * 100) / 100
-    : 0;
+  // sr[iPa] est maintenant un nombre brut (UNFORMATTED_VALUE) — pas besoin de parsePrix
+  const paTotalLot = parseFloat(sr[sealedColIdx.iPa]) || 0;
+  // Arrondi à 4 décimales pour formules X lisibles (ex: =340.5*H2316 au lieu de =340.4999*H2316)
+  const unitPa     = currentQty > 0 ? Math.round(paTotalLot / currentQty * 10000) / 10000 : 0;
+  const paForSale  = Math.round(unitPa * qtySold * 100) / 100;
+  console.log('[applySealedSale]',
+    '| iPa:', sealedColIdx.iPa, '| sr[iPa]:', sr[sealedColIdx.iPa],
+    '| paTotalLot:', paTotalLot, '| currentQty:', currentQty,
+    '| unitPa:', unitPa, '| paForSale:', paForSale);
   const marge   = Math.round((salePrice - paForSale) * 100) / 100;
   const margeP  = salePrice > 0 ? (marge / salePrice * 100).toFixed(1) + '%' : '0.0%';
   const coteU   = parsePrix(sr[sealedColIdx.iCoteU]);
@@ -1297,21 +1314,59 @@ async function applySealedSale(rowIdx, salesRow) {
   const nextTxRow = lastFilledRow + 1;
   console.log('[Transaction] lastFilledRow:', lastFilledRow, '| nextTxRow:', nextTxRow);
 
-  // 2. Insérer ligne vide en héritant du format de la ligne au-dessus
-  if (sealedTxSheetNumId !== null) {
-    await sheetsBatch([{
-      insertDimension: {
-        range: { sheetId: sealedTxSheetNumId, dimension: 'ROWS',
-                 startIndex: nextTxRow - 1, endIndex: nextTxRow },
-        inheritFromBefore: true
-      }
-    }], CENTRAL_GSHEET_ID);
+  // 2. Insérer ligne + copier format + formules de la ligne au-dessus
+  if (sealedTxSheetNumId === null) {
+    // Sans sheetId, on ne peut pas insérer proprement (format+formules) → fail explicite
+    await writeAnomaly(rowIdx, salesRow, 'TX_SHEETID_MISSING',
+      `sealedTxSheetNumId non récupéré — relancer le master pour recharger les métadonnées`);
+    return { status: 'ANOMALY_TX_SHEETID_MISSING' };
   }
+  await sheetsBatch([
+      {
+        insertDimension: {
+          range: { sheetId: sealedTxSheetNumId, dimension: 'ROWS',
+                   startIndex: nextTxRow - 1, endIndex: nextTxRow },
+          inheritFromBefore: true
+        }
+      },
+      {
+        copyPaste: {
+          source:      { sheetId: sealedTxSheetNumId, startRowIndex: nextTxRow - 2, endRowIndex: nextTxRow - 1, startColumnIndex: 0, endColumnIndex: 32 },
+          destination: { sheetId: sealedTxSheetNumId, startRowIndex: nextTxRow - 1, endRowIndex: nextTxRow,     startColumnIndex: 0, endColumnIndex: 32 },
+          pasteType: 'PASTE_NORMAL',
+          pasteOrientation: 'NORMAL'
+        }
+      }
+    ], CENTRAL_GSHEET_ID);
 
-  // 3. Écrire les valeurs (32 cols A:AF)
-  await sheetsUpdate(
-    `'${SHEET_SEALED_TX}'!A${nextTxRow}:AF${nextTxRow}`,
-    [txRow.slice(0, 32)], 'USER_ENTERED', CENTRAL_GSHEET_ID
+  // 3. Construire la liste des cellules à écrire (statiques + formule X custom)
+  //    Colonnes FORMULES laissées intactes (copiées depuis ligne au-dessus) : N, P, U, Y, Z, AB, AC, AD, AE
+  //    Colonne X : formule custom "=unit_pa*H{nextTxRow}" basée sur le stock de cet item
+  const xFormula = `=${unitPa}*H${nextTxRow}`;
+  // Mapping : index 0-based dans txRow → lettre col Sheets (0=A, 1=B, ..., 31=AF)
+  // Static columns (à écrire) : 0(A),1(B),2(C),3(D),4(E),5(F),6(G),7(H),8(I),9(J),10(K),11(L),12(M),14(O),16(Q),17(R),18(S),19(T),21(V),22(W),23(X formule),26(AA),31(AF)
+  const staticCols = [
+    {col: 'A', val: txRow[0]},   {col: 'B', val: txRow[1]},   {col: 'C', val: txRow[2]},
+    {col: 'D', val: txRow[3]},   {col: 'E', val: txRow[4]},   {col: 'F', val: txRow[5]},
+    {col: 'G', val: txRow[6]},   {col: 'H', val: txRow[7]},   {col: 'I', val: txRow[8]},
+    {col: 'J', val: txRow[9]},   {col: 'K', val: txRow[10]},  {col: 'L', val: txRow[11]},
+    {col: 'M', val: txRow[12]},
+    {col: 'O', val: txRow[14]},
+    {col: 'Q', val: txRow[16]},  {col: 'R', val: txRow[17]},  {col: 'S', val: txRow[18]},
+    {col: 'T', val: txRow[19]},
+    {col: 'V', val: txRow[21]},  {col: 'W', val: txRow[22]},
+    {col: 'X', val: xFormula},
+    {col: 'AA', val: txRow[26]},
+    {col: 'AF', val: txRow[31]}
+  ];
+  // batchUpdate values : un range par cellule
+  const data = staticCols.map(c => ({
+    range:  `'${SHEET_SEALED_TX}'!${c.col}${nextTxRow}`,
+    values: [[ c.val ]]
+  }));
+  await sheetsRequest('POST',
+    `https://sheets.googleapis.com/v4/spreadsheets/${CENTRAL_GSHEET_ID}/values:batchUpdate`,
+    { valueInputOption: 'USER_ENTERED', data }
   );
   return { status: 'OK' };
 }

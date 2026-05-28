@@ -1,10 +1,13 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.5.2 (Session #5 — 2026-05-28)
+  Version : 1.5.3 (Session #5 — 2026-05-28)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.5.3  2026-05-28
+         - Coherence : normalisation apostrophes courbes dans find() (alignement avec master)
+
   1.5.2  2026-05-28
          - Fix parsePrix locale belge : point = milliers, virgule = decimale
 
@@ -475,7 +478,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.2';
+const APP_VERSION      = '1.5.3';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -965,7 +968,9 @@ async function loadStockCache() {
       }
       if (sealedHeaderRowIdx < 0) throw new Error('Ligne d\'en-tête (col C = "Key") introuvable dans ' + SHEET_SEALED);
       const headers = sRows[sealedHeaderRowIdx];
-      const find = h => headers.findIndex(x => x && x.toString().trim() === h);
+      // Normalise apostrophes courbes → droites (cohérent avec master)
+      const norm = z => z.replace(/[‘’‚‛]/g, "'");
+      const find = h => headers.findIndex(x => x && norm(x.toString().trim()) === norm(h));
       sealedColIdx = {
         iKey:          find('Key'),
         iCode:         find('Code Technique'),
