@@ -1,3 +1,37 @@
+<!--
+=============================================================
+  TCG MASTER — Le Gardien du TCG
+  Version : 1.5.0 (Session #5 — 2026-05-28)
+=============================================================
+  HISTORIQUE DES VERSIONS
+  -----------------------
+  1.5.0  2026-05-28  Session #5
+         - sealedColIdx entièrement dynamique (col A = "x" détectée)
+         - applySealedSale : tous les sr[X] remplacés par sealedColIdx
+         - txRow 33 colonnes (A:AG) : col A = "x", données B→AG
+         - sheetsAppend vers A1 (fix bug données en col AB)
+         - Retry ×3 avant anomalie SEALED_NOT_FOUND (+ refresh cache)
+         - markSyncedRow conditionnel (RETRY_PENDING laissé pending)
+         - Lecture ligne complète A:AG au lieu de A:AF
+
+  1.4.0  2026-05-28  Session #4
+         - Migration hébergement Netlify → GitHub Pages
+         - Nouveau projet OAuth Google Cloud (TCG Integrator)
+         - Fix constantes SHEET_SEALED / SHEET_SEALED_TX
+         - Détection dynamique header Scelle_Stock
+
+  1.3.0  2026-05-28  Session #3
+         - Split Scelle_Stock / Scelle_Transactions
+         - applySealedSale : décrément qty + append Scelle_Transactions
+         - Cache scellé indexé par Key (col C)
+
+  1.2.0  —           Session #2
+         - Corrections diverses
+
+  1.1.0  —           Session #1
+         - Architecture de base, flow cartes
+=============================================================
+-->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -401,6 +435,8 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
+const APP_VERSION      = '1.5.0';
+
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
 
@@ -457,7 +493,7 @@ let syncTimer      = null;
 let statsTimer     = null;
 let syncEnabled    = true;
 let syncRunning    = false;
-const sealedRetryCount = new Map(); // rowIdx → nb tentatives échouées (SEALED_NOT_FOUND)
+const sealedRetryCount = new Map();
 let lastSyncStats  = { pending: 0, processed: 0, errors: 0, anomalies: 0, lastRunAt: null, lastError: null };
 
 let salesHeaderInfo = null; // { hasSync, syncedCol (1-indexed), syncedAtCol, headerCount }
@@ -807,29 +843,16 @@ async function loadStockCache() {
       const headers = sRows[sealedHeaderRowIdx];
       const find = h => headers.findIndex(x => x && x.toString().trim() === h);
       sealedColIdx = {
-        iKey:          find('Key'),
-        iCode:         find('Code Technique'),
-        iOrigine:      find('Origine'),
-        iCodeSerie:    find('Code Série'),
-        iNomSerie:     find('Nom Série'),
-        iType:         find('Type_Item'),
-        iNom:          find('Nom_Item'),
-        iQty:          find('Quantité'),
-        iEtat:         find('Etat'),
-        iCM:           find('CM'),
-        iVinted:       find('Vinted'),
-        iEbay:         find('Ebay'),
-        iCoteU:        find('Côte/u'),
-        iCoteTot:      find('Côte Totale'),
-        iStatut:       find('Statut'),
-        iFactureAchat: find("Facture d'achat"),
-        iPa:           find("Prix d'achat"),
-        iTvaAchat:     find('TVA_Achat'),
-        iPrix:         ['Côte Totale','Côte/u','Cote Totale','Prix de vente'].reduce((f,h)=>f>=0?f:find(h),-1)
+        iKey:       find('Key'),            // col C — barcode (clé primaire scan)
+        iCode:      find('Code Technique'), // col AA — ancien identifiant
+        iNom:       find('Nom_Item'),
+        iType:      find('Type_Item'),
+        iNomSerie:  find('Nom Série'),
+        iCodeSerie: find('Code Série'),
+        iQty:       find('Quantité'),
+        iStatut:    find('Statut'),
+        iPrix:      find('Prix de vente')
       };
-      // 🐞 Diagnostic — ouvre F12 > Console après le chargement du cache
-      console.log('[SealedColIdx] indices détectés :', JSON.stringify(sealedColIdx));
-      console.log('[SealedColIdx] en-têtes bruts    :', JSON.stringify(headers));
       if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
       stockCacheSealed.clear();
       for (let i = sealedHeaderRowIdx + 1; i < sRows.length; i++) {
@@ -1035,7 +1058,7 @@ async function masterSyncTick(forced = false) {
         else                          result = { status: 'WARN_UNKNOWN_SOURCE' };
 
         if (result.status === 'RETRY_PENDING') {
-          // Ligne laissée pending — sera retraaitée au prochain tick
+          // laissé pending — retraitement au prochain tick
         } else {
           await markSyncedRow(p.rowIdx, result.status);
           if (result.status === 'OK' || result.status === 'OK_MANUAL') processed++;
@@ -1129,24 +1152,18 @@ async function applySealedSale(rowIdx, salesRow) {
   if (!sealed) {
     const retries = (sealedRetryCount.get(rowIdx) || 0) + 1;
     sealedRetryCount.set(rowIdx, retries);
-    if (retries < 3) {
-      loadStockCache(); // refresh silencieux du cache
-      return { status: 'RETRY_PENDING' }; // laissé pending — retraitement au prochain tick
-    }
+    if (retries < 3) { loadStockCache(); return { status: 'RETRY_PENDING' }; }
     sealedRetryCount.delete(rowIdx);
     await writeAnomaly(rowIdx, salesRow, 'SEALED_NOT_FOUND',
-      `Barcode "${key}" absent du cache scellé après 3 tentatives`);
+      `Barcode "${key}" absent du cache après 3 tentatives`);
     return { status: 'ANOMALY_SEALED_NOT_FOUND' };
   }
-
-  // Reset compteur retry (article trouvé)
   sealedRetryCount.delete(rowIdx);
-
   // Lecture de la ligne complète du lot (A:AF = 32 colonnes)
   const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AF${sealed.sheetRow}`, CENTRAL_GSHEET_ID);
   const sr = (fullRowRes.values && fullRowRes.values[0]) || [];
 
-  const currentQty = parseInt(sr[sealedColIdx.iQty]) || 0; // col Quantité (dynamique)
+  const currentQty = parseInt(sr[6]) || 0; // col G = Quantité (décalée +1 par col C Key)
   if (currentQty < qtySold) {
     await writeAnomaly(rowIdx, salesRow, 'SEALED_OVERDRAW',
       `Stock actuel = ${currentQty}, vente demande ${qtySold} unité(s) · row ${sealed.sheetRow}`);
@@ -1163,54 +1180,56 @@ async function applySealedSale(rowIdx, salesRow) {
   if (newQty === 0) stockCacheSealed.delete(key);
 
   // ── 2. Calculs dérivés ──────────────────────────────────────────────────
-  const paTotalLot = parsePrix(sr[sealedColIdx.iPa]); // col Prix d'achat (dynamique)
+  const paTotalLot = parsePrix(sr[22]); // col W = Prix d'achat (total lot restant avant vente)
   const paForSale  = currentQty > 0
     ? Math.round(paTotalLot / currentQty * qtySold * 100) / 100
     : 0;
   const marge   = Math.round((salePrice - paForSale) * 100) / 100;
   const margeP  = salePrice > 0 ? (marge / salePrice * 100).toFixed(1) + '%' : '0.0%';
-  const coteU   = parsePrix(sr[sealedColIdx.iCoteU]); // col Côte/u (dynamique)
+  const coteU   = parsePrix(sr[11]); // col L = Côte/u
   const coteTot = Math.round(coteU * qtySold * 100) / 100;
   const now     = new Date(salesRow[0] || new Date().toISOString());
 
-  // ── 3. Ligne de transaction (A → AF, 32 colonnes) ───────────────────────
+  // ── 3. Ligne de transaction ───────────────────────────────────────────────────────
+  // Structure réelle : col A = "x" (non documentée), données B→AG (33 cols)
   const txRow = [
-    sr[sealedColIdx.iOrigine]   || '', // A  Origine
-    sr[sealedColIdx.iCodeSerie] || '', // B  Code Série
-    key,                     // C  Key (barcode scanné)
-    sr[sealedColIdx.iNomSerie]  || '', // D  Nom Série
-    sr[sealedColIdx.iType]      || '', // E  Type_Item
-    sr[sealedColIdx.iNom]       || sealed.name, // F  Nom_Item
-    qtySold,                 // G  Quantité
-    sr[sealedColIdx.iEtat]      || '', // H  Etat
-    sr[sealedColIdx.iCM]        || '', // I  CM
-    sr[sealedColIdx.iVinted]    || '', // J  Vinted
-    sr[sealedColIdx.iEbay]      || '', // K  Ebay
-    sr[sealedColIdx.iCoteU]     || '', // L  Côte/u
-    coteTot || '',          // M  Côte Totale (qtySold × Côte/u)
-    'vendu',                 // N  Statut
-    salePrice,               // O  Prix de vente (total pour qtySold)
-    currentEventName,        // P  Acheteur → nom de l'event (client anonyme)
-    salesRow[1] || '',       // Q  Source → vendeur
-    formatFrDate(now),       // R  Date_Transaction
-    sr[sealedColIdx.iFactureAchat] || '', // S  Facture d'achat
-    currentEventName,        // T  Facture de vente
-    '',                      // U  Commentaire
-    'Pro',                   // V  Type_Vente (convention = Pro)
-    paForSale,               // W  Prix d'achat (proportionnel qtySold/currentQty)
-    marge,                   // X  Marge
-    margeP,                  // Y  % Marge
-    '',                      // Z  (vide)
-    key,                     // AA Code Technique (= Key pour l'instant)
-    formatFrDate(now),       // AB Date_Vente
-    currentEventName,        // AC Facture_Vente
-    '',                      // AD Pays_Vente
-    sr[sealedColIdx.iTvaAchat]  || '', // AE TVA_Achat
-    'Régime normal',         // AF TVA_Vente (vente pro convention)
+    '',                                        // A  x
+    sr[sealedColIdx.iOrigine]   || '',         // B  Origine
+    key,                                        // C  Key
+    sr[sealedColIdx.iCodeSerie] || '',         // D  Code Série
+    sr[sealedColIdx.iNomSerie]  || '',         // E  Nom Série
+    sr[sealedColIdx.iType]      || '',         // F  Type_Item
+    sr[sealedColIdx.iNom]       || sealed.name,// G  Nom_Item
+    qtySold,                                    // H  Quantité
+    sr[sealedColIdx.iEtat]      || '',         // I  Etat
+    sr[sealedColIdx.iCM]        || '',         // J  CM
+    sr[sealedColIdx.iVinted]    || '',         // K  Vinted
+    sr[sealedColIdx.iEbay]      || '',         // L  Ebay
+    sr[sealedColIdx.iCoteU]     || '',         // M  Côte/u
+    coteTot || '',                              // N  Côte Totale
+    'vendu',                                    // O  Statut
+    salePrice,                                  // P  Prix de vente
+    currentEventName,                           // Q  Acheteur
+    salesRow[1] || '',                          // R  Source
+    formatFrDate(now),                          // S  Date_Transaction
+    sr[sealedColIdx.iFactureAchat] || '',      // T  Facture d'achat
+    currentEventName,                           // U  Facture de vente
+    '',                                         // V  Commentaire
+    'Pro',                                      // W  Type_Vente
+    paForSale,                                  // X  Prix d'achat
+    marge,                                      // Y  Marge
+    margeP,                                     // Z  % Marge
+    '',                                         // AA (vide)
+    key,                                        // AB Code Technique
+    formatFrDate(now),                          // AC Date_Vente
+    currentEventName,                           // AD Facture_Vente
+    '',                                         // AE Pays_Vente
+    sr[sealedColIdx.iTvaAchat]  || '',         // AF TVA_Achat
+    'Régime normal',                              // AG TVA_Vente
   ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
 
-  // ── 4. Append dans Scelle_Transactions ─────────────────────────────────
-  await sheetsAppend(`'${SHEET_SEALED_TX}'!A:AF`, [txRow], 'USER_ENTERED', CENTRAL_GSHEET_ID);
+  // ── 4. Append dans Scelle_Transactions (A1 force détection depuis coin sup gauche) ────
+  await sheetsAppend(`'${SHEET_SEALED_TX}'!A1`, [txRow], 'USER_ENTERED', CENTRAL_GSHEET_ID);
 
   return { status: 'OK' };
 }
@@ -1676,6 +1695,7 @@ async function bootstrap() {
 // INIT
 // ═══════════════════════════════════════════════════════════════
 async function init() {
+  document.getElementById('appVersion') && (document.getElementById('appVersion').textContent = 'v' + APP_VERSION);
   updateNet();
   await handleOAuthCallback();
 }

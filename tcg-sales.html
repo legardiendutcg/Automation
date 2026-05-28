@@ -1,3 +1,36 @@
+<!--
+=============================================================
+  TCG SALES — Le Gardien du TCG
+  Version : 1.5.0 (Session #5 — 2026-05-28)
+=============================================================
+  HISTORIQUE DES VERSIONS
+  -----------------------
+  1.5.0  2026-05-28  Session #5
+         - sealedColIdx entièrement dynamique (find par nom de colonne)
+         - iPrix = Côte/u (col M) en priorité — fix prix 0€
+         - Routing scan dual-lookup (EAN → scellé || carte, sinon inverse)
+         - console.log diagnostic SealedColIdx après chargement cache
+
+  1.4.0  2026-05-28  Session #4
+         - Migration hébergement Netlify → GitHub Pages
+         - Nouveau projet OAuth Google Cloud (TCG Integrator)
+         - Fix constantes SHEET_SEALED / SHEET_SEALED_TX (noms sans accents)
+         - Détection dynamique header Scelle_Stock (col C = "Key")
+
+  1.3.0  2026-05-28  Session #3
+         - Split Scelle_Stock / Scelle_Transactions
+         - Colonne C "Key" ajoutée (barcode futur)
+         - Cache scellé indexé par Key
+         - Codes EAN temporaires pour tests
+
+  1.2.0  —           Session #2
+         - Fix message "ajouté (0€)"
+         - Corrections diverses
+
+  1.1.0  —           Session #1
+         - Architecture de base, flow cartes
+=============================================================
+-->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -268,7 +301,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   <header>
     <div class="logo">
       <h1>TCG <span>SALES</span></h1>
-      <p>Ventes en convention · Le Gardien du TCG</p>
+      <p>Ventes en convention · Le Gardien du TCG · <span id="appVersion">v</span></p>
     </div>
     <div class="header-right">
       <div id="netBar" class="net-bar online">✓ Connecté</div>
@@ -436,6 +469,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
+const APP_VERSION      = '1.5.0';
+
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const EVENTS_GSHEET_ID   = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
@@ -930,11 +965,12 @@ async function loadStockCache() {
         iCoteU:        find('Côte/u'),
         iCoteTot:      find('Côte Totale'),
         iStatut:       find('Statut'),
-        iPrix:         ['Côte Totale','Côte/u','Cote Totale','Prix de vente'].reduce((f,h)=>f>=0?f:find(h),-1)
+        // Côte/u (col M = prix unitaire) en priorité
+        iPrix:         find('Côte/u') >= 0 ? find('Côte/u') : find('Côte Totale')
       };
-      // 🐞 Diagnostic — ouvre F12 > Console après le chargement du cache
-      console.log('[SealedColIdx] indices détectés :', JSON.stringify(sealedColIdx));
-      console.log('[SealedColIdx] en-têtes bruts    :', JSON.stringify(headers));
+      // 🐞 Diagnostic — F12 > Console après chargement du cache
+      console.log('[SealedColIdx] indices:', JSON.stringify(sealedColIdx));
+      console.log('[SealedColIdx] headers:', JSON.stringify(headers));
       if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
 
       stockCacheSealed.clear();
@@ -1065,7 +1101,6 @@ async function processScan(rawValue) {
   try {
     if (!isAuth()) throw new Error('Non connecté');
     let item;
-    // Routing : EAN → scellé en priorité, sinon carte ; non-EAN → carte en priorité, sinon scellé
     if (EAN_RE.test(rawValue)) item = lookupSealed(rawValue) || lookupCard(rawValue);
     else                       item = lookupCard(rawValue)   || lookupSealed(rawValue);
 
@@ -1567,6 +1602,7 @@ function showToast(msg, isErr = false) {
 // INIT
 // ═══════════════════════════════════════════════════════════════
 async function init() {
+  document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
   // Restore offline queue
   offlineQueue = lsLoad(LS_OFFLINE_QUEUE, []);
   renderOfflineQueueBar();
