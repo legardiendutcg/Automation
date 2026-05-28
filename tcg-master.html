@@ -241,7 +241,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 <div class="app">
   <header>
     <div class="logo">
-      <h1>TCG <span>MASTER</span></h1>
+      <h1>TCG <span>MASTER</span> <small style="font-family:'Space Mono',monospace;font-size:.45em;color:var(--muted);font-weight:400;letter-spacing:.05em" id="versionBadge">v?</small></h1>
       <p>Sync engine · Le Gardien du TCG</p>
     </div>
     <div class="header-right">
@@ -1695,6 +1695,7 @@ async function bootstrap() {
 // INIT
 // ═══════════════════════════════════════════════════════════════
 async function init() {
+  const vb = document.getElementById('versionBadge'); if(vb) vb.textContent = 'v' + APP_VERSION;
   document.getElementById('appVersion') && (document.getElementById('appVersion').textContent = 'v' + APP_VERSION);
   updateNet();
   await handleOAuthCallback();

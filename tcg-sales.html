@@ -300,7 +300,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 
   <header>
     <div class="logo">
-      <h1>TCG <span>SALES</span></h1>
+      <h1>TCG <span>SALES</span> <small style="font-family:'Space Mono',monospace;font-size:.45em;color:var(--muted);font-weight:400;letter-spacing:.05em" id="versionBadge">v?</small></h1>
       <p>Ventes en convention · Le Gardien du TCG · <span id="appVersion">v</span></p>
     </div>
     <div class="header-right">
@@ -1112,7 +1112,7 @@ async function processScan(rawValue) {
     }
 
     addToCart(item);
-    statusEl.textContent = '✓ ' + item.name + ' ajouté (' + formatPrice(item.prix) + ')';
+    statusEl.textContent = '✓ ' + item.name + ' ajouté (' + formatPrice(item.prixUnit) + ')';
     showToast('✓ ' + item.name);
   } catch (e) {
     statusEl.textContent = '✗ Erreur : ' + e.message;
@@ -1602,7 +1602,8 @@ function showToast(msg, isErr = false) {
 // INIT
 // ═══════════════════════════════════════════════════════════════
 async function init() {
-  document.getElementById('appVersion').textContent = 'v' + APP_VERSION;
+  const vb = document.getElementById('versionBadge'); if(vb) vb.textContent = 'v' + APP_VERSION;
+  const av = document.getElementById('appVersion'); if(av) av.textContent = 'v' + APP_VERSION;
   // Restore offline queue
   offlineQueue = lsLoad(LS_OFFLINE_QUEUE, []);
   renderOfflineQueueBar();
