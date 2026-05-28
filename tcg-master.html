@@ -3,33 +3,17 @@
   TCG MASTER — Le Gardien du TCG
   Version : 1.5.0 (Session #5 — 2026-05-28)
 =============================================================
-  HISTORIQUE DES VERSIONS
-  -----------------------
-  1.5.0  2026-05-28  Session #5
+  1.5.0  2026-05-28
          - sealedColIdx entièrement dynamique (col A = "x" détectée)
-         - applySealedSale : tous les sr[X] remplacés par sealedColIdx
-         - txRow 33 colonnes (A:AG) : col A = "x", données B→AG
-         - sheetsAppend vers A1 (fix bug données en col AB)
-         - Retry ×3 avant anomalie SEALED_NOT_FOUND (+ refresh cache)
+         - applySealedSale : sr[X] → sr[sealedColIdx.iX] partout
+         - txRow 33 colonnes A:AG (col A = "x")
+         - sheetsAppend vers A1 (fix données en col AB)
+         - Retry ×3 avant anomalie SEALED_NOT_FOUND
          - markSyncedRow conditionnel (RETRY_PENDING laissé pending)
-         - Lecture ligne complète A:AG au lieu de A:AF
-
-  1.4.0  2026-05-28  Session #4
-         - Migration hébergement Netlify → GitHub Pages
-         - Nouveau projet OAuth Google Cloud (TCG Integrator)
-         - Fix constantes SHEET_SEALED / SHEET_SEALED_TX
-         - Détection dynamique header Scelle_Stock
-
-  1.3.0  2026-05-28  Session #3
-         - Split Scelle_Stock / Scelle_Transactions
-         - applySealedSale : décrément qty + append Scelle_Transactions
-         - Cache scellé indexé par Key (col C)
-
-  1.2.0  —           Session #2
-         - Corrections diverses
-
-  1.1.0  —           Session #1
-         - Architecture de base, flow cartes
+  1.4.0  2026-05-28  Migration GitHub Pages, OAuth, fix SHEET_SEALED/_TX
+  1.3.0  2026-05-28  Split Scelle_Stock/Transactions, applySealedSale
+  1.2.0  —           Corrections diverses
+  1.1.0  —           Architecture de base, flow cartes
 =============================================================
 -->
 <!DOCTYPE html>
@@ -241,7 +225,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 <div class="app">
   <header>
     <div class="logo">
-      <h1>TCG <span>MASTER</span> <small style="font-family:'Space Mono',monospace;font-size:.45em;color:var(--muted);font-weight:400;letter-spacing:.05em" id="versionBadge">v?</small></h1>
+      <h1>TCG <span>MASTER</span> <small style="font-family:'Space Mono',monospace;font-size:.45em;color:var(--muted);font-weight:400" id="versionBadge">v?</small></h1>
       <p>Sync engine · Le Gardien du TCG</p>
     </div>
     <div class="header-right">
@@ -843,16 +827,28 @@ async function loadStockCache() {
       const headers = sRows[sealedHeaderRowIdx];
       const find = h => headers.findIndex(x => x && x.toString().trim() === h);
       sealedColIdx = {
-        iKey:       find('Key'),            // col C — barcode (clé primaire scan)
-        iCode:      find('Code Technique'), // col AA — ancien identifiant
-        iNom:       find('Nom_Item'),
-        iType:      find('Type_Item'),
-        iNomSerie:  find('Nom Série'),
-        iCodeSerie: find('Code Série'),
-        iQty:       find('Quantité'),
-        iStatut:    find('Statut'),
-        iPrix:      find('Prix de vente')
+        iKey:          find('Key'),
+        iCode:         find('Code Technique'),
+        iOrigine:      find('Origine'),
+        iCodeSerie:    find('Code Série'),
+        iNomSerie:     find('Nom Série'),
+        iType:         find('Type_Item'),
+        iNom:          find('Nom_Item'),
+        iQty:          find('Quantité'),
+        iEtat:         find('Etat'),
+        iCM:           find('CM'),
+        iVinted:       find('Vinted'),
+        iEbay:         find('Ebay'),
+        iCoteU:        find('Côte/u'),
+        iCoteTot:      find('Côte Totale'),
+        iStatut:       find('Statut'),
+        iFactureAchat: find("Facture d'achat"),
+        iPa:           find("Prix d'achat"),
+        iTvaAchat:     find('TVA_Achat'),
+        iPrix:         find('Côte/u') >= 0 ? find('Côte/u') : find('Côte Totale')
       };
+      console.log('[SealedColIdx master] indices:', JSON.stringify(sealedColIdx));
+      console.log('[SealedColIdx master] headers:', JSON.stringify(headers));
       if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
       stockCacheSealed.clear();
       for (let i = sealedHeaderRowIdx + 1; i < sRows.length; i++) {
@@ -1160,10 +1156,10 @@ async function applySealedSale(rowIdx, salesRow) {
   }
   sealedRetryCount.delete(rowIdx);
   // Lecture de la ligne complète du lot (A:AF = 32 colonnes)
-  const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AF${sealed.sheetRow}`, CENTRAL_GSHEET_ID);
+  const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AG${sealed.sheetRow}`, CENTRAL_GSHEET_ID);
   const sr = (fullRowRes.values && fullRowRes.values[0]) || [];
 
-  const currentQty = parseInt(sr[6]) || 0; // col G = Quantité (décalée +1 par col C Key)
+  const currentQty = parseInt(sr[sealedColIdx.iQty]) || 0; // dynamique via sealedColIdx
   if (currentQty < qtySold) {
     await writeAnomaly(rowIdx, salesRow, 'SEALED_OVERDRAW',
       `Stock actuel = ${currentQty}, vente demande ${qtySold} unité(s) · row ${sealed.sheetRow}`);
@@ -1180,18 +1176,17 @@ async function applySealedSale(rowIdx, salesRow) {
   if (newQty === 0) stockCacheSealed.delete(key);
 
   // ── 2. Calculs dérivés ──────────────────────────────────────────────────
-  const paTotalLot = parsePrix(sr[22]); // col W = Prix d'achat (total lot restant avant vente)
+  const paTotalLot = parsePrix(sr[sealedColIdx.iPa]);
   const paForSale  = currentQty > 0
     ? Math.round(paTotalLot / currentQty * qtySold * 100) / 100
     : 0;
   const marge   = Math.round((salePrice - paForSale) * 100) / 100;
   const margeP  = salePrice > 0 ? (marge / salePrice * 100).toFixed(1) + '%' : '0.0%';
-  const coteU   = parsePrix(sr[11]); // col L = Côte/u
+  const coteU   = parsePrix(sr[sealedColIdx.iCoteU]);
   const coteTot = Math.round(coteU * qtySold * 100) / 100;
   const now     = new Date(salesRow[0] || new Date().toISOString());
 
-  // ── 3. Ligne de transaction ───────────────────────────────────────────────────────
-  // Structure réelle : col A = "x" (non documentée), données B→AG (33 cols)
+  // ── 3. Ligne de transaction (A→AG, 33 cols — col A = "x") ──────────────────
   const txRow = [
     '',                                        // A  x
     sr[sealedColIdx.iOrigine]   || '',         // B  Origine
@@ -1228,7 +1223,7 @@ async function applySealedSale(rowIdx, salesRow) {
     'Régime normal',                              // AG TVA_Vente
   ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
 
-  // ── 4. Append dans Scelle_Transactions (A1 force détection depuis coin sup gauche) ────
+  // ── 4. Append dans Scelle_Transactions ─────────────────────────────────────────
   await sheetsAppend(`'${SHEET_SEALED_TX}'!A1`, [txRow], 'USER_ENTERED', CENTRAL_GSHEET_ID);
 
   return { status: 'OK' };
@@ -1696,7 +1691,6 @@ async function bootstrap() {
 // ═══════════════════════════════════════════════════════════════
 async function init() {
   const vb = document.getElementById('versionBadge'); if(vb) vb.textContent = 'v' + APP_VERSION;
-  document.getElementById('appVersion') && (document.getElementById('appVersion').textContent = 'v' + APP_VERSION);
   updateNet();
   await handleOAuthCallback();
 }
