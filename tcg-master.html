@@ -807,16 +807,29 @@ async function loadStockCache() {
       const headers = sRows[sealedHeaderRowIdx];
       const find = h => headers.findIndex(x => x && x.toString().trim() === h);
       sealedColIdx = {
-        iKey:       find('Key'),            // col C — barcode (clé primaire scan)
-        iCode:      find('Code Technique'), // col AA — ancien identifiant
-        iNom:       find('Nom_Item'),
-        iType:      find('Type_Item'),
-        iNomSerie:  find('Nom Série'),
-        iCodeSerie: find('Code Série'),
-        iQty:       find('Quantité'),
-        iStatut:    find('Statut'),
-        iPrix:      find('Côte Totale')
+        iKey:          find('Key'),
+        iCode:         find('Code Technique'),
+        iOrigine:      find('Origine'),
+        iCodeSerie:    find('Code Série'),
+        iNomSerie:     find('Nom Série'),
+        iType:         find('Type_Item'),
+        iNom:          find('Nom_Item'),
+        iQty:          find('Quantité'),
+        iEtat:         find('Etat'),
+        iCM:           find('CM'),
+        iVinted:       find('Vinted'),
+        iEbay:         find('Ebay'),
+        iCoteU:        find('Côte/u'),
+        iCoteTot:      find('Côte Totale'),
+        iStatut:       find('Statut'),
+        iFactureAchat: find("Facture d'achat"),
+        iPa:           find("Prix d'achat"),
+        iTvaAchat:     find('TVA_Achat'),
+        iPrix:         ['Côte Totale','Côte/u','Cote Totale','Prix de vente'].reduce((f,h)=>f>=0?f:find(h),-1)
       };
+      // 🐞 Diagnostic — ouvre F12 > Console après le chargement du cache
+      console.log('[SealedColIdx] indices détectés :', JSON.stringify(sealedColIdx));
+      console.log('[SealedColIdx] en-têtes bruts    :', JSON.stringify(headers));
       if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
       stockCacheSealed.clear();
       for (let i = sealedHeaderRowIdx + 1; i < sRows.length; i++) {
@@ -1022,7 +1035,7 @@ async function masterSyncTick(forced = false) {
         else                          result = { status: 'WARN_UNKNOWN_SOURCE' };
 
         if (result.status === 'RETRY_PENDING') {
-          // Ligne laissée pending — sera retraitée au prochain tick sans markSyncedRow
+          // Ligne laissée pending — sera retraaitée au prochain tick
         } else {
           await markSyncedRow(p.rowIdx, result.status);
           if (result.status === 'OK' || result.status === 'OK_MANUAL') processed++;
@@ -1117,22 +1130,23 @@ async function applySealedSale(rowIdx, salesRow) {
     const retries = (sealedRetryCount.get(rowIdx) || 0) + 1;
     sealedRetryCount.set(rowIdx, retries);
     if (retries < 3) {
-      // Cache peut-être pas encore à jour — refresh silencieux et on retente au prochain tick
-      loadStockCache();
-      return { status: 'RETRY_PENDING' };
+      loadStockCache(); // refresh silencieux du cache
+      return { status: 'RETRY_PENDING' }; // laissé pending — retraitement au prochain tick
     }
-    // 3 tentatives échouées → anomalie
     sealedRetryCount.delete(rowIdx);
-    await writeAnomaly(rowIdx, salesRow, 'SEALED_NOT_FOUND', `Barcode "${key}" absent du cache scellé après 3 tentatives`);
+    await writeAnomaly(rowIdx, salesRow, 'SEALED_NOT_FOUND',
+      `Barcode "${key}" absent du cache scellé après 3 tentatives`);
     return { status: 'ANOMALY_SEALED_NOT_FOUND' };
   }
 
+  // Reset compteur retry (article trouvé)
+  sealedRetryCount.delete(rowIdx);
+
   // Lecture de la ligne complète du lot (A:AF = 32 colonnes)
-  sealedRetryCount.delete(rowIdx); // reset compteur retry si l'article est trouvé
   const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AF${sealed.sheetRow}`, CENTRAL_GSHEET_ID);
   const sr = (fullRowRes.values && fullRowRes.values[0]) || [];
 
-  const currentQty = parseInt(sr[6]) || 0; // col G = Quantité (décalée +1 par col C Key)
+  const currentQty = parseInt(sr[sealedColIdx.iQty]) || 0; // col Quantité (dynamique)
   if (currentQty < qtySold) {
     await writeAnomaly(rowIdx, salesRow, 'SEALED_OVERDRAW',
       `Stock actuel = ${currentQty}, vente demande ${qtySold} unité(s) · row ${sealed.sheetRow}`);
@@ -1149,37 +1163,37 @@ async function applySealedSale(rowIdx, salesRow) {
   if (newQty === 0) stockCacheSealed.delete(key);
 
   // ── 2. Calculs dérivés ──────────────────────────────────────────────────
-  const paTotalLot = parsePrix(sr[22]); // col W = Prix d'achat (total lot restant avant vente)
+  const paTotalLot = parsePrix(sr[sealedColIdx.iPa]); // col Prix d'achat (dynamique)
   const paForSale  = currentQty > 0
     ? Math.round(paTotalLot / currentQty * qtySold * 100) / 100
     : 0;
   const marge   = Math.round((salePrice - paForSale) * 100) / 100;
   const margeP  = salePrice > 0 ? (marge / salePrice * 100).toFixed(1) + '%' : '0.0%';
-  const coteU   = parsePrix(sr[11]); // col L = Côte/u
+  const coteU   = parsePrix(sr[sealedColIdx.iCoteU]); // col Côte/u (dynamique)
   const coteTot = Math.round(coteU * qtySold * 100) / 100;
   const now     = new Date(salesRow[0] || new Date().toISOString());
 
   // ── 3. Ligne de transaction (A → AF, 32 colonnes) ───────────────────────
   const txRow = [
-    sr[0]  || '',           // A  Origine
-    sr[1]  || '',           // B  Code Série
+    sr[sealedColIdx.iOrigine]   || '', // A  Origine
+    sr[sealedColIdx.iCodeSerie] || '', // B  Code Série
     key,                     // C  Key (barcode scanné)
-    sr[3]  || '',           // D  Nom Série
-    sr[4]  || '',           // E  Type_Item
-    sr[5]  || sealed.name,  // F  Nom_Item
+    sr[sealedColIdx.iNomSerie]  || '', // D  Nom Série
+    sr[sealedColIdx.iType]      || '', // E  Type_Item
+    sr[sealedColIdx.iNom]       || sealed.name, // F  Nom_Item
     qtySold,                 // G  Quantité
-    sr[7]  || '',           // H  Etat
-    sr[8]  || '',           // I  CM
-    sr[9]  || '',           // J  Vinted
-    sr[10] || '',           // K  Ebay
-    sr[11] || '',           // L  Côte/u
+    sr[sealedColIdx.iEtat]      || '', // H  Etat
+    sr[sealedColIdx.iCM]        || '', // I  CM
+    sr[sealedColIdx.iVinted]    || '', // J  Vinted
+    sr[sealedColIdx.iEbay]      || '', // K  Ebay
+    sr[sealedColIdx.iCoteU]     || '', // L  Côte/u
     coteTot || '',          // M  Côte Totale (qtySold × Côte/u)
     'vendu',                 // N  Statut
     salePrice,               // O  Prix de vente (total pour qtySold)
     currentEventName,        // P  Acheteur → nom de l'event (client anonyme)
     salesRow[1] || '',       // Q  Source → vendeur
     formatFrDate(now),       // R  Date_Transaction
-    sr[18] || '',           // S  Facture d'achat (du lot)
+    sr[sealedColIdx.iFactureAchat] || '', // S  Facture d'achat
     currentEventName,        // T  Facture de vente
     '',                      // U  Commentaire
     'Pro',                   // V  Type_Vente (convention = Pro)
@@ -1191,7 +1205,7 @@ async function applySealedSale(rowIdx, salesRow) {
     formatFrDate(now),       // AB Date_Vente
     currentEventName,        // AC Facture_Vente
     '',                      // AD Pays_Vente
-    sr[30] || '',           // AE TVA_Achat (du lot — Régime normal ou TVA sur la marge)
+    sr[sealedColIdx.iTvaAchat]  || '', // AE TVA_Achat
     'Régime normal',         // AF TVA_Vente (vente pro convention)
   ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
 

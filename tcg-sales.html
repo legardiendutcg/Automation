@@ -918,17 +918,23 @@ async function loadStockCache() {
       const headers = sRows[sealedHeaderRowIdx];
       const find = h => headers.findIndex(x => x && x.toString().trim() === h);
       sealedColIdx = {
-        iKey:       find('Key'),            // col C — barcode (clé primaire scan)
-        iCode:      find('Code Technique'), // col AA — ancien identifiant
-        iNom:       find('Nom_Item'),
-        iType:      find('Type_Item'),
-        iOrigine:   find('Origine'),
-        iNomSerie:  find('Nom Série'),
-        iCodeSerie: find('Code Série'),
-        iQty:       find('Quantité'),
-        iStatut:    find('Statut'),
-        iPrix:      find('Côte Totale')
+        iKey:          find('Key'),
+        iCode:         find('Code Technique'),
+        iOrigine:      find('Origine'),
+        iCodeSerie:    find('Code Série'),
+        iNomSerie:     find('Nom Série'),
+        iType:         find('Type_Item'),
+        iNom:          find('Nom_Item'),
+        iQty:          find('Quantité'),
+        iEtat:         find('Etat'),
+        iCoteU:        find('Côte/u'),
+        iCoteTot:      find('Côte Totale'),
+        iStatut:       find('Statut'),
+        iPrix:         ['Côte Totale','Côte/u','Cote Totale','Prix de vente'].reduce((f,h)=>f>=0?f:find(h),-1)
       };
+      // 🐞 Diagnostic — ouvre F12 > Console après le chargement du cache
+      console.log('[SealedColIdx] indices détectés :', JSON.stringify(sealedColIdx));
+      console.log('[SealedColIdx] en-têtes bruts    :', JSON.stringify(headers));
       if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
 
       stockCacheSealed.clear();
@@ -1059,8 +1065,9 @@ async function processScan(rawValue) {
   try {
     if (!isAuth()) throw new Error('Non connecté');
     let item;
-    if (EAN_RE.test(rawValue)) item = lookupSealed(rawValue);
-    else                       item = lookupCard(rawValue);
+    // Routing : EAN → scellé en priorité, sinon carte ; non-EAN → carte en priorité, sinon scellé
+    if (EAN_RE.test(rawValue)) item = lookupSealed(rawValue) || lookupCard(rawValue);
+    else                       item = lookupCard(rawValue)   || lookupSealed(rawValue);
 
     if (!item) {
       statusEl.textContent = '⚠ Article non trouvé : ' + rawValue.substring(0, 30);
