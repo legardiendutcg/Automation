@@ -1,8 +1,11 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.5.0 (Session #5 — 2026-05-28)
+  Version : 1.5.1 (Session #5 — 2026-05-28)
 =============================================================
+  1.5.1  2026-05-28
+         - Fix overdraw : sr[6] hardcode remplace par sr[sealedColIdx.iQty] dynamique
+
   1.5.0  2026-05-28
          - sealedColIdx entièrement dynamique (col A = "x" détectée)
          - applySealedSale : sr[X] → sr[sealedColIdx.iX] partout
@@ -419,7 +422,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.0';
+const APP_VERSION      = '1.5.1';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
