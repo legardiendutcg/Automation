@@ -1112,7 +1112,7 @@ async function processScan(rawValue) {
     }
 
     addToCart(item);
-    statusEl.textContent = '✓ ' + item.name + ' ajouté (' + formatPrice(item.prixUnit) + ')';
+    statusEl.textContent = '✓ ' + item.name + ' ajouté';
     showToast('✓ ' + item.name);
   } catch (e) {
     statusEl.textContent = '✗ Erreur : ' + e.message;
