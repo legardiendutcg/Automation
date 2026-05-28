@@ -1,8 +1,11 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.5.4 (Session #5 — 2026-05-28)
+  Version : 1.5.5 (Session #5 — 2026-05-28)
 =============================================================
+  1.5.5  2026-05-28
+         - Log diagnostic transaction (nextTxRow, txRow.length)
+
   1.5.4  2026-05-28
          - Fix detection derniere ligne Scelle_Transactions : col C → col B (Origine, toujours remplie)
 
@@ -431,7 +434,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.4';
+const APP_VERSION      = '1.5.5';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1247,6 +1250,7 @@ async function applySealedSale(rowIdx, salesRow) {
     }
   }
   const nextTxRow = lastFilledRow + 1;
+  console.log('[Transaction] lastFilledRow:', lastFilledRow, '| nextTxRow:', nextTxRow, '| txRow.length:', txRow.length);
   await sheetsUpdate(
     `'${SHEET_SEALED_TX}'!A${nextTxRow}:AG${nextTxRow}`,
     [txRow], 'USER_ENTERED', CENTRAL_GSHEET_ID
