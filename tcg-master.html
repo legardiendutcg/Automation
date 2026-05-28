@@ -796,7 +796,14 @@ async function loadStockCache() {
     const sealedData = await sheetsGet(`'${SHEET_SEALED}'!A:AF`, CENTRAL_GSHEET_ID);
     const sRows = sealedData.values || [];
     if (sRows.length > 0) {
-      const headers = sRows[0];
+      // Détection dynamique de la ligne d'en-tête (le header n'est pas forcément en ligne 1)
+      let sealedHeaderRowIdx = -1;
+      for (let i = 0; i < sRows.length; i++) {
+        const colC = (sRows[i][2] || '').toString().trim().toLowerCase();
+        if (colC === 'key') { sealedHeaderRowIdx = i; break; }
+      }
+      if (sealedHeaderRowIdx < 0) throw new Error('Ligne d\'en-tête (col C = "Key") introuvable dans ' + SHEET_SEALED);
+      const headers = sRows[sealedHeaderRowIdx];
       const find = h => headers.findIndex(x => x && x.toString().trim() === h);
       sealedColIdx = {
         iKey:       find('Key'),            // col C — barcode (clé primaire scan)
@@ -811,7 +818,7 @@ async function loadStockCache() {
       };
       if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
       stockCacheSealed.clear();
-      for (let i = 1; i < sRows.length; i++) {
+      for (let i = sealedHeaderRowIdx + 1; i < sRows.length; i++) {
         const row = sRows[i];
         // Indexation par Key (barcode) — article ignoré tant que Key est vide
         const itemKey = (row[sealedColIdx.iKey] || '').toString().trim();
