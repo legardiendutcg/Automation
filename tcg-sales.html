@@ -1,0 +1,1594 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>TCG Sales</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#0a0c10; --surface:#12151c; --surface2:#181c26; --border:#222736;
+  --accent:#e8ff47; --accent2:#47c8ff; --accent3:#ff6b6b;
+  --success:#4ade80; --warning:#fbbf24; --text:#e8eaf0; --muted:#6b7280; --dim:#9ca3af;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;min-height:100vh;}
+body::before{content:'';position:fixed;inset:0;
+  background-image:linear-gradient(rgba(232,255,71,.02) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(232,255,71,.02) 1px,transparent 1px);
+  background-size:48px 48px;pointer-events:none;z-index:0;}
+
+/* ── Layout ── */
+.app{max-width:900px;margin:0 auto;padding:20px 16px;position:relative;z-index:1;}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;gap:12px;flex-wrap:wrap;}
+.logo h1{font-size:1.6rem;font-weight:800;letter-spacing:-.03em;}
+.logo h1 span{color:var(--accent);}
+.logo p{font-family:'Space Mono',monospace;font-size:.58rem;color:var(--muted);text-transform:uppercase;letter-spacing:.15em;margin-top:4px;}
+.header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+
+/* ── Auth pill ── */
+.auth-pill{font-family:'Space Mono',monospace;font-size:.6rem;padding:6px 12px;border-radius:20px;
+  border:1px solid var(--border);color:var(--muted);cursor:pointer;transition:all .2s;white-space:nowrap;}
+.auth-pill.connected{border-color:var(--success);color:var(--success);}
+.auth-pill:hover{border-color:var(--accent2);color:var(--accent2);}
+
+/* ── Tabs ── */
+.tabs{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  overflow:hidden;margin-bottom:24px;}
+.tab-btn{flex:1;padding:14px 12px;display:flex;align-items:center;justify-content:center;
+  gap:8px;cursor:pointer;transition:all .2s;font-family:'Space Mono',monospace;
+  font-size:.62rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);
+  border-right:1px solid var(--border);user-select:none;}
+.tab-btn:last-child{border-right:none;}
+.tab-btn.active{background:rgba(232,255,71,.06);color:var(--text);}
+.tab-btn.hidden-tab{display:none;}
+.tab-btn:not(.active):hover{background:rgba(255,255,255,.02);}
+.tab-content{display:none;}
+.tab-content.active{display:block;}
+
+/* ── Cards ── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:16px;}
+.card-header{padding:12px 18px;border-bottom:1px solid var(--border);background:var(--surface2);
+  display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.card-title{font-family:'Space Mono',monospace;font-size:.6rem;text-transform:uppercase;
+  letter-spacing:.12em;color:var(--muted);display:flex;align-items:center;gap:8px;}
+.card-body{padding:18px;}
+
+/* ── Scan input zone ── */
+.scan-zone{
+  background:var(--surface);border:2px solid var(--border);border-radius:10px;
+  padding:20px;text-align:center;cursor:text;transition:border-color .2s;
+  margin-bottom:16px;position:relative;
+}
+.scan-zone.active{border-color:var(--accent);}
+.scan-zone.scanning{border-color:var(--accent2);}
+.scan-input{position:absolute;left:-9999px;opacity:0;width:1px;height:1px;}
+.scan-icon{font-size:2rem;display:block;margin-bottom:8px;}
+.scan-label{font-family:'Space Mono',monospace;font-size:.68rem;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--muted);}
+.scan-status{font-family:'Space Mono',monospace;font-size:.72rem;color:var(--accent2);
+  margin-top:8px;min-height:20px;}
+
+/* ── Cart ── */
+.cart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+.cart-total{font-size:2rem;font-weight:800;color:var(--accent);line-height:1;}
+.cart-count{font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);}
+
+.cart-item{
+  background:var(--bg);border:1px solid var(--border);border-radius:8px;
+  padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px;
+}
+.cart-item.dup-yellow{border-color:rgba(251,191,36,.5);background:rgba(251,191,36,.05);}
+.cart-item.dup-red{border-color:rgba(255,107,107,.5);background:rgba(255,107,107,.05);}
+.cart-item-info{flex:1;min-width:0;}
+.cart-item-name{font-size:.82rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cart-item-meta{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--muted);margin-top:3px;}
+.cart-item-price{font-family:'Space Mono',monospace;font-size:.9rem;font-weight:700;
+  color:var(--accent);flex-shrink:0;}
+.cart-item-remove{width:28px;height:28px;border-radius:50%;background:transparent;
+  border:1px solid rgba(255,107,107,.3);color:var(--accent3);cursor:pointer;
+  font-size:.75rem;display:flex;align-items:center;justify-content:center;
+  transition:all .15s;flex-shrink:0;}
+.cart-item-remove:hover{background:rgba(255,107,107,.15);}
+.dup-badge{font-family:'Space Mono',monospace;font-size:.55rem;padding:2px 6px;
+  border-radius:3px;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0;}
+.dup-badge.yellow{background:rgba(251,191,36,.2);color:var(--warning);}
+.dup-badge.red{background:rgba(255,107,107,.2);color:var(--accent3);}
+
+.cart-empty{text-align:center;padding:40px 20px;font-family:'Space Mono',monospace;
+  font-size:.68rem;color:var(--muted);}
+
+/* ── Buttons ── */
+.btn{font-family:'Space Mono',monospace;font-size:.68rem;font-weight:700;
+  text-transform:uppercase;letter-spacing:.07em;padding:10px 18px;border-radius:6px;
+  border:1px solid;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-primary{background:var(--accent);color:#0a0c10;border-color:var(--accent);}
+.btn-primary:not(:disabled):hover{background:#f5ff7a;transform:translateY(-1px);box-shadow:0 4px 20px rgba(232,255,71,.3);}
+.btn-secondary{background:transparent;color:var(--text);border-color:var(--border);}
+.btn-secondary:not(:disabled):hover{border-color:var(--accent2);color:var(--accent2);}
+.btn-danger{background:transparent;color:var(--accent3);border-color:rgba(255,107,107,.3);}
+.btn-danger:not(:disabled):hover{background:rgba(255,107,107,.1);}
+.btn-lg{padding:16px 28px;font-size:.75rem;width:100%;justify-content:center;display:flex;gap:8px;}
+.btn-sm{padding:7px 12px;font-size:.6rem;}
+.flex-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+
+/* ── Stats tab ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;}
+.stat-label{font-family:'Space Mono',monospace;font-size:.55rem;text-transform:uppercase;
+  letter-spacing:.12em;color:var(--muted);margin-bottom:5px;}
+.stat-val{font-size:1.6rem;font-weight:800;color:var(--accent);line-height:1;}
+.stat-val.blue{color:var(--accent2);}
+.stat-val.green{color:var(--success);}
+.stat-sub{font-size:.68rem;color:var(--muted);margin-top:3px;}
+
+/* ── Leaderboard ── */
+.lb-item{display:flex;align-items:center;gap:12px;padding:10px 0;
+  border-bottom:1px solid rgba(34,39,54,.6);}
+.lb-rank{font-family:'Space Mono',monospace;font-size:.75rem;font-weight:700;
+  color:var(--muted);width:24px;text-align:center;flex-shrink:0;}
+.lb-rank.gold{color:#fbbf24;}
+.lb-rank.silver{color:#9ca3af;}
+.lb-rank.bronze{color:#c97c4a;}
+.lb-name{flex:1;font-weight:700;}
+.lb-stats{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--muted);text-align:right;}
+.lb-ca{font-family:'Space Mono',monospace;font-size:.8rem;font-weight:700;color:var(--accent);}
+
+/* ── Split table ── */
+.split-row{display:flex;justify-content:space-between;padding:8px 0;
+  border-bottom:1px solid rgba(34,39,54,.6);font-size:.78rem;}
+.split-row:last-child{border-bottom:none;}
+.split-label{color:var(--dim);}
+.split-val{font-family:'Space Mono',monospace;font-weight:700;color:var(--accent2);}
+.split-pct{font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);margin-left:8px;}
+
+/* ── Sales log ── */
+.sales-log{max-height:300px;overflow-y:auto;}
+.sale-row{display:flex;align-items:center;gap:10px;padding:8px 0;
+  border-bottom:1px solid rgba(34,39,54,.4);font-size:.72rem;}
+.sale-row:last-child{border-bottom:none;}
+.sale-time{font-family:'Space Mono',monospace;font-size:.58rem;color:var(--muted);flex-shrink:0;width:46px;}
+.sale-vendor{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--accent2);flex-shrink:0;width:70px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sale-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);}
+.sale-price{font-family:'Space Mono',monospace;color:var(--accent);flex-shrink:0;}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:24px;right:24px;background:var(--accent);color:#0a0c10;
+  padding:11px 18px;border-radius:6px;font-family:'Space Mono',monospace;font-size:.68rem;font-weight:700;
+  z-index:9999;transform:translateY(80px);opacity:0;transition:all .3s cubic-bezier(.34,1.56,.64,1);}
+.toast.show{transform:translateY(0);opacity:1;}
+.toast.err{background:var(--accent3);color:#fff;}
+
+/* ── Misc ── */
+.hidden{display:none!important;}
+.badge{font-family:'Space Mono',monospace;font-size:.58rem;padding:3px 8px;border-radius:4px;
+  border:1px solid var(--border);color:var(--muted);}
+.badge.green{border-color:rgba(74,222,128,.4);color:var(--success);}
+.badge.red{border-color:rgba(255,107,107,.4);color:var(--accent3);}
+.badge.yellow{border-color:rgba(251,191,36,.4);color:var(--warning);}
+.divider{height:1px;background:var(--border);margin:16px 0;}
+.section-title{font-family:'Space Mono',monospace;font-size:.6rem;text-transform:uppercase;
+  letter-spacing:.12em;color:var(--muted);margin-bottom:12px;}
+
+/* ── Network status ── */
+.net-bar{padding:6px 12px;border-radius:6px;font-family:'Space Mono',monospace;font-size:.6rem;
+  text-align:center;margin-bottom:12px;}
+.net-bar.online{background:rgba(74,222,128,.08);color:var(--success);border:1px solid rgba(74,222,128,.2);}
+.net-bar.offline{background:rgba(255,107,107,.08);color:var(--accent3);border:1px solid rgba(255,107,107,.2);}
+
+/* ── Master status bar (visible quand master HS) ── */
+.master-status-bar{margin:0 16px 12px;padding:10px 14px;border-radius:8px;
+  font-size:.78rem;font-weight:600;text-align:center;font-family:'Space Mono',monospace;
+  letter-spacing:.02em;}
+.master-status-bar.warn{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);color:var(--warning);}
+.master-status-bar.err{background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.3);color:#ff6b6b;}
+
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+.pulsing{animation:pulse .8s ease infinite;}
+
+/* ── Cart item qty controls ── */
+.cart-item-qty{display:flex;align-items:center;gap:6px;flex-shrink:0;margin-right:4px;}
+.qty-btn{width:24px;height:24px;border-radius:4px;border:1px solid var(--border);
+  background:transparent;color:var(--text);cursor:pointer;font-family:'Space Mono',monospace;
+  font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;
+  transition:all .15s;user-select:none;}
+.qty-btn:hover{border-color:var(--accent);color:var(--accent);}
+.qty-val{font-family:'Space Mono',monospace;font-size:.85rem;font-weight:700;min-width:18px;text-align:center;}
+
+/* ── Price edit ── */
+.cart-item-price.editable{cursor:pointer;border-bottom:1px dashed transparent;transition:border-color .15s;}
+.cart-item-price.editable:hover{border-bottom-color:var(--accent);}
+.price-edit-input{font-family:'Space Mono',monospace;font-size:.9rem;font-weight:700;
+  color:var(--accent);background:var(--bg);border:1px solid var(--accent);border-radius:4px;
+  padding:2px 6px;width:80px;text-align:right;outline:none;}
+.price-modified{position:relative;}
+.price-modified::after{content:'~';position:absolute;top:-8px;right:-10px;font-size:.65rem;color:var(--warning);}
+
+/* ── Modal ── */
+.modal-backdrop{position:fixed;inset:0;background:rgba(10,12,16,.85);
+  display:flex;align-items:center;justify-content:center;z-index:5000;padding:20px;
+  animation:fadeIn .15s ease;}
+.modal-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  max-width:420px;width:100%;padding:24px;animation:slideUp .2s cubic-bezier(.34,1.56,.64,1);}
+.modal-title{font-size:1.1rem;font-weight:700;margin-bottom:6px;letter-spacing:-.02em;}
+.modal-subtitle{font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.1em;margin-bottom:18px;}
+.modal-field{margin-bottom:14px;}
+.modal-field label{display:block;font-family:'Space Mono',monospace;font-size:.6rem;
+  color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;}
+.modal-field input{width:100%;background:var(--bg);border:1px solid var(--border);
+  border-radius:6px;padding:10px 12px;color:var(--text);font-family:'Syne',sans-serif;
+  font-size:.9rem;outline:none;transition:border-color .15s;}
+.modal-field input:focus{border-color:var(--accent);}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
+.modal-info{background:var(--bg);border:1px solid var(--border);border-radius:6px;
+  padding:10px 12px;font-size:.78rem;color:var(--dim);margin-bottom:14px;line-height:1.4;}
+
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── Restore bar ── */
+.restore-bar{background:rgba(71,200,255,.08);border:1px solid rgba(71,200,255,.3);
+  border-radius:8px;padding:10px 14px;margin-bottom:12px;
+  display:flex;align-items:center;gap:10px;font-size:.78rem;}
+.restore-bar .restore-text{flex:1;color:var(--accent2);}
+.restore-bar button{padding:5px 10px;font-size:.6rem;}
+
+/* ── Offline queue bar ── */
+.offline-bar{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);
+  border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.78rem;
+  color:var(--warning);font-family:'Space Mono',monospace;text-align:center;}
+
+/* ── Sync status (master) ── */
+.sync-card{border-color:rgba(71,200,255,.2);}
+.sync-status-text{font-size:.85rem;color:var(--dim);margin-bottom:10px;line-height:1.4;}
+.sync-pending-count{color:var(--warning);font-weight:700;}
+.sync-ok-count{color:var(--success);font-weight:700;}
+
+/* ── Cache status pill ── */
+.cache-pill{font-family:'Space Mono',monospace;font-size:.55rem;padding:4px 10px;border-radius:20px;
+  border:1px solid var(--border);color:var(--muted);white-space:nowrap;}
+.cache-pill.fresh{border-color:rgba(74,222,128,.3);color:var(--success);}
+.cache-pill.stale{border-color:rgba(251,191,36,.3);color:var(--warning);}
+
+/* ── Header buttons (small) ── */
+.btn-icon{width:32px;height:32px;border-radius:6px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);cursor:pointer;font-size:.85rem;
+  display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.btn-icon:hover{border-color:var(--accent2);color:var(--accent2);}
+.btn-icon.spinning{animation:spin 1s linear infinite;color:var(--accent2);border-color:var(--accent2);}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="logo">
+      <h1>TCG <span>SALES</span></h1>
+      <p>Ventes en convention · Le Gardien du TCG</p>
+    </div>
+    <div class="header-right">
+      <div id="netBar" class="net-bar online">✓ Connecté</div>
+      <div id="cachePill" class="cache-pill hidden" title="Stock en cache">📦 —</div>
+      <button id="refreshBtn" class="btn-icon hidden" onclick="refreshStockCache()" title="Rafraîchir le stock">↻</button>
+      <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter</div>
+    </div>
+  </header>
+
+  <!-- Master status bar (visible quand master HS / non-configuré) -->
+  <div class="master-status-bar hidden" id="masterStatusBar">—</div>
+
+  <!-- ══════════════════════════════════ -->
+  <!-- TAB 1 — VENTE EN COURS            -->
+  <!-- ══════════════════════════════════ -->
+  <div class="tab-content active" id="tab1">
+
+    <!-- Restore previous cart (if any) -->
+    <div id="restoreBar" class="restore-bar hidden">
+      <span class="restore-text">↺ Panier précédent restaurable (<span id="restoreCount">0</span> articles)</span>
+      <button class="btn btn-primary btn-sm" onclick="restoreLastCart()">Restaurer</button>
+      <button class="btn btn-secondary btn-sm" onclick="dismissRestore()">✕</button>
+    </div>
+
+    <!-- Offline queue indicator -->
+    <div id="offlineQueueBar" class="offline-bar hidden">
+      ⏳ <span id="offlineQueueCount">0</span> vente(s) en attente de synchronisation
+    </div>
+
+    <!-- Scan zone -->
+    <div class="scan-zone" id="scanZone" onclick="focusScan()">
+      <span class="scan-icon">📷</span>
+      <div class="scan-label">Pointez la douchette ici · Cliquez pour activer</div>
+      <div class="scan-status" id="scanStatus">En attente de scan…</div>
+      <input class="scan-input" id="scanInput" type="text" autocomplete="off"
+        autofocus inputmode="none">
+    </div>
+
+    <!-- Cart header + total -->
+    <div class="cart-header">
+      <div>
+        <div class="section-title">Panier en cours</div>
+        <div class="cart-total" id="cartTotal">0.00€</div>
+        <div class="cart-count" id="cartCount">0 article</div>
+      </div>
+      <div class="flex-row">
+        <button class="btn btn-secondary btn-sm" onclick="openManualItem()">+ Manuel</button>
+        <button class="btn btn-secondary btn-sm" onclick="openAdjustTotal()" id="btnAdjustTotal" disabled>± Total</button>
+        <button class="btn btn-secondary btn-sm" onclick="confirmClearCart()">🗑 Vider</button>
+      </div>
+    </div>
+
+    <!-- Cart items -->
+    <div id="cartItems">
+      <div class="cart-empty" id="cartEmpty">Le panier est vide — scannez un article pour commencer</div>
+    </div>
+
+    <!-- Validate button -->
+    <div style="margin-top:20px;">
+      <button class="btn btn-primary btn-lg" id="btnValidate" onclick="validateSale()" disabled>
+        ✓ Valider la vente
+      </button>
+    </div>
+
+  </div>
+
+
+</div><!-- /app -->
+
+<!-- ══════════════════════════════════ -->
+<!-- MODALS                             -->
+<!-- ══════════════════════════════════ -->
+
+<!-- Modal: Article manuel -->
+<div class="modal-backdrop hidden" id="manualItemModal" onclick="if(event.target===this)closeManualItem()">
+  <div class="modal-panel">
+    <div class="modal-title">+ Article hors stock</div>
+    <div class="modal-subtitle">Vente exceptionnelle · ne touche pas au stock GSheet</div>
+    <div class="modal-info">
+      Utile pour une carte fraîchement rachetée non encore intégrée, un mystery pack, un échange complémentaire, etc.
+    </div>
+    <div class="modal-field">
+      <label>Nom de l'article</label>
+      <input id="manualName" type="text" placeholder="Ex: Charizard EX 199/165 NM" autocomplete="off">
+    </div>
+    <div class="modal-field">
+      <label>Prix de vente (€)</label>
+      <input id="manualPrice" type="number" step="0.01" min="0" placeholder="0.00" inputmode="decimal">
+    </div>
+    <div class="modal-field">
+      <label>Catégorie</label>
+      <select id="manualCategory" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;color:var(--text);font-family:'Syne',sans-serif;font-size:.9rem;outline:none;">
+        <option value="Cartes Loose">Cartes Loose</option>
+        <option value="Cartes Gradées">Cartes Gradées</option>
+        <option value="Scellé">Scellé</option>
+        <option value="Accessoires">Accessoires</option>
+        <option value="Goodies">Goodies</option>
+        <option value="Autre">Autre</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeManualItem()">Annuler</button>
+      <button class="btn btn-primary" onclick="confirmManualItem()">Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Ajuster le total -->
+<div class="modal-backdrop hidden" id="adjustTotalModal" onclick="if(event.target===this)closeAdjustTotal()">
+  <div class="modal-panel">
+    <div class="modal-title">± Ajuster le total</div>
+    <div class="modal-subtitle">Négociation client</div>
+    <div class="modal-info">
+      Total actuel : <strong id="adjustCurrentTotal">0.00€</strong><br>
+      La différence sera appliquée proportionnellement sur les articles les plus chers.
+    </div>
+    <div class="modal-field">
+      <label>Nouveau total (€)</label>
+      <input id="adjustNewTotal" type="number" step="0.01" min="0" inputmode="decimal">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeAdjustTotal()">Annuler</button>
+      <button class="btn btn-primary" onclick="confirmAdjustTotal()">Appliquer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Confirm clear cart -->
+<div class="modal-backdrop hidden" id="confirmClearModal" onclick="if(event.target===this)closeConfirmClear()">
+  <div class="modal-panel">
+    <div class="modal-title">⚠ Vider le panier ?</div>
+    <div class="modal-subtitle">Action réversible pendant 60 secondes</div>
+    <div class="modal-info">
+      <strong id="confirmClearCount">0</strong> article(s) pour un total de <strong id="confirmClearTotal">0.00€</strong> seront retirés.<br>
+      Un bouton "Restaurer" apparaîtra pendant 60 secondes au cas où.
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeConfirmClear()">Annuler</button>
+      <button class="btn btn-danger" onclick="reallyClearCart()">Vider</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Edit price -->
+<div class="modal-backdrop hidden" id="editPriceModal" onclick="if(event.target===this)closeEditPrice()">
+  <div class="modal-panel">
+    <div class="modal-title">Modifier le prix</div>
+    <div class="modal-subtitle" id="editPriceItemName">—</div>
+    <div class="modal-field">
+      <label>Prix unitaire (€)</label>
+      <input id="editPriceInput" type="number" step="0.01" min="0" inputmode="decimal">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeEditPrice()">Annuler</button>
+      <button class="btn btn-primary" onclick="confirmEditPrice()">Valider</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════
+// CONFIG — modifier selon besoin
+// ═══════════════════════════════════════════════════════════════
+const OAUTH_CLIENT_ID    = '1073305913629-jjmo8t8clandireak4t68lqtaq3uce6d.apps.googleusercontent.com';
+const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+const EVENTS_GSHEET_ID   = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
+const GSHEET_SCOPES      = 'https://www.googleapis.com/auth/spreadsheets';
+
+// Tabs (Central GSheet)
+const SHEET_CARDS  = 'Cartes_Stock_&_Transactions';
+const SHEET_SEALED = 'Scelle_Stock';
+
+// Tabs (Events GSheet)
+const SHEET_SALES     = 'ventes_detail';
+const SHEET_ANOMALIES = 'anomalies';
+const SHEET_STATE     = 'app_state';
+
+// Emails autorisés comme "Master" (master a sa propre app, on garde la constante pour info éventuelle)
+// (la détection master n'est plus utilisée dans l'app vendeur)
+
+// Timings
+const SYNC_POLL_MS         = 8000;          // (non utilisé côté vendeur)
+const CACHE_AUTO_REFRESH_MS = 5 * 60 * 1000; // Refresh stock toutes les 5 min en arrière-plan
+const CACHE_STALE_AFTER_MS  = 2 * 60 * 1000; // Cache considéré "stale" après 2 min
+const RESTORE_WINDOW_MS    = 60 * 1000;     // "Restaurer panier" dispo pendant 60s
+const RETRY_DELAYS_MS      = [500, 1500, 3500]; // Backoff progressif
+const HEARTBEAT_POLL_MS    = 20000;         // Lecture du heartbeat master toutes les 20s
+
+// localStorage keys
+const LS_CART          = 'tcg_sales_cart_v2';
+const LS_OFFLINE_QUEUE = 'tcg_sales_offline_queue_v2';
+const LS_LAST_CART     = 'tcg_sales_last_cart_v2';
+const LS_TOKEN         = 'tcg_sales_token_v2';
+
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+let gAccessToken = null;
+let gTokenExpiry = 0;
+let gUserEmail   = '';
+let gUserName    = '';
+
+// Master status (lu via app_state)
+let masterStatus = { state: 'unknown', message: '—', ts: null, eventName: '', device: '', lastReadAt: 0 };
+
+// Cart : { uid, key, name, type, category, licence, qty, prixUnit, prixOriginal, source, rowRef?, currentQty?, sheetRow?, qtyColLetter?, etat?, dupStatus?, priceModified? }
+let cart         = [];
+let scanBuffer   = '';
+let scanTimer    = null;
+
+// Stock cache
+let stockCacheCards  = new Map();   // key (col D) → cardData
+let stockCacheSealed = new Map();   // barcode (Code Technique) → sealedData
+let cardHeaderRow    = null;         // détecté dynamiquement
+let sealedColIdx     = null;         // {iCode, iNom, iType, ...}
+let lastCacheRefresh = 0;
+let cacheLoading     = false;
+
+// Offline queue
+let offlineQueue = []; // [{ payload, timestamp, retries }]
+let flushingQueue = false;
+
+// Last cleared cart (for restore)
+let lastClearedCart = null;
+let restoreExpiryTimer = null;
+
+// Regex
+const NEW_KEY_RE = /.*_\d{8}_\d{4}$/;  // nouvelles clés uniques
+const EAN_RE     = /^\d{8,14}$/;        // codes-barres EAN/UPC
+
+// ═══════════════════════════════════════════════════════════════
+// HELPERS — sécurité & format
+// ═══════════════════════════════════════════════════════════════
+function esc(s) {
+  // HTML escape pour innerHTML — empêche XSS si une cellule GSheet contient du HTML
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeForSheets(v) {
+  // Empêche l'injection de formules : préfixe ' devant =, +, -, @ en début de string
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  if (/^[=+\-@]/.test(s)) return "'" + s;
+  return s;
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function parsePrix(str) {
+  if (str === null || str === undefined || str === '') return 0;
+  return parseFloat(String(str).replace('€', '').replace(',', '.').trim()) || 0;
+}
+
+function formatPrice(p) {
+  const n = parseFloat(p);
+  if (isNaN(n)) return '0€';
+  return parseFloat(n.toFixed(2)) + '€';
+}
+
+function colIdx2letter(n) {
+  // 1-indexed column to letter (A=1, Z=26, AA=27...)
+  let result = '';
+  while (n > 0) { n--; result = String.fromCharCode(65 + (n % 26)) + result; n = Math.floor(n / 26); }
+  return result;
+}
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function detectLicence(text) {
+  const t = (text || '').toLowerCase();
+  if (t.includes('one piece') || t.includes('op-')) return 'One Piece';
+  if (t.includes('lorcana')) return 'Lorcana';
+  if (t.includes('yu-gi-oh') || t.includes('yugioh') || t.includes('ygo')) return 'Yu-Gi-Oh';
+  if (t.includes('panini') || t.includes('foot') || t.includes('adrenalyn')) return 'Panini';
+  if (t.includes('magic') || t.includes('mtg')) return 'Magic';
+  if (t.includes('flesh') || t.includes('flesh and blood')) return 'Flesh & Blood';
+  if (t.includes('dragon ball') || t.includes('dbz') || t.includes('dbs')) return 'Dragon Ball';
+  if (t.includes('star wars') || t.includes('swu')) return 'Star Wars';
+  if (t.includes('digimon')) return 'Digimon';
+  if (t.includes('pokemon') || t.includes('pokémon') || t.includes('pkm')) return 'Pokémon';
+  return 'Pokémon'; // default historique — à changer en 'Autre' une fois la base normalisée
+}
+
+function detectSealedCategory(type) {
+  const t = (type || '').toLowerCase();
+  if (t.includes('display') || t.includes('booster')) return 'Scellé';
+  if (t.includes('protection') || t.includes('sleev') || t.includes('binder') || t.includes('acryl')) return 'Accessoires';
+  if (t.includes('goodie') || t.includes('figurine') || t.includes('peluche') || t.includes('poster')) return 'Goodies';
+  if (t.includes('etb') || t.includes('coffret') || t.includes('pokebox') || t.includes('valisette') ||
+      t.includes('premium') || t.includes('blister') || t.includes('tripack') || t.includes('duopack') ||
+      t.includes('bundle') || t.includes('tin') || t.includes('box')) return 'Scellé';
+  return 'Scellé';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// localStorage PERSISTENCE
+// ═══════════════════════════════════════════════════════════════
+function lsSave(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { console.warn('LS save failed', key, e); }
+}
+function lsLoad(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; }
+}
+function lsClear(key) { try { localStorage.removeItem(key); } catch (e) {} }
+
+function persistCart() { lsSave(LS_CART, cart); }
+function persistOfflineQueue() {
+  lsSave(LS_OFFLINE_QUEUE, offlineQueue);
+  renderOfflineQueueBar();
+}
+function persistToken() {
+  if (gAccessToken && gTokenExpiry > Date.now()) {
+    lsSave(LS_TOKEN, { token: gAccessToken, expiry: gTokenExpiry, email: gUserEmail, name: gUserName });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NETWORK STATUS
+// ═══════════════════════════════════════════════════════════════
+function updateNet() {
+  const bar = document.getElementById('netBar');
+  if (navigator.onLine) {
+    bar.textContent = '✓ Connecté'; bar.className = 'net-bar online';
+    // Tente de flusher la queue offline
+    if (offlineQueue.length > 0 && isAuth()) flushOfflineQueue();
+  } else {
+    bar.textContent = '⚠ Hors ligne'; bar.className = 'net-bar offline';
+  }
+}
+window.addEventListener('online', updateNet);
+window.addEventListener('offline', updateNet);
+
+// ═══════════════════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════════════════
+function switchTab(n) {
+  document.querySelectorAll('.tab-content').forEach((t, i) => t.classList.toggle('active', i + 1 === n));
+  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i + 1 === n));
+  if (n === 1) setTimeout(focusScan, 50);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// OAUTH
+// ═══════════════════════════════════════════════════════════════
+function isAuth() { return gAccessToken && Date.now() < gTokenExpiry; }
+
+function updateAuthUI() {
+  const pill = document.getElementById('authPill');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const cachePill = document.getElementById('cachePill');
+
+  if (isAuth()) {
+    pill.textContent = '● ' + (gUserName || gUserEmail || 'Connecté');
+    pill.className = 'auth-pill connected';
+    refreshBtn.classList.remove('hidden');
+    cachePill.classList.remove('hidden');
+    updateValidateButton();
+  } else {
+    pill.textContent = '🔑 Se connecter';
+    pill.className = 'auth-pill';
+    refreshBtn.classList.add('hidden');
+    cachePill.classList.add('hidden');
+    document.getElementById('btnValidate').disabled = true;
+  }
+}
+
+function updateValidateButton() {
+  const btn = document.getElementById('btnValidate');
+  const adjBtn = document.getElementById('btnAdjustTotal');
+  if (cart.length === 0 || !isAuth()) {
+    btn.disabled = true;
+    if (adjBtn) adjBtn.disabled = true;
+    return;
+  }
+  if (adjBtn) adjBtn.disabled = false;
+  // Bloque si un dup RED non-résolu
+  const hasBlockingDup = cart.some(c => c.dupStatus === 'red');
+  if (hasBlockingDup) {
+    btn.disabled = true;
+    btn.textContent = '⚠ Doublon impossible — retirez-le';
+  } else {
+    btn.disabled = false;
+    btn.textContent = '✓ Valider la vente';
+  }
+}
+
+function toggleAuth() { if (isAuth()) logout(); else launchOAuth(); }
+
+function launchOAuth() {
+  const redirectUri = window.location.href.split('?')[0].split('#')[0];
+  const state = Math.random().toString(36).slice(2);
+  sessionStorage.setItem('oauth_state', state);
+  const params = new URLSearchParams({
+    client_id: OAUTH_CLIENT_ID, redirect_uri: redirectUri,
+    response_type: 'token',
+    scope: GSHEET_SCOPES + ' https://www.googleapis.com/auth/userinfo.email profile',
+    state, prompt: 'consent'
+  });
+  window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
+}
+
+async function handleOAuthCallback() {
+  // Restore from LS first (survive refresh)
+  const saved = lsLoad(LS_TOKEN, null);
+  if (saved && saved.expiry > Date.now() + 60000) { // au moins 1 min de marge
+    gAccessToken = saved.token;
+    gTokenExpiry = saved.expiry;
+    gUserEmail   = saved.email || '';
+    gUserName    = saved.name || 'Vendeur';
+    // Pas de toast au reload — connexion silencieuse
+  }
+
+  const hash = window.location.hash.substring(1);
+  if (!hash.includes('access_token')) return;
+
+  const params = new URLSearchParams(hash);
+  const token = params.get('access_token');
+  const expiresIn = parseInt(params.get('expires_in') || '3600');
+  if (params.get('state') !== sessionStorage.getItem('oauth_state')) return;
+
+  gAccessToken = token;
+  gTokenExpiry = Date.now() + expiresIn * 1000;
+  sessionStorage.removeItem('oauth_state');
+  window.history.replaceState({}, document.title, window.location.pathname);
+
+  // Fetch user info
+  try {
+    const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    const info = await res.json();
+    gUserEmail = info.email || '';
+    gUserName  = info.name || info.email || 'Vendeur';
+    showToast('✓ Connecté · ' + gUserName);
+  } catch (e) {
+    gUserName = 'Vendeur';
+  }
+
+  persistToken();
+  updateAuthUI();
+  // Bootstrap : cache stock + premier heartbeat
+  await loadStockCache();
+  await readMasterHeartbeat();
+}
+
+function logout() {
+  gAccessToken = null; gTokenExpiry = 0; gUserEmail = ''; gUserName = '';
+  lsClear(LS_TOKEN);
+  stockCacheCards.clear();
+  stockCacheSealed.clear();
+  masterStatus = { state: 'unknown', message: '—' };
+  updateMasterStatusBar();
+  updateAuthUI();
+  updateCachePill();
+  showToast('Déconnecté');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SHEETS API (avec retry sur 5xx/429)
+// ═══════════════════════════════════════════════════════════════
+async function sheetsRequest(method, url, body) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) await sleep(RETRY_DELAYS_MS[attempt - 1]);
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { Authorization: 'Bearer ' + gAccessToken, 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      if (res.ok) return res.json();
+      // Retry sur 429 (rate limit) ou 5xx
+      if (res.status === 429 || res.status >= 500) {
+        lastErr = new Error(method + ' ' + res.status);
+        continue;
+      }
+      // 4xx non retry-able
+      const txt = await res.text();
+      throw new Error(method + ' ' + res.status + ': ' + txt.substring(0, 200));
+    } catch (e) {
+      lastErr = e;
+      // Network error → retry
+      if (!e.message.includes(method + ' ')) continue;
+      throw e;
+    }
+  }
+  throw lastErr || new Error(method + ' failed after retries');
+}
+
+async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}`;
+  return sheetsRequest('GET', url);
+}
+
+async function sheetsAppend(range, values, inputOption = 'USER_ENTERED', gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=${inputOption}&insertDataOption=INSERT_ROWS`;
+  return sheetsRequest('POST', url, { values });
+}
+
+async function sheetsUpdate(range, values, inputOption = 'USER_ENTERED', gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}?valueInputOption=${inputOption}`;
+  return sheetsRequest('PUT', url, { values });
+}
+
+async function sheetsBatch(requests, gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}:batchUpdate`;
+  return sheetsRequest('POST', url, { requests });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MASTER HEARTBEAT — lecture périodique de app_state pour status master
+// ═══════════════════════════════════════════════════════════════
+async function readMasterHeartbeat() {
+  if (!isAuth() || !navigator.onLine) {
+    masterStatus = { state: 'unknown', message: '—' };
+    updateMasterStatusBar();
+    return;
+  }
+  try {
+    const r = await sheetsGet(`${SHEET_STATE}!A2:C2`, EVENTS_GSHEET_ID);
+    const row = (r.values && r.values[0]) || [];
+    const tsRaw = (row[0] || '').toString().trim();
+    const eventName = (row[1] || '').toString().trim();
+    const device = (row[2] || '').toString().trim();
+    let ts = null;
+    if (tsRaw) {
+      const d = new Date(tsRaw);
+      if (!isNaN(d.getTime())) ts = d.getTime();
+    }
+    const ageMs = ts ? (Date.now() - ts) : Infinity;
+    masterStatus = { ts, ageMs, eventName, device, lastReadAt: Date.now() };
+    // Détermine l'état affiché
+    if (!ts || ageMs > 60000) {
+      masterStatus.state = 'offline';
+      masterStatus.message = 'Master déconnecté · ventes mises en attente';
+    } else if (!eventName) {
+      masterStatus.state = 'idle';
+      masterStatus.message = 'Master en attente · pas d\'event configuré';
+    } else {
+      masterStatus.state = 'ok';
+      masterStatus.message = 'Event actif : ' + eventName;
+    }
+    updateMasterStatusBar();
+  } catch (e) {
+    // Tab app_state n'existe pas encore = master jamais lancé
+    masterStatus = { state: 'never', message: 'Master jamais initialisé · ouvre l\'app master une fois' };
+    updateMasterStatusBar();
+  }
+}
+
+function updateMasterStatusBar() {
+  const bar = document.getElementById('masterStatusBar');
+  if (!bar) return;
+  if (!isAuth()) { bar.classList.add('hidden'); return; }
+  const s = masterStatus.state;
+  if (s === 'ok') { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  let icon = '🟡', cls = 'warn';
+  if (s === 'offline' || s === 'never') { icon = '🔴'; cls = 'err'; }
+  bar.className = 'master-status-bar ' + cls;
+  bar.innerHTML = icon + ' ' + esc(masterStatus.message);
+}
+
+// Polling régulier (toutes les 20 secondes)
+setInterval(() => {
+  if (isAuth()) readMasterHeartbeat();
+}, 20000);
+
+// ═══════════════════════════════════════════════════════════════
+// STOCK CACHE — load on login, refresh manual
+// ═══════════════════════════════════════════════════════════════
+async function findCardsHeaderRow() {
+  // Cherche dans la colonne D (clés) ou A (lots) une ligne dont le contenu ressemble à un header
+  // Heuristique : on cherche la ligne contenant "Clé" dans D, ou "Statut" dans AF
+  const r = await sheetsGet(`${SHEET_CARDS}!A1:AF300`, CENTRAL_GSHEET_ID);
+  const rows = r.values || [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const colD = (row[3] || '').toString().trim().toLowerCase();
+    const colAF = (row[31] || '').toString().trim().toLowerCase();
+    if (colD === 'clé' || colD === 'cle' || colD === 'key' || colAF === 'statut' || colAF === 'status') {
+      return i + 1; // 1-indexed
+    }
+  }
+  // Fallback
+  return 143;
+}
+
+async function loadStockCache() {
+  if (!isAuth() || cacheLoading) return;
+  cacheLoading = true;
+  const btn = document.getElementById('refreshBtn');
+  btn.classList.add('spinning');
+  updateCachePill('loading');
+
+  try {
+    // 1. Détecter dynamiquement la ligne d'en-tête
+    cardHeaderRow = await findCardsHeaderRow();
+
+    // 2. Charger toutes les cartes en un seul GET (col C à AF, à partir de la première ligne sous le header)
+    const cardData = await sheetsGet(`${SHEET_CARDS}!C${cardHeaderRow + 1}:AF`, CENTRAL_GSHEET_ID);
+    const rows = cardData.values || [];
+    stockCacheCards.clear();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const key = (row[1] || '').toString().trim();      // col D
+      if (!key) continue;
+      // Filtre statut : col P (idx 13 dans range C:AF) = sale status. Toute valeur non-vide = indisponible.
+      const saleStatus = (row[13] || '').toString().trim();
+      if (saleStatus) continue;
+      stockCacheCards.set(key, {
+        key,
+        codeSerie: (row[4] || '').toString().trim(),  // G
+        nomSerie:  (row[5] || '').toString().trim(),  // H
+        name:      (row[6] || '').toString().trim(),  // I
+        type:      (row[7] || '').toString().trim(),  // J
+        etat:      (row[8] || '').toString().trim(),  // K
+        prix:      parsePrix(row[14]),                 // Q (déjà rempli par TCG Integrator)
+        sheetRow:  cardHeaderRow + 1 + i
+      });
+    }
+
+    // 3. Charger Scelle_Stock (A:AF — Code Technique est en col AA depuis l'ajout de la col C Key)
+    const sealedData = await sheetsGet(`'${SHEET_SEALED}'!A:AF`, CENTRAL_GSHEET_ID);
+    const sRows = sealedData.values || [];
+    if (sRows.length > 0) {
+      const headers = sRows[0];
+      const find = h => headers.findIndex(x => x && x.toString().trim() === h);
+      sealedColIdx = {
+        iKey:       find('Key'),            // col C — barcode (clé primaire scan)
+        iCode:      find('Code Technique'), // col AA — ancien identifiant
+        iNom:       find('Nom_Item'),
+        iType:      find('Type_Item'),
+        iOrigine:   find('Origine'),
+        iNomSerie:  find('Nom Série'),
+        iCodeSerie: find('Code Série'),
+        iQty:       find('Quantité'),
+        iStatut:    find('Statut'),
+        iPrix:      find('Prix de vente')
+      };
+      if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
+
+      stockCacheSealed.clear();
+      for (let i = 1; i < sRows.length; i++) {
+        const row = sRows[i];
+        // Indexation par Key (barcode) — article ignoré tant que Key est vide
+        const itemKey = (row[sealedColIdx.iKey] || '').toString().trim();
+        if (!itemKey) continue;
+        const statut = (row[sealedColIdx.iStatut] || '').toString().trim().toLowerCase();
+        if (statut === 'vendu' || statut === 'x') continue;
+        const qty = parseInt(row[sealedColIdx.iQty]) || 0;
+        if (qty <= 0) continue;
+        stockCacheSealed.set(itemKey, {
+          key: itemKey,
+          name:     (row[sealedColIdx.iNom]      || itemKey).toString().trim(),
+          type:     (row[sealedColIdx.iType]      || 'Scellé').toString().trim(),
+          nomSerie: (row[sealedColIdx.iNomSerie]  || '').toString().trim(),
+          prix:     parsePrix(row[sealedColIdx.iPrix]),
+          qty,
+          sheetRow: i + 1,
+          qtyColLetter:   colIdx2letter(sealedColIdx.iQty + 1),
+          statutColLetter: colIdx2letter(sealedColIdx.iStatut + 1)
+        });
+      }
+    }
+
+    lastCacheRefresh = Date.now();
+    updateCachePill('fresh');
+    showToast(`✓ Stock : ${stockCacheCards.size} cartes · ${stockCacheSealed.size} scellés`);
+  } catch (e) {
+    console.error('loadStockCache failed:', e);
+    showToast('✗ Cache : ' + e.message, true);
+    updateCachePill('error');
+  } finally {
+    btn.classList.remove('spinning');
+    cacheLoading = false;
+  }
+}
+
+async function refreshStockCache() {
+  if (cacheLoading) return;
+  await loadStockCache();
+}
+
+function updateCachePill(state) {
+  const pill = document.getElementById('cachePill');
+  if (!isAuth()) { pill.classList.add('hidden'); return; }
+  pill.classList.remove('hidden');
+  if (state === 'loading') {
+    pill.textContent = '⏳ Chargement…';
+    pill.className = 'cache-pill';
+  } else if (state === 'error') {
+    pill.textContent = '✗ Cache HS';
+    pill.className = 'cache-pill stale';
+  } else {
+    const total = stockCacheCards.size + stockCacheSealed.size;
+    const age = lastCacheRefresh ? Math.floor((Date.now() - lastCacheRefresh) / 1000) : null;
+    const isStale = age !== null && (Date.now() - lastCacheRefresh) > CACHE_STALE_AFTER_MS;
+    let ageStr = '';
+    if (age !== null) {
+      if (age < 60) ageStr = ` · ${age}s`;
+      else if (age < 3600) ageStr = ` · ${Math.floor(age / 60)}m`;
+      else ageStr = ` · ${Math.floor(age / 3600)}h`;
+    }
+    pill.textContent = `📦 ${total}${ageStr}`;
+    pill.className = 'cache-pill ' + (isStale ? 'stale' : 'fresh');
+  }
+}
+
+// Refresh régulier du pill (pour montrer l'âge qui augmente) + auto-refresh cache toutes les 5 min
+setInterval(() => {
+  if (isAuth()) {
+    updateCachePill();
+    if (lastCacheRefresh && Date.now() - lastCacheRefresh > CACHE_AUTO_REFRESH_MS && !cacheLoading) {
+      loadStockCache();
+    }
+  }
+}, 15000);
+
+// ═══════════════════════════════════════════════════════════════
+// SCAN — gestion douchette USB (keyboard HID)
+// ═══════════════════════════════════════════════════════════════
+const scanInput = document.getElementById('scanInput');
+const scanZone  = document.getElementById('scanZone');
+
+function focusScan() {
+  scanInput.focus();
+  scanZone.classList.add('active');
+}
+
+scanInput.addEventListener('focus', () => scanZone.classList.add('active'));
+scanInput.addEventListener('blur',  () => scanZone.classList.remove('active'));
+
+scanInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    e.preventDefault();
+    const val = scanBuffer.trim();
+    scanBuffer = '';
+    scanInput.value = '';
+    if (val) processScan(val);
+  }
+});
+
+scanInput.addEventListener('input', () => {
+  scanBuffer = scanInput.value;
+  // Fallback: certains scanners n'envoient pas Enter — timeout 800ms
+  clearTimeout(scanTimer);
+  scanTimer = setTimeout(() => {
+    const val = scanBuffer.trim();
+    scanBuffer = '';
+    scanInput.value = '';
+    if (val.length >= 6) processScan(val);
+  }, 800);
+});
+
+document.addEventListener('click', e => {
+  if (e.target.closest('button') || e.target.closest('.auth-pill') || e.target.closest('.tab-btn') ||
+      e.target.closest('.modal-backdrop') || e.target.closest('input') || e.target.closest('select')) return;
+  if (document.getElementById('tab1').classList.contains('active')) focusScan();
+});
+
+async function processScan(rawValue) {
+  const statusEl = document.getElementById('scanStatus');
+  statusEl.textContent = 'Recherche de "' + rawValue.substring(0, 30) + '"…';
+  scanZone.classList.add('scanning');
+  if (navigator.vibrate) navigator.vibrate(50);
+
+  try {
+    if (!isAuth()) throw new Error('Non connecté');
+    let item;
+    if (EAN_RE.test(rawValue)) item = lookupSealed(rawValue);
+    else                       item = lookupCard(rawValue);
+
+    if (!item) {
+      statusEl.textContent = '⚠ Article non trouvé : ' + rawValue.substring(0, 30);
+      showToast('⚠ Article non trouvé', true);
+      scanZone.classList.remove('scanning');
+      return;
+    }
+
+    addToCart(item);
+    statusEl.textContent = '✓ ' + item.name + ' ajouté (' + formatPrice(item.prix) + ')';
+    showToast('✓ ' + item.name);
+  } catch (e) {
+    statusEl.textContent = '✗ Erreur : ' + e.message;
+    showToast('✗ ' + e.message, true);
+  }
+
+  scanZone.classList.remove('scanning');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOOKUP (depuis cache local)
+// ═══════════════════════════════════════════════════════════════
+function lookupCard(key) {
+  const c = stockCacheCards.get(key);
+  if (!c) return null;
+  const isGraded = c.type.toLowerCase().includes('grade') || c.etat.toLowerCase().includes('psa');
+  return {
+    uid: uid(),
+    key: c.key, name: c.name, type: c.type, etat: c.etat,
+    category: isGraded ? 'Cartes Gradées' : 'Cartes Loose',
+    licence: detectLicence(c.nomSerie + ' ' + c.name),
+    qty: 1,
+    prixUnit: c.prix,
+    prixOriginal: c.prix,
+    source: 'cartes',
+    sheetRow: c.sheetRow
+  };
+}
+
+function lookupSealed(barcode) {
+  const s = stockCacheSealed.get(barcode);
+  if (!s) return null;
+  return {
+    uid: uid(),
+    key: s.key, name: s.name, type: s.type,
+    category: detectSealedCategory(s.type),
+    licence: detectLicence(s.nomSerie + ' ' + s.name),
+    qty: 1,
+    prixUnit: s.prix,
+    prixOriginal: s.prix,
+    source: 'scelle',
+    sheetRow: s.sheetRow,
+    qtyColLetter: s.qtyColLetter,
+    cachedQty: s.qty
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CART
+// ═══════════════════════════════════════════════════════════════
+function addToCart(item) {
+  if (item.source === 'scelle') {
+    // Scellé : 1 ligne par produit, qty incrémentable
+    const existing = cart.find(c => c.key === item.key && c.source === 'scelle');
+    if (existing) {
+      existing.qty++;
+      renderCart();
+      return;
+    }
+    cart.push(item);
+  } else if (item.source === 'cartes') {
+    // Carte : 1 ligne par scan (chaque carte unitaire). Détection doublon clé.
+    const existing = cart.find(c => c.key === item.key && c.source === 'cartes');
+    if (existing) {
+      const isNewKey = NEW_KEY_RE.test(item.key);
+      const dup = isNewKey ? 'red' : 'yellow';
+      item.dupStatus = dup;
+      existing.dupStatus = dup;
+    }
+    cart.push(item);
+  } else {
+    // Manuel : pas de dedup
+    cart.push(item);
+  }
+  renderCart();
+}
+
+function removeFromCart(uidToRemove) {
+  const idx = cart.findIndex(c => c.uid === uidToRemove);
+  if (idx < 0) return;
+  const removed = cart[idx];
+  cart.splice(idx, 1);
+  // Re-évaluer dup status pour les cartes restantes avec même clé
+  if (removed.source === 'cartes') {
+    const remaining = cart.filter(c => c.key === removed.key && c.source === 'cartes');
+    if (remaining.length <= 1) remaining.forEach(c => c.dupStatus = null);
+  }
+  renderCart();
+}
+
+function changeQty(uidToChange, delta) {
+  const c = cart.find(x => x.uid === uidToChange);
+  if (!c) return;
+  if (c.source !== 'scelle' && c.source !== 'manuel') return;
+  c.qty = Math.max(1, c.qty + delta);
+  renderCart();
+}
+
+function confirmClearCart() {
+  if (cart.length === 0) return;
+  document.getElementById('confirmClearCount').textContent = cart.length;
+  document.getElementById('confirmClearTotal').textContent = formatPrice(getCartTotal());
+  document.getElementById('confirmClearModal').classList.remove('hidden');
+}
+function closeConfirmClear() {
+  document.getElementById('confirmClearModal').classList.add('hidden');
+  focusScan();
+}
+function reallyClearCart() {
+  closeConfirmClear();
+  if (cart.length === 0) return;
+  // Snapshot pour restauration
+  lastClearedCart = JSON.parse(JSON.stringify(cart));
+  lsSave(LS_LAST_CART, { cart: lastClearedCart, savedAt: Date.now() });
+  cart = [];
+  renderCart();
+  document.getElementById('scanStatus').textContent = 'En attente de scan…';
+  showRestoreBar();
+}
+
+function clearCartSilent() {
+  // Vide sans confirmation ni snapshot (après validation)
+  cart = [];
+  renderCart();
+  document.getElementById('scanStatus').textContent = 'En attente de scan…';
+}
+
+function showRestoreBar() {
+  if (!lastClearedCart || lastClearedCart.length === 0) return;
+  const bar = document.getElementById('restoreBar');
+  document.getElementById('restoreCount').textContent = lastClearedCart.length;
+  bar.classList.remove('hidden');
+  if (restoreExpiryTimer) clearTimeout(restoreExpiryTimer);
+  restoreExpiryTimer = setTimeout(() => {
+    bar.classList.add('hidden');
+    lastClearedCart = null;
+    lsClear(LS_LAST_CART);
+  }, RESTORE_WINDOW_MS);
+}
+
+function dismissRestore() {
+  document.getElementById('restoreBar').classList.add('hidden');
+  lastClearedCart = null;
+  lsClear(LS_LAST_CART);
+  if (restoreExpiryTimer) { clearTimeout(restoreExpiryTimer); restoreExpiryTimer = null; }
+  focusScan();
+}
+
+function restoreLastCart() {
+  if (!lastClearedCart || lastClearedCart.length === 0) return;
+  cart = lastClearedCart;
+  lastClearedCart = null;
+  lsClear(LS_LAST_CART);
+  document.getElementById('restoreBar').classList.add('hidden');
+  if (restoreExpiryTimer) { clearTimeout(restoreExpiryTimer); restoreExpiryTimer = null; }
+  renderCart();
+  showToast('✓ Panier restauré');
+  focusScan();
+}
+
+function getCartTotal() {
+  return cart.reduce((s, c) => s + c.prixUnit * c.qty, 0);
+}
+
+function renderCart() {
+  const container = document.getElementById('cartItems');
+  const empty = document.getElementById('cartEmpty');
+  const totalEl = document.getElementById('cartTotal');
+  const countEl = document.getElementById('cartCount');
+
+  if (cart.length === 0) {
+    container.innerHTML = '';
+    container.appendChild(empty);
+    empty.classList.remove('hidden');
+    totalEl.textContent = '0.00€';
+    countEl.textContent = '0 article';
+    persistCart();
+    updateValidateButton();
+    return;
+  }
+
+  empty.classList.add('hidden');
+
+  const total = getCartTotal();
+  const totalItems = cart.reduce((s, c) => s + c.qty, 0);
+  totalEl.textContent = formatPrice(total);
+  countEl.textContent = totalItems + ' article' + (totalItems > 1 ? 's' : '');
+
+  // Render items
+  container.innerHTML = '';
+  cart.forEach(c => {
+    const div = document.createElement('div');
+    let cls = 'cart-item';
+    if (c.dupStatus === 'yellow') cls += ' dup-yellow';
+    else if (c.dupStatus === 'red') cls += ' dup-red';
+    div.className = cls;
+
+    let dupBadge = '';
+    if (c.dupStatus === 'yellow') dupBadge = '<span class="dup-badge yellow">Double scan — vérifier</span>';
+    else if (c.dupStatus === 'red') dupBadge = '<span class="dup-badge red">⚠ Doublon impossible</span>';
+
+    const srcIcon = c.source === 'scelle' ? '📦' : c.source === 'manuel' ? '✏️' : '🃏';
+    const meta = [c.category, c.licence, c.etat].filter(Boolean).join(' · ');
+    const lineTotal = c.prixUnit * c.qty;
+    const showLineTotal = c.qty > 1;
+    const priceModClass = c.priceModified ? ' price-modified' : '';
+
+    // Qty controls : scellé et manuel uniquement
+    let qtyHtml = '';
+    if (c.source === 'scelle' || c.source === 'manuel') {
+      qtyHtml = `
+        <div class="cart-item-qty">
+          <button class="qty-btn" data-action="dec" data-uid="${esc(c.uid)}">−</button>
+          <span class="qty-val">${c.qty}</span>
+          <button class="qty-btn" data-action="inc" data-uid="${esc(c.uid)}">+</button>
+        </div>`;
+    }
+
+    div.innerHTML = `
+      <div class="cart-item-info">
+        <div class="cart-item-name">${srcIcon} ${esc(c.name)}</div>
+        <div class="cart-item-meta">${esc(meta)} ${dupBadge}</div>
+      </div>
+      ${qtyHtml}
+      <div class="cart-item-price editable${priceModClass}" data-action="editprice" data-uid="${esc(c.uid)}">
+        ${formatPrice(c.prixUnit)}${showLineTotal ? `<div style="font-size:.65rem;color:var(--muted);margin-top:2px;">×${c.qty} = ${formatPrice(lineTotal)}</div>` : ''}
+      </div>
+      <button class="cart-item-remove" data-action="remove" data-uid="${esc(c.uid)}">✕</button>
+    `;
+    container.appendChild(div);
+  });
+
+  // Append the empty placeholder (hidden but in DOM for toggle)
+  container.appendChild(empty);
+
+  persistCart();
+  updateValidateButton();
+}
+
+// Event delegation on cart items (évite onclick inline avec esc)
+document.getElementById('cartItems').addEventListener('click', e => {
+  const t = e.target.closest('[data-action]');
+  if (!t) return;
+  const action = t.getAttribute('data-action');
+  const uid = t.getAttribute('data-uid');
+  if (action === 'remove')    removeFromCart(uid);
+  else if (action === 'inc')  changeQty(uid, +1);
+  else if (action === 'dec')  changeQty(uid, -1);
+  else if (action === 'editprice') openEditPrice(uid);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// EDIT PRICE
+// ═══════════════════════════════════════════════════════════════
+let editPriceTargetUid = null;
+function openEditPrice(uidToEdit) {
+  const c = cart.find(x => x.uid === uidToEdit);
+  if (!c) return;
+  editPriceTargetUid = uidToEdit;
+  document.getElementById('editPriceItemName').textContent = c.name;
+  document.getElementById('editPriceInput').value = c.prixUnit;
+  document.getElementById('editPriceModal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('editPriceInput').focus(), 50);
+}
+function closeEditPrice() {
+  document.getElementById('editPriceModal').classList.add('hidden');
+  editPriceTargetUid = null;
+  focusScan();
+}
+function confirmEditPrice() {
+  if (!editPriceTargetUid) return;
+  const newPrice = parseFloat(document.getElementById('editPriceInput').value);
+  if (isNaN(newPrice) || newPrice < 0) { showToast('⚠ Prix invalide', true); return; }
+  const c = cart.find(x => x.uid === editPriceTargetUid);
+  if (!c) return;
+  c.prixUnit = newPrice;
+  c.priceModified = (newPrice !== c.prixOriginal);
+  closeEditPrice();
+  renderCart();
+  showToast('✓ Prix modifié');
+}
+
+// Enter dans l'input → valide
+document.getElementById('editPriceInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmEditPrice(); }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// MANUAL ITEM
+// ═══════════════════════════════════════════════════════════════
+function openManualItem() {
+  document.getElementById('manualName').value = '';
+  document.getElementById('manualPrice').value = '';
+  document.getElementById('manualCategory').value = 'Cartes Loose';
+  document.getElementById('manualItemModal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('manualName').focus(), 50);
+}
+function closeManualItem() {
+  document.getElementById('manualItemModal').classList.add('hidden');
+  focusScan();
+}
+function confirmManualItem() {
+  const name = document.getElementById('manualName').value.trim();
+  const price = parseFloat(document.getElementById('manualPrice').value);
+  const category = document.getElementById('manualCategory').value;
+  if (!name) { showToast('⚠ Nom requis', true); return; }
+  if (isNaN(price) || price < 0) { showToast('⚠ Prix invalide', true); return; }
+  const item = {
+    uid: uid(),
+    key: 'MANUEL_' + Date.now(),
+    name, type: 'Manuel',
+    category, licence: detectLicence(name),
+    qty: 1, prixUnit: price, prixOriginal: price,
+    source: 'manuel'
+  };
+  cart.push(item);
+  closeManualItem();
+  renderCart();
+  showToast('✓ Article manuel ajouté');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ADJUST TOTAL (négociation)
+// ═══════════════════════════════════════════════════════════════
+function openAdjustTotal() {
+  if (cart.length === 0) return;
+  const cur = getCartTotal();
+  document.getElementById('adjustCurrentTotal').textContent = formatPrice(cur);
+  document.getElementById('adjustNewTotal').value = parseFloat(cur.toFixed(2));
+  document.getElementById('adjustTotalModal').classList.remove('hidden');
+  setTimeout(() => {
+    const i = document.getElementById('adjustNewTotal');
+    i.focus(); i.select();
+  }, 50);
+}
+function closeAdjustTotal() {
+  document.getElementById('adjustTotalModal').classList.add('hidden');
+  focusScan();
+}
+function confirmAdjustTotal() {
+  const newTotal = parseFloat(document.getElementById('adjustNewTotal').value);
+  const cur = getCartTotal();
+  if (isNaN(newTotal) || newTotal < 0) { showToast('⚠ Total invalide', true); return; }
+  const diff = newTotal - cur;
+  if (Math.abs(diff) < 0.01) { closeAdjustTotal(); return; }
+
+  // Répartir la diff sur les articles les plus chers (par prix unit * qty)
+  // On modifie le prix unitaire des lignes les plus chères proportionnellement
+  const sorted = [...cart].sort((a, b) => (b.prixUnit * b.qty) - (a.prixUnit * a.qty));
+  // Top 3 lignes ou toutes si moins
+  const topN = Math.min(3, sorted.length);
+  const top = sorted.slice(0, topN);
+  const topTotal = top.reduce((s, c) => s + c.prixUnit * c.qty, 0);
+  if (topTotal <= 0) { showToast('⚠ Impossible de répartir', true); return; }
+
+  top.forEach(c => {
+    const lineTotal = c.prixUnit * c.qty;
+    const lineShare = lineTotal / topTotal;
+    const lineDelta = diff * lineShare;
+    const newLineTotal = lineTotal + lineDelta;
+    const newUnit = Math.max(0, newLineTotal / c.qty);
+    c.prixUnit = parseFloat(newUnit.toFixed(2));
+    c.priceModified = (c.prixUnit !== c.prixOriginal);
+  });
+
+  closeAdjustTotal();
+  renderCart();
+  showToast('✓ Total ajusté à ' + formatPrice(newTotal));
+}
+
+document.getElementById('adjustNewTotal').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmAdjustTotal(); }
+});
+document.getElementById('manualPrice').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmManualItem(); }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// VALIDATE SALE
+// ═══════════════════════════════════════════════════════════════
+async function validateSale() {
+  if (cart.length === 0) return;
+  if (!isAuth()) { showToast('⚠ Connectez-vous d\'abord', true); return; }
+  // Check blocking dup (red)
+  if (cart.some(c => c.dupStatus === 'red')) {
+    showToast('⚠ Retirez les doublons rouges avant validation', true);
+    return;
+  }
+
+  const btn = document.getElementById('btnValidate');
+  btn.disabled = true;
+  btn.textContent = '⏳ Enregistrement…';
+
+  const now = new Date();
+  const ts  = now.toISOString();
+  const txId = now.getTime().toString();
+
+  // Build rows : 1 ligne par item du panier (quantité = c.qty)
+  const rows = cart.map(c => [
+    ts,
+    safeForSheets(gUserName),
+    safeForSheets(gUserEmail),
+    txId,
+    safeForSheets(c.key),
+    safeForSheets(c.name),
+    safeForSheets(c.type),
+    safeForSheets(c.category),
+    safeForSheets(c.licence),
+    c.qty,
+    c.prixUnit * c.qty,
+    c.source
+  ]);
+
+  const payload = { range: `${SHEET_SALES}!A:L`, values: rows, ts, txId, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
+
+  // Online → append direct ; offline → queue
+  if (!navigator.onLine) {
+    queueOfflineSale(payload);
+    showToast(`✓ Vente mise en file (${rows.length} art.) · ${formatPrice(getCartTotal())}`);
+    clearCartSilent();
+    btn.textContent = '✓ Valider la vente';
+    updateValidateButton();
+    return;
+  }
+
+  try {
+    await sheetsAppend(payload.range, payload.values, 'USER_ENTERED', EVENTS_GSHEET_ID);
+    showToast(`✓ Vente enregistrée · ${formatPrice(getCartTotal())}`);
+    clearCartSilent();
+  } catch (e) {
+    // Échec online → mettre en queue
+    console.warn('Append failed, queuing:', e);
+    queueOfflineSale(payload);
+    showToast(`⚠ Erreur API · vente mise en file`, true);
+    clearCartSilent();
+  }
+
+  btn.textContent = '✓ Valider la vente';
+  updateValidateButton();
+}
+
+function queueOfflineSale(payload) {
+  offlineQueue.push({ payload, queuedAt: Date.now(), retries: 0 });
+  persistOfflineQueue();
+}
+
+async function flushOfflineQueue() {
+  if (flushingQueue || offlineQueue.length === 0 || !isAuth() || !navigator.onLine) return;
+  flushingQueue = true;
+  const failed = [];
+  for (const entry of offlineQueue) {
+    try {
+      await sheetsAppend(entry.payload.range, entry.payload.values, 'USER_ENTERED', EVENTS_GSHEET_ID);
+    } catch (e) {
+      entry.retries++;
+      if (entry.retries < 5) failed.push(entry);
+      else console.error('Drop entry after 5 retries:', entry, e);
+    }
+  }
+  offlineQueue = failed;
+  persistOfflineQueue();
+  flushingQueue = false;
+  if (failed.length === 0) showToast('✓ File offline vidée');
+  else showToast(`⚠ ${failed.length} vente(s) en attente`, true);
+}
+
+function renderOfflineQueueBar() {
+  const bar = document.getElementById('offlineQueueBar');
+  const countEl = document.getElementById('offlineQueueCount');
+  if (offlineQueue.length === 0) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  countEl.textContent = offlineQueue.length;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════════════
+function showToast(msg, isErr = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (isErr ? ' err' : '') + ' show';
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+async function init() {
+  // Restore offline queue
+  offlineQueue = lsLoad(LS_OFFLINE_QUEUE, []);
+  renderOfflineQueueBar();
+
+  // Restore cart from previous session
+  const savedCart = lsLoad(LS_CART, []);
+  if (Array.isArray(savedCart) && savedCart.length > 0) {
+    cart = savedCart;
+    renderCart();
+  }
+
+  // Restore last cleared cart (if within window)
+  const lastCleared = lsLoad(LS_LAST_CART, null);
+  if (lastCleared && lastCleared.savedAt && (Date.now() - lastCleared.savedAt) < RESTORE_WINDOW_MS) {
+    lastClearedCart = lastCleared.cart;
+    showRestoreBar();
+  } else {
+    lsClear(LS_LAST_CART);
+  }
+
+  updateNet();
+  await handleOAuthCallback();
+  updateAuthUI();
+  focusScan();
+}
+
+// Re-focus scan input on tab visibility (iPad lock/unlock)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && document.getElementById('tab1').classList.contains('active')) {
+    setTimeout(focusScan, 200);
+    // Trigger queue flush at wake
+    if (offlineQueue.length > 0 && isAuth() && navigator.onLine) flushOfflineQueue();
+  }
+});
+
+init();
+</script>
+</body>
+</html>

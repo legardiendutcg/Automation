@@ -1,0 +1,1660 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TCG MASTER — Le Gardien du TCG</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0c10; --surface:#11141a; --surface2:#1a1e26;
+  --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15);
+  --text:#f5f7fa; --dim:#a8b0bd; --muted:#5e6878;
+  --accent:#e8ff47; --accent2:#47c8ff; --accent3:#ff6b9d;
+  --success:#4ade80; --warning:#fbbf24; --danger:#ff6b6b; --critical:#dc2626;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;
+  min-height:100vh;overflow-x:hidden;-webkit-font-smoothing:antialiased;}
+.hidden{display:none !important;}
+
+/* ── App layout ── */
+.app{max-width:900px;margin:0 auto;padding-bottom:50px;}
+header{display:flex;justify-content:space-between;align-items:center;
+  padding:18px 20px 14px;border-bottom:1px solid var(--border);}
+.logo h1{font-size:1.5rem;font-weight:800;letter-spacing:-.04em;line-height:1;}
+.logo h1 span{color:var(--danger);}
+.logo p{font-family:'Space Mono',monospace;font-size:.55rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.15em;margin-top:6px;}
+.header-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+
+.net-bar{font-family:'Space Mono',monospace;font-size:.55rem;padding:4px 10px;border-radius:20px;white-space:nowrap;}
+.net-bar.online{background:rgba(74,222,128,.1);color:var(--success);border:1px solid rgba(74,222,128,.3);}
+.net-bar.offline{background:rgba(255,107,107,.1);color:#ff6b6b;border:1px solid rgba(255,107,107,.3);}
+
+.cache-pill{font-family:'Space Mono',monospace;font-size:.55rem;padding:4px 10px;border-radius:20px;
+  border:1px solid var(--border);color:var(--muted);white-space:nowrap;}
+.cache-pill.fresh{border-color:rgba(74,222,128,.3);color:var(--success);}
+.cache-pill.stale{border-color:rgba(251,191,36,.3);color:var(--warning);}
+
+.btn-icon{width:32px;height:32px;border-radius:6px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);cursor:pointer;font-size:.85rem;
+  display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.btn-icon:hover{border-color:var(--accent2);color:var(--accent2);}
+.btn-icon.spinning{animation:spin 1s linear infinite;color:var(--accent2);border-color:var(--accent2);}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+
+.auth-pill{background:var(--surface);border:1px solid var(--border);padding:6px 12px;
+  border-radius:20px;font-size:.7rem;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.auth-pill:hover{border-color:var(--accent);}
+.auth-pill.connected{border-color:rgba(74,222,128,.3);color:var(--success);}
+
+/* ── Main content section ── */
+.main-content{padding:20px;}
+.section-title{font-family:'Space Mono',monospace;font-size:.65rem;
+  text-transform:uppercase;letter-spacing:.15em;color:var(--muted);margin-bottom:8px;}
+
+/* ── Access denied screen ── */
+.access-denied{padding:60px 20px;text-align:center;}
+.access-denied h2{font-size:1.8rem;font-weight:800;color:var(--danger);margin-bottom:14px;}
+.access-denied p{color:var(--dim);font-size:.9rem;max-width:420px;margin:0 auto 12px;line-height:1.5;}
+.access-denied .email-shown{font-family:'Space Mono',monospace;color:var(--warning);
+  background:rgba(251,191,36,.08);padding:8px 14px;border-radius:6px;display:inline-block;margin-top:6px;}
+
+/* ── Card ── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  margin-bottom:16px;overflow:hidden;}
+.card-header{padding:14px 16px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;}
+.card-title{font-size:.95rem;font-weight:700;letter-spacing:-.02em;}
+.card-body{padding:16px;}
+
+.badge{font-family:'Space Mono',monospace;font-size:.55rem;padding:3px 8px;border-radius:10px;
+  background:var(--surface2);border:1px solid var(--border);color:var(--dim);white-space:nowrap;}
+.badge.green{background:rgba(74,222,128,.1);color:var(--success);border-color:rgba(74,222,128,.3);}
+.badge.yellow{background:rgba(251,191,36,.1);color:var(--warning);border-color:rgba(251,191,36,.3);}
+.badge.red{background:rgba(255,107,107,.1);color:#ff6b6b;border-color:rgba(255,107,107,.3);}
+
+/* ── Buttons ── */
+.btn{padding:9px 14px;border-radius:6px;font-family:'Syne',sans-serif;font-weight:600;
+  font-size:.78rem;cursor:pointer;border:none;transition:all .15s;
+  text-transform:uppercase;letter-spacing:.04em;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-primary{background:var(--accent);color:var(--bg);}
+.btn-primary:not(:disabled):hover{background:#f0ff5e;}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.btn-secondary:not(:disabled):hover{border-color:var(--accent2);color:var(--accent2);}
+.btn-danger{background:var(--danger);color:#fff;}
+.btn-danger:not(:disabled):hover{background:#ff5252;}
+.btn-critical{background:var(--critical);color:#fff;}
+.btn-critical:not(:disabled):hover{background:#ef4444;}
+.btn-sm{padding:6px 10px;font-size:.65rem;}
+.btn-lg{padding:14px 22px;font-size:.95rem;}
+.btn-block{width:100%;}
+.flex-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+
+/* ── Form field ── */
+.field{margin-bottom:14px;}
+.field-label{display:block;font-family:'Space Mono',monospace;font-size:.6rem;
+  color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;}
+.field input,.field select{width:100%;background:var(--bg);border:1px solid var(--border);
+  border-radius:6px;padding:10px 12px;color:var(--text);font-family:'Syne',sans-serif;
+  font-size:.9rem;outline:none;transition:border-color .15s;}
+.field input:focus,.field select:focus{border-color:var(--accent);}
+.field-hint{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--muted);margin-top:6px;}
+
+/* ── Event banner (état actuel) ── */
+.event-banner{padding:14px 16px;border-radius:8px;margin-bottom:14px;font-weight:600;
+  display:flex;align-items:center;gap:10px;font-size:.85rem;}
+.event-banner.ok{background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.3);color:var(--success);}
+.event-banner.warn{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);color:var(--warning);}
+.event-banner-icon{font-size:1.2rem;}
+
+/* ── Sync card ── */
+.sync-card{border-color:rgba(71,200,255,.2);}
+.sync-status-text{font-size:.85rem;color:var(--dim);margin-bottom:12px;line-height:1.5;}
+.sync-pending-count{color:var(--warning);font-weight:700;}
+.sync-ok-count{color:var(--success);font-weight:700;}
+
+/* ── Stats grid ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;}
+.stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;}
+.stat-label{font-family:'Space Mono',monospace;font-size:.55rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;}
+.stat-val{font-size:1.5rem;font-weight:800;color:var(--accent);line-height:1;letter-spacing:-.02em;}
+.stat-val.blue{color:var(--accent2);}
+.stat-val.green{color:var(--success);}
+.stat-sub{font-family:'Space Mono',monospace;font-size:.55rem;color:var(--muted);margin-top:6px;}
+
+/* ── Split rows ── */
+.split-row{display:flex;justify-content:space-between;align-items:center;
+  padding:8px 0;border-bottom:1px solid var(--border);font-size:.82rem;}
+.split-row:last-child{border-bottom:none;}
+.split-label{color:var(--text);}
+.split-val{font-family:'Space Mono',monospace;font-weight:700;color:var(--accent);}
+.split-pct{font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);margin-left:8px;}
+
+/* ── Leaderboard ── */
+.lb-item{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);}
+.lb-item:last-child{border-bottom:none;}
+.lb-rank{font-family:'Space Mono',monospace;font-size:1rem;font-weight:700;color:var(--muted);min-width:32px;}
+.lb-rank.gold{color:#ffd700;}
+.lb-rank.silver{color:#c0c0c0;}
+.lb-rank.bronze{color:#cd7f32;}
+.lb-name{flex:1;font-weight:600;}
+.lb-ca{font-family:'Space Mono',monospace;font-weight:700;color:var(--accent);}
+.lb-stats{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--muted);}
+
+/* ── Sales log ── */
+.sales-log{max-height:300px;overflow-y:auto;}
+.sale-row{display:grid;grid-template-columns:50px 80px 1fr 70px;gap:10px;align-items:center;
+  padding:8px 0;border-bottom:1px solid var(--border);font-size:.75rem;}
+.sale-row:last-child{border-bottom:none;}
+.sale-time{font-family:'Space Mono',monospace;color:var(--muted);}
+.sale-vendor{font-family:'Space Mono',monospace;color:var(--accent2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sale-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sale-price{font-family:'Space Mono',monospace;font-weight:700;color:var(--accent);text-align:right;}
+
+/* ── Anomalies ── */
+.anom-row{background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+  padding:12px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px;}
+.anom-row.resolved{opacity:.4;}
+.anom-icon{font-size:1rem;flex-shrink:0;}
+.anom-info{flex:1;min-width:0;}
+.anom-type{font-family:'Space Mono',monospace;font-size:.55rem;color:var(--warning);
+  text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px;}
+.anom-row.resolved .anom-type{color:var(--muted);}
+.anom-detail{font-size:.82rem;color:var(--text);margin-bottom:3px;line-height:1.4;}
+.anom-meta{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--muted);}
+.anom-row .btn-sm{flex-shrink:0;}
+
+/* ── Modal ── */
+.modal-backdrop{position:fixed;inset:0;background:rgba(10,12,16,.85);
+  display:flex;align-items:center;justify-content:center;z-index:5000;padding:20px;
+  animation:fadeIn .15s ease;}
+.modal-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  max-width:520px;width:100%;padding:24px;animation:slideUp .2s cubic-bezier(.34,1.56,.64,1);
+  max-height:90vh;overflow-y:auto;}
+.modal-title{font-size:1.1rem;font-weight:700;margin-bottom:6px;letter-spacing:-.02em;}
+.modal-subtitle{font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.1em;margin-bottom:18px;}
+.modal-info{background:var(--bg);border:1px solid var(--border);border-radius:6px;
+  padding:12px 14px;font-size:.8rem;color:var(--dim);margin-bottom:14px;line-height:1.5;}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
+
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(120%);
+  background:var(--surface);border:1px solid var(--accent);padding:12px 20px;border-radius:8px;
+  font-size:.8rem;font-weight:600;z-index:6000;transition:transform .25s cubic-bezier(.34,1.56,.64,1);
+  max-width:90vw;text-align:center;}
+.toast.show{transform:translateX(-50%) translateY(0);}
+.toast.err{border-color:var(--danger);color:var(--danger);}
+
+/* ── Close event card ── */
+.close-card{border-color:rgba(255,107,107,.2);}
+
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+.pulsing{animation:pulse .8s ease infinite;}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <div class="logo">
+      <h1>TCG <span>MASTER</span></h1>
+      <p>Sync engine · Le Gardien du TCG</p>
+    </div>
+    <div class="header-right">
+      <div id="netBar" class="net-bar online">✓ Connecté</div>
+      <div id="cachePill" class="cache-pill hidden" title="Stock en cache">📦 —</div>
+      <button id="refreshBtn" class="btn-icon hidden" onclick="refreshStockCache()" title="Rafraîchir le stock">↻</button>
+      <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter</div>
+    </div>
+  </header>
+
+  <!-- Access denied screen (non-master email) -->
+  <div class="access-denied hidden" id="accessDenied">
+    <h2>⛔ Accès refusé</h2>
+    <p>Ce compte Google n'est pas autorisé à utiliser l'app master.</p>
+    <p class="email-shown" id="accessDeniedEmail">—</p>
+    <p style="margin-top:18px;font-size:.78rem;">
+      Si tu es vendeur, utilise plutôt l'app <strong>TCG Sales</strong>.<br>
+      Pour ajouter ce compte aux masters autorisés, modifie la constante <code>MASTER_EMAILS</code> en haut du fichier.
+    </p>
+  </div>
+
+  <!-- Auth needed screen -->
+  <div class="access-denied" id="needAuth">
+    <h2 style="color:var(--accent);">🔑 Connexion requise</h2>
+    <p>Pour piloter le sync, connecte-toi avec le compte Google master.</p>
+    <button class="btn btn-primary btn-lg" onclick="launchOAuth()" style="margin-top:16px;">Se connecter</button>
+  </div>
+
+  <!-- Main content (visible only when authorized master is connected) -->
+  <div class="main-content hidden" id="mainContent">
+
+    <!-- ── SECTION 1 : Event en cours ── -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🎪 Event en cours</span>
+        <span class="badge" id="eventBadge">—</span>
+      </div>
+      <div class="card-body">
+        <div id="eventBanner" class="event-banner warn">
+          <span class="event-banner-icon">⚠</span>
+          <span id="eventBannerText">Aucun event configuré — la sync est en pause.</span>
+        </div>
+        <div class="field">
+          <label class="field-label">Nom de l'event (laisse vide pour mettre en pause)</label>
+          <div class="flex-row">
+            <input id="eventNameInput" type="text" placeholder="Ex: Brocante des Gotteaux" style="flex:1;min-width:200px;" autocomplete="off">
+            <button class="btn btn-primary btn-sm" onclick="saveEventConfig()">💾 Enregistrer</button>
+          </div>
+          <div class="field-hint">Cette valeur sera écrite en colonne R de chaque carte vendue.</div>
+        </div>
+        <div class="field">
+          <label class="field-label">Label de cet appareil</label>
+          <input id="deviceLabelInput" type="text" placeholder="Ex: iPad Stand, Laptop" autocomplete="off">
+          <div class="field-hint">Identifie quel appareil tourne le master (utile si tu en as plusieurs).</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SECTION 2 : Sync status ── -->
+    <div class="card sync-card">
+      <div class="card-header">
+        <span class="card-title">🔄 Synchronisation</span>
+        <span class="badge" id="syncBadge">—</span>
+      </div>
+      <div class="card-body">
+        <div class="sync-status-text" id="syncStatusText">En attente du premier cycle…</div>
+        <div class="flex-row">
+          <button class="btn btn-primary btn-sm" onclick="forceSyncNow()" id="btnForceSync">⚡ Sync now</button>
+          <button class="btn btn-secondary btn-sm" onclick="toggleAutoSync()" id="btnToggleSync">⏸ Pause auto</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SECTION 3 : Stats live ── -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📊 Stats de l'event en cours</span>
+        <button class="btn btn-secondary btn-sm" onclick="loadStats()">↺ Rafraîchir</button>
+      </div>
+      <div class="card-body">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">CA total</div>
+            <div class="stat-val" id="kpiCA">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Articles vendus</div>
+            <div class="stat-val blue" id="kpiNb">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Transactions</div>
+            <div class="stat-val green" id="kpiTx">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Panier moyen</div>
+            <div class="stat-val" id="kpiAvg" style="color:var(--accent2)">—</div>
+          </div>
+        </div>
+        <div id="statsLastUpdate" style="font-family:'Space Mono',monospace;font-size:.58rem;color:var(--muted);text-align:center;"></div>
+      </div>
+    </div>
+
+    <!-- Split par catégorie / licence -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">Split par catégorie</span></div>
+      <div class="card-body" id="splitCat">
+        <div style="font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">Split par licence</span></div>
+      <div class="card-body" id="splitLic">
+        <div style="font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);">—</div>
+      </div>
+    </div>
+
+    <!-- Vendeurs -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">🏆 Classement vendeurs</span>
+        <span class="badge green" id="lbBadge">—</span>
+      </div>
+      <div class="card-body" id="leaderboard">
+        <div style="font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);">—</div>
+      </div>
+    </div>
+
+    <!-- Sales log -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📜 Journal des ventes (50 dernières)</span>
+        <span class="badge" id="salesLogBadge">—</span>
+      </div>
+      <div class="card-body">
+        <div class="sales-log" id="salesLog">
+          <div style="font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Anomalies -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">⚠ Anomalies</span>
+        <span class="badge" id="anomBadge">—</span>
+      </div>
+      <div class="card-body" id="anomalies">
+        <div style="font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);">—</div>
+      </div>
+    </div>
+
+    <!-- Close event -->
+    <div class="card close-card">
+      <div class="card-header"><span class="card-title">🏁 Clôture de l'event</span></div>
+      <div class="card-body">
+        <div style="margin-bottom:14px;font-size:.82rem;color:var(--dim);line-height:1.5;">
+          Cette action archive ventes + anomalies de l'event en cours dans un nouvel onglet dédié, puis vide les buffers <code>ventes_detail</code> et <code>anomalies</code> pour repartir propre.<br>
+          ⚠ Vérifie qu'il n'y a plus de lignes en attente de sync avant.
+        </div>
+        <button class="btn btn-danger btn-block" onclick="openCloseEventModal()" id="btnCloseEvent">Clôturer cet event →</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Modal: Close event confirm -->
+<div class="modal-backdrop hidden" id="closeEventModal" onclick="if(event.target===this)closeCloseEventModal()">
+  <div class="modal-panel">
+    <div class="modal-title">🏁 Clôturer "<span id="closeModalEventName">—</span>" ?</div>
+    <div class="modal-subtitle">Action irréversible (mais data archivée dans un nouveau tab)</div>
+    <div class="modal-info" id="closeModalSummary">
+      Chargement du résumé…
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeCloseEventModal()">Annuler</button>
+      <button class="btn btn-danger" onclick="confirmCloseEvent()" id="btnConfirmClose">Clôturer</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SCRIPT — sera ajouté ci-dessous                                 -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════════
+const OAUTH_CLIENT_ID = '1073305913629-jjmo8t8clandireak4t68lqtaq3uce6d.apps.googleusercontent.com';
+const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
+
+const CENTRAL_GSHEET_ID = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+const EVENTS_GSHEET_ID  = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
+
+const SHEET_CARDS     = 'Cartes_Stock_&_Transactions';
+const SHEET_SEALED    = 'Scelle_Stock';
+const SHEET_SEALED_TX = 'Scelle_Transactions';
+const SHEET_SALES     = 'ventes_detail';
+const SHEET_ANOMALIES = 'anomalies';
+const SHEET_STATE     = 'app_state';
+
+const MASTER_EMAILS = ['legardiendutcg@gmail.com'];
+
+// Valeurs hardcodées pour le 6-col update carte
+const CARD_DEFAULT_PAYS         = 'Pro';            // col S
+const CARD_DEFAULT_REGIME_FISC  = 'Régime normal';  // col AF
+
+// Timings
+const HEARTBEAT_INTERVAL_MS = 10000;          // master → app_state toutes les 10s
+const SYNC_INTERVAL_MS      = 8000;           // sync tick toutes les 8s
+const STATS_REFRESH_MS      = 20000;          // stats live toutes les 20s
+const CACHE_AUTO_REFRESH_MS = 5 * 60 * 1000;  // cache stock toutes les 5 min
+const CACHE_STALE_AFTER_MS  = 2 * 60 * 1000;
+const RETRY_DELAYS_MS       = [500, 1500, 3500];
+const CLOSE_DRAIN_TIMEOUT_MS = 30000;
+
+// LocalStorage keys
+const LS_TOKEN  = 'tcg_master_token_v1';
+const LS_DEVICE = 'tcg_master_device_v1';
+
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+let gAccessToken = null;
+let gTokenExpiry = 0;
+let gUserEmail   = '';
+let gUserName    = '';
+let isAuthorizedMaster = false;
+
+let stockCacheCards  = new Map();
+let stockCacheSealed = new Map();
+let cardHeaderRow    = null;
+let sealedColIdx     = null;
+let lastCacheRefresh = 0;
+let cacheLoading     = false;
+
+let currentEventName = '';
+let deviceLabel      = '';
+
+let heartbeatTimer = null;
+let syncTimer      = null;
+let statsTimer     = null;
+let syncEnabled    = true;
+let syncRunning    = false;
+let lastSyncStats  = { pending: 0, processed: 0, errors: 0, anomalies: 0, lastRunAt: null, lastError: null };
+
+let salesHeaderInfo = null; // { hasSync, syncedCol (1-indexed), syncedAtCol, headerCount }
+
+// ═══════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function safeForSheets(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  if (/^[=+\-@]/.test(s)) return "'" + s;
+  return s;
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function parsePrix(str) {
+  if (str === null || str === undefined || str === '') return 0;
+  return parseFloat(String(str).replace('€', '').replace(',', '.').trim()) || 0;
+}
+function formatPrice(p) {
+  const n = parseFloat(p);
+  if (isNaN(n)) return '0€';
+  return parseFloat(n.toFixed(2)) + '€';
+}
+function colIdx2letter(n) {
+  let result = '';
+  while (n > 0) { n--; result = String.fromCharCode(65 + (n % 26)) + result; n = Math.floor(n / 26); }
+  return result;
+}
+function formatFrDate(d) {
+  // dd/MM/yyyy
+  if (!d) d = new Date();
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yy = d.getFullYear();
+  return `${dd}/${mm}/${yy}`;
+}
+function formatIsoDate(d) {
+  // yyyy-MM-dd
+  if (!d) d = new Date();
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+function slugify(s) {
+  return String(s || 'event')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // remove accents
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .substring(0, 60);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOCAL STORAGE
+// ═══════════════════════════════════════════════════════════════
+function lsSave(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { console.warn('LS save failed', e); }
+}
+function lsLoad(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; }
+}
+function lsClear(key) { try { localStorage.removeItem(key); } catch (e) {} }
+
+function persistToken() {
+  if (gAccessToken && gTokenExpiry > Date.now()) {
+    lsSave(LS_TOKEN, { token: gAccessToken, expiry: gTokenExpiry, email: gUserEmail, name: gUserName });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NETWORK
+// ═══════════════════════════════════════════════════════════════
+function updateNet() {
+  const bar = document.getElementById('netBar');
+  if (navigator.onLine) { bar.textContent = '✓ Connecté'; bar.className = 'net-bar online'; }
+  else { bar.textContent = '⚠ Hors ligne'; bar.className = 'net-bar offline'; }
+}
+window.addEventListener('online',  updateNet);
+window.addEventListener('offline', updateNet);
+
+// ═══════════════════════════════════════════════════════════════
+// OAUTH
+// ═══════════════════════════════════════════════════════════════
+function isAuth() { return gAccessToken && Date.now() < gTokenExpiry; }
+
+function updateAuthUI() {
+  const pill = document.getElementById('authPill');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const cachePill  = document.getElementById('cachePill');
+  const needAuth   = document.getElementById('needAuth');
+  const denied     = document.getElementById('accessDenied');
+  const main       = document.getElementById('mainContent');
+
+  if (isAuth() && isAuthorizedMaster) {
+    pill.textContent = '● ' + (gUserName || gUserEmail);
+    pill.className = 'auth-pill connected';
+    refreshBtn.classList.remove('hidden');
+    cachePill.classList.remove('hidden');
+    needAuth.classList.add('hidden');
+    denied.classList.add('hidden');
+    main.classList.remove('hidden');
+  } else if (isAuth() && !isAuthorizedMaster) {
+    pill.textContent = '⛔ ' + (gUserName || gUserEmail);
+    pill.className   = 'auth-pill';
+    refreshBtn.classList.add('hidden');
+    cachePill.classList.add('hidden');
+    needAuth.classList.add('hidden');
+    denied.classList.remove('hidden');
+    main.classList.add('hidden');
+    document.getElementById('accessDeniedEmail').textContent = gUserEmail;
+  } else {
+    pill.textContent = '🔑 Se connecter';
+    pill.className   = 'auth-pill';
+    refreshBtn.classList.add('hidden');
+    cachePill.classList.add('hidden');
+    needAuth.classList.remove('hidden');
+    denied.classList.add('hidden');
+    main.classList.add('hidden');
+  }
+}
+
+function toggleAuth() { if (isAuth()) logout(); else launchOAuth(); }
+
+function launchOAuth() {
+  const redirectUri = window.location.href.split('?')[0].split('#')[0];
+  const state = Math.random().toString(36).slice(2);
+  sessionStorage.setItem('oauth_state', state);
+  const params = new URLSearchParams({
+    client_id: OAUTH_CLIENT_ID, redirect_uri: redirectUri,
+    response_type: 'token',
+    scope: GSHEET_SCOPES + ' https://www.googleapis.com/auth/userinfo.email profile',
+    state, prompt: 'consent'
+  });
+  window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
+}
+
+async function handleOAuthCallback() {
+  // Restore token from LS if still valid
+  const saved = lsLoad(LS_TOKEN, null);
+  if (saved && saved.expiry > Date.now() + 60000) {
+    gAccessToken = saved.token;
+    gTokenExpiry = saved.expiry;
+    gUserEmail   = saved.email || '';
+    gUserName    = saved.name  || '';
+    isAuthorizedMaster = MASTER_EMAILS.includes(gUserEmail);
+  }
+
+  const hash = window.location.hash.substring(1);
+  if (hash.includes('access_token')) {
+    const params = new URLSearchParams(hash);
+    const token = params.get('access_token');
+    const expiresIn = parseInt(params.get('expires_in') || '3600');
+    if (params.get('state') === sessionStorage.getItem('oauth_state')) {
+      gAccessToken = token;
+      gTokenExpiry = Date.now() + expiresIn * 1000;
+      sessionStorage.removeItem('oauth_state');
+      window.history.replaceState({}, document.title, window.location.pathname);
+      try {
+        const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: { Authorization: 'Bearer ' + token }
+        });
+        const info = await res.json();
+        gUserEmail = info.email || '';
+        gUserName  = info.name || info.email || 'Master';
+      } catch (e) { gUserName = 'Master'; }
+      isAuthorizedMaster = MASTER_EMAILS.includes(gUserEmail);
+      persistToken();
+    }
+  }
+
+  updateAuthUI();
+  if (isAuth() && isAuthorizedMaster) {
+    showToast('✓ Master connecté · ' + gUserName);
+    await bootstrap();
+  } else if (isAuth() && !isAuthorizedMaster) {
+    showToast('⛔ Email ' + gUserEmail + ' non autorisé', true);
+  }
+}
+
+function logout() {
+  gAccessToken = null; gTokenExpiry = 0; gUserEmail = ''; gUserName = '';
+  isAuthorizedMaster = false;
+  lsClear(LS_TOKEN);
+  stopHeartbeat();
+  stopSyncLoop();
+  stopStatsLoop();
+  stockCacheCards.clear();
+  stockCacheSealed.clear();
+  updateAuthUI();
+  showToast('Déconnecté');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SHEETS API (avec gsheetId paramétrable, retry/backoff)
+// ═══════════════════════════════════════════════════════════════
+async function sheetsRequest(method, url, body) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) await sleep(RETRY_DELAYS_MS[attempt - 1]);
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { Authorization: 'Bearer ' + gAccessToken, 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      if (res.ok) return res.json();
+      if (res.status === 429 || res.status >= 500) { lastErr = new Error(method + ' ' + res.status); continue; }
+      const txt = await res.text();
+      throw new Error(method + ' ' + res.status + ': ' + txt.substring(0, 200));
+    } catch (e) {
+      lastErr = e;
+      if (!e.message.includes(method + ' ')) continue;
+      throw e;
+    }
+  }
+  throw lastErr || new Error(method + ' failed after retries');
+}
+
+async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}`;
+  return sheetsRequest('GET', url);
+}
+async function sheetsAppend(range, values, inputOption = 'USER_ENTERED', gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=${inputOption}&insertDataOption=INSERT_ROWS`;
+  return sheetsRequest('POST', url, { values });
+}
+async function sheetsUpdate(range, values, inputOption = 'USER_ENTERED', gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}?valueInputOption=${inputOption}`;
+  return sheetsRequest('PUT', url, { values });
+}
+async function sheetsBatch(requests, gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}:batchUpdate`;
+  return sheetsRequest('POST', url, { requests });
+}
+async function sheetsClear(range, gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}:clear`;
+  return sheetsRequest('POST', url, {});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SCHEMA VERIFICATION (events gsheet)
+// ═══════════════════════════════════════════════════════════════
+const APP_STATE_HEADERS  = ['master_alive_ts', 'master_event_name', 'master_device'];
+const VENTES_HEADERS     = ['Timestamp','Vendeur','Email','TX_ID','Clé/Barcode','Nom','Type','Catégorie','Licence','Quantité','Prix','Source','Synced','SyncedAt'];
+const ANOMALIES_HEADERS  = ['Timestamp','TX_ID','Vendeur','Clé/Barcode','Nom article','Source','Type anomalie','Détails','Synced_From_Row','Resolved','Notes'];
+
+async function verifyEventsSchema() {
+  // Vérifie/répare les en-têtes des 3 onglets opérationnels.
+  // Retourne true si tout est OK ou réparé, false si fatal.
+  const checks = [
+    { sheet: SHEET_STATE,     headers: APP_STATE_HEADERS },
+    { sheet: SHEET_SALES,     headers: VENTES_HEADERS },
+    { sheet: SHEET_ANOMALIES, headers: ANOMALIES_HEADERS },
+  ];
+  for (const c of checks) {
+    try {
+      const r = await sheetsGet(`${c.sheet}!A1:Z1`, EVENTS_GSHEET_ID);
+      const headerRow = (r.values && r.values[0]) || [];
+      const missing = c.headers.some((h, i) => (headerRow[i] || '').toString().trim() !== h);
+      if (missing) {
+        // Écrit les headers attendus (overwrite)
+        const lastCol = colIdx2letter(c.headers.length);
+        await sheetsUpdate(`${c.sheet}!A1:${lastCol}1`, [c.headers], 'RAW', EVENTS_GSHEET_ID);
+        console.log('Headers réparés sur', c.sheet);
+      }
+    } catch (e) {
+      showToast(`⚠ Onglet ${c.sheet} introuvable dans la GSheet Events`, true);
+      console.error('Verify schema failed', c.sheet, e);
+      return false;
+    }
+  }
+  // Cache les infos de schéma ventes pour le sync
+  salesHeaderInfo = {
+    hasSync: true,
+    syncedCol:   VENTES_HEADERS.indexOf('Synced')   + 1,
+    syncedAtCol: VENTES_HEADERS.indexOf('SyncedAt') + 1,
+    headerCount: VENTES_HEADERS.length
+  };
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STOCK CACHE (central gsheet)
+// ═══════════════════════════════════════════════════════════════
+async function findCardsHeaderRow() {
+  const r = await sheetsGet(`${SHEET_CARDS}!A1:AF300`, CENTRAL_GSHEET_ID);
+  const rows = r.values || [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const colD  = (row[3]  || '').toString().trim().toLowerCase();
+    const colAF = (row[31] || '').toString().trim().toLowerCase();
+    if (colD === 'clé' || colD === 'cle' || colD === 'key' || colAF === 'statut' || colAF === 'status' || colAF.includes('régime')) {
+      return i + 1;
+    }
+  }
+  return 143;
+}
+
+async function loadStockCache() {
+  if (!isAuth() || cacheLoading) return;
+  cacheLoading = true;
+  const btn = document.getElementById('refreshBtn');
+  btn.classList.add('spinning');
+  updateCachePill('loading');
+  try {
+    cardHeaderRow = await findCardsHeaderRow();
+    // Read N..AF starting at header+1 (we need col D=clé, col P=statut, plus all the others)
+    const cardData = await sheetsGet(`${SHEET_CARDS}!C${cardHeaderRow + 1}:AF`, CENTRAL_GSHEET_ID);
+    const rows = cardData.values || [];
+    stockCacheCards.clear();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const key = (row[1] || '').toString().trim(); // col D
+      if (!key) continue;
+      const statutP = (row[13] || '').toString().trim(); // col P (zero-indexed from C → P = idx 13)
+      // Le cache n'indexe que les cartes dispo (P vide)
+      if (statutP !== '') continue;
+      stockCacheCards.set(key, {
+        key,
+        codeSerie: (row[4] || '').toString().trim(),  // G
+        nomSerie:  (row[5] || '').toString().trim(),  // H
+        name:      (row[6] || '').toString().trim(),  // I
+        type:      (row[7] || '').toString().trim(),  // J
+        etat:      (row[8] || '').toString().trim(),  // K
+        prix:      parsePrix(row[14]),                 // Q (index 14)
+        sheetRow:  cardHeaderRow + 1 + i
+      });
+    }
+
+    // Scelle_Stock (A:AF — Code Technique est en col AA depuis l'ajout de la col C Key)
+    const sealedData = await sheetsGet(`'${SHEET_SEALED}'!A:AF`, CENTRAL_GSHEET_ID);
+    const sRows = sealedData.values || [];
+    if (sRows.length > 0) {
+      const headers = sRows[0];
+      const find = h => headers.findIndex(x => x && x.toString().trim() === h);
+      sealedColIdx = {
+        iKey:       find('Key'),            // col C — barcode (clé primaire scan)
+        iCode:      find('Code Technique'), // col AA — ancien identifiant
+        iNom:       find('Nom_Item'),
+        iType:      find('Type_Item'),
+        iNomSerie:  find('Nom Série'),
+        iCodeSerie: find('Code Série'),
+        iQty:       find('Quantité'),
+        iStatut:    find('Statut'),
+        iPrix:      find('Prix de vente')
+      };
+      if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
+      stockCacheSealed.clear();
+      for (let i = 1; i < sRows.length; i++) {
+        const row = sRows[i];
+        // Indexation par Key (barcode) — article ignoré tant que Key est vide
+        const itemKey = (row[sealedColIdx.iKey] || '').toString().trim();
+        if (!itemKey) continue;
+        const qty = parseInt(row[sealedColIdx.iQty]) || 0;
+        if (qty <= 0) continue;
+        stockCacheSealed.set(itemKey, {
+          key: itemKey,
+          name:     (row[sealedColIdx.iNom]      || itemKey).toString().trim(),
+          type:     (row[sealedColIdx.iType]      || 'Scellé').toString().trim(),
+          nomSerie: (row[sealedColIdx.iNomSerie]  || '').toString().trim(),
+          prix:     parsePrix(row[sealedColIdx.iPrix]),
+          qty,
+          sheetRow: i + 1,
+          qtyColLetter: colIdx2letter(sealedColIdx.iQty + 1)
+        });
+      }
+    }
+    lastCacheRefresh = Date.now();
+    updateCachePill('fresh');
+    showToast(`✓ Cache : ${stockCacheCards.size} cartes · ${stockCacheSealed.size} scellés`);
+  } catch (e) {
+    console.error('loadStockCache failed:', e);
+    showToast('✗ Cache : ' + e.message, true);
+    updateCachePill('error');
+  } finally {
+    btn.classList.remove('spinning');
+    cacheLoading = false;
+  }
+}
+
+async function refreshStockCache() {
+  if (cacheLoading) return;
+  await loadStockCache();
+}
+
+function updateCachePill(state) {
+  const pill = document.getElementById('cachePill');
+  if (!isAuth() || !isAuthorizedMaster) { pill.classList.add('hidden'); return; }
+  pill.classList.remove('hidden');
+  if (state === 'loading') { pill.textContent = '⏳ Chargement…'; pill.className = 'cache-pill'; return; }
+  if (state === 'error')   { pill.textContent = '✗ Cache HS';    pill.className = 'cache-pill stale'; return; }
+  const total = stockCacheCards.size + stockCacheSealed.size;
+  const age = lastCacheRefresh ? Math.floor((Date.now() - lastCacheRefresh) / 1000) : null;
+  const isStale = age !== null && (Date.now() - lastCacheRefresh) > CACHE_STALE_AFTER_MS;
+  let ageStr = '';
+  if (age !== null) {
+    if (age < 60) ageStr = ` · ${age}s`;
+    else if (age < 3600) ageStr = ` · ${Math.floor(age / 60)}m`;
+    else ageStr = ` · ${Math.floor(age / 3600)}h`;
+  }
+  pill.textContent = `📦 ${total}${ageStr}`;
+  pill.className = 'cache-pill ' + (isStale ? 'stale' : 'fresh');
+}
+
+setInterval(() => {
+  if (isAuth() && isAuthorizedMaster) {
+    updateCachePill();
+    if (lastCacheRefresh && Date.now() - lastCacheRefresh > CACHE_AUTO_REFRESH_MS && !cacheLoading) {
+      loadStockCache();
+    }
+  }
+}, 15000);
+
+// ═══════════════════════════════════════════════════════════════
+// EVENT CONTROL — sauvegarde event_name et device_label dans app_state
+// ═══════════════════════════════════════════════════════════════
+async function saveEventConfig() {
+  const newName = document.getElementById('eventNameInput').value.trim();
+  const newDevice = document.getElementById('deviceLabelInput').value.trim() || 'Master';
+  try {
+    // Écrit dans app_state!A2:C2 immédiatement (heartbeat fera le ts à chaque tick)
+    await sheetsUpdate(
+      `${SHEET_STATE}!A2:C2`,
+      [[ new Date().toISOString(), newName, newDevice ]],
+      'RAW', EVENTS_GSHEET_ID
+    );
+    currentEventName = newName;
+    deviceLabel = newDevice;
+    lsSave(LS_DEVICE, newDevice);
+    renderEventBanner();
+    updateSyncUI();
+    showToast(newName ? `✓ Event configuré : ${newName}` : '✓ Event mis en pause');
+  } catch (e) {
+    showToast('✗ ' + e.message, true);
+  }
+}
+
+function renderEventBanner() {
+  const banner = document.getElementById('eventBanner');
+  const txt    = document.getElementById('eventBannerText');
+  const badge  = document.getElementById('eventBadge');
+  const closeBtn = document.getElementById('btnCloseEvent');
+  if (currentEventName) {
+    banner.className = 'event-banner ok';
+    txt.innerHTML = '🎯 Event actif : <strong>' + esc(currentEventName) + '</strong> — la sync est en marche.';
+    badge.textContent = 'EN COURS';
+    badge.className = 'badge green';
+    if (closeBtn) closeBtn.disabled = false;
+  } else {
+    banner.className = 'event-banner warn';
+    txt.textContent = 'Aucun event configuré — la sync est en pause. Renseigne le nom de l\'event pour démarrer.';
+    badge.textContent = 'EN PAUSE';
+    badge.className = 'badge yellow';
+    if (closeBtn) closeBtn.disabled = true;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HEARTBEAT
+// ═══════════════════════════════════════════════════════════════
+async function writeHeartbeat() {
+  if (!isAuth() || !isAuthorizedMaster || !navigator.onLine) return;
+  try {
+    await sheetsUpdate(
+      `${SHEET_STATE}!A2:C2`,
+      [[ new Date().toISOString(), currentEventName, deviceLabel || 'Master' ]],
+      'RAW', EVENTS_GSHEET_ID
+    );
+  } catch (e) {
+    console.warn('Heartbeat write failed:', e);
+  }
+}
+function startHeartbeat() {
+  stopHeartbeat();
+  writeHeartbeat(); // un premier tout de suite
+  heartbeatTimer = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
+}
+function stopHeartbeat() {
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SYNC ENGINE — lit ventes_detail (events), applique stock (central)
+// ═══════════════════════════════════════════════════════════════
+function startSyncLoop() {
+  stopSyncLoop();
+  syncEnabled = true;
+  updateSyncUI();
+  setTimeout(masterSyncTick, 1000);
+  syncTimer = setInterval(masterSyncTick, SYNC_INTERVAL_MS);
+}
+function stopSyncLoop() {
+  if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+}
+function toggleAutoSync() {
+  syncEnabled = !syncEnabled;
+  const btn = document.getElementById('btnToggleSync');
+  btn.textContent = syncEnabled ? '⏸ Pause auto' : '▶ Reprendre';
+  updateSyncUI();
+}
+async function forceSyncNow() { await masterSyncTick(true); }
+
+async function masterSyncTick(forced = false) {
+  if (!isAuth() || !isAuthorizedMaster) return;
+  if (syncRunning) return;
+  if (!forced && !syncEnabled) return;
+  if (!navigator.onLine) { updateSyncUI('Hors ligne'); return; }
+  if (!currentEventName) { updateSyncUI('Pause — pas d\'event configuré'); return; }
+  if (!salesHeaderInfo) { updateSyncUI('Schéma non chargé'); return; }
+
+  syncRunning = true;
+  try {
+    // 1. Lire toutes les lignes de ventes_detail (events gsheet)
+    const lastCol = colIdx2letter(salesHeaderInfo.headerCount);
+    const data = await sheetsGet(`${SHEET_SALES}!A2:${lastCol}`, EVENTS_GSHEET_ID);
+    const rows = data.values || [];
+    const syncedColIdx0 = salesHeaderInfo.syncedCol - 1;
+
+    // 2. Filtre pending = Synced vide
+    const pending = [];
+    rows.forEach((row, i) => {
+      const synced = (row[syncedColIdx0] || '').toString().trim();
+      if (!synced) pending.push({ rowIdx: i + 2, row });
+    });
+
+    lastSyncStats.pending = pending.length;
+    if (pending.length === 0) {
+      lastSyncStats.lastRunAt = Date.now();
+      lastSyncStats.processed = 0;
+      lastSyncStats.errors = 0;
+      lastSyncStats.anomalies = 0;
+      lastSyncStats.lastError = null;
+      updateSyncUI('À jour');
+      return;
+    }
+
+    updateSyncUI(`Traitement ${pending.length} ligne(s)…`);
+    let processed = 0, errors = 0, anomalies = 0;
+    let lastErr = null;
+
+    for (const p of pending) {
+      try {
+        const row = p.row;
+        const source = (row[11] || '').toString().trim().toLowerCase(); // col L
+        let result;
+        if      (source === 'cartes') result = await applyCardSale(p.rowIdx, row);
+        else if (source === 'scelle' || source === 'scellé') result = await applySealedSale(p.rowIdx, row);
+        else if (source === 'manuel') result = await applyManualSale(p.rowIdx, row);
+        else                          result = { status: 'WARN_UNKNOWN_SOURCE' };
+
+        await markSyncedRow(p.rowIdx, result.status);
+        if (result.status === 'OK' || result.status === 'OK_MANUAL') processed++;
+        else anomalies++;
+      } catch (e) {
+        errors++; lastErr = e;
+        console.error('Sync row failed:', p.rowIdx, e);
+        // Ne pas marquer Synced → retraitement au prochain tick
+      }
+    }
+
+    lastSyncStats.processed = processed;
+    lastSyncStats.errors    = errors;
+    lastSyncStats.anomalies = anomalies;
+    lastSyncStats.lastRunAt = Date.now();
+    lastSyncStats.lastError = lastErr;
+
+    if (errors === 0) {
+      const txt = `✓ ${processed} appliquée(s)` + (anomalies > 0 ? ` · ${anomalies} anomalie(s)` : '');
+      updateSyncUI(txt);
+    } else {
+      updateSyncUI(`⚠ ${processed} OK · ${anomalies} anomalies · ${errors} en erreur (retry au prochain tick)`);
+    }
+  } catch (e) {
+    console.error('masterSyncTick failed:', e);
+    lastSyncStats.lastError = e;
+    updateSyncUI('✗ ' + e.message.substring(0, 60));
+  } finally {
+    syncRunning = false;
+    updateCachePill();
+  }
+}
+
+// Applique la vente d'une carte : pré-check col P, write 6-col (P, Q, R, S, T, AF)
+async function applyCardSale(rowIdx, salesRow) {
+  const key = (salesRow[4] || '').toString().trim();   // col E
+  const prix = parseFloat(salesRow[10]) || 0;          // col K
+  // pre-check: lire actuellement col P et col D (clé) de la carte
+  let card = stockCacheCards.get(key);
+  if (!card) {
+    await writeAnomaly(rowIdx, salesRow, 'CARD_NOT_FOUND', `Clé "${key}" absente du cache cartes`);
+    return { status: 'ANOMALY_CARD_NOT_FOUND' };
+  }
+  // Re-read col P en live (anti-cache-stale, anti-race)
+  let currentP = '';
+  try {
+    const r = await sheetsGet(`${SHEET_CARDS}!P${card.sheetRow}`, CENTRAL_GSHEET_ID);
+    currentP = (r.values && r.values[0] && r.values[0][0] || '').toString().trim();
+  } catch (e) {
+    currentP = ''; // best effort
+  }
+  if (currentP !== '') {
+    await writeAnomaly(rowIdx, salesRow, 'P_NON_BLANK',
+      `Col P déjà remplie (valeur actuelle: "${currentP}") · row ${card.sheetRow}`);
+    return { status: 'ANOMALY_P_NON_BLANK' };
+  }
+  // Apply : P=vendue, Q=prix, R=event, S=Pro, T=date
+  await sheetsUpdate(
+    `${SHEET_CARDS}!P${card.sheetRow}:T${card.sheetRow}`,
+    [[ 'vendue', prix, currentEventName, CARD_DEFAULT_PAYS, formatFrDate(new Date()) ]],
+    'USER_ENTERED', CENTRAL_GSHEET_ID
+  );
+  // AF = Régime normal
+  await sheetsUpdate(
+    `${SHEET_CARDS}!AF${card.sheetRow}`,
+    [[ CARD_DEFAULT_REGIME_FISC ]],
+    'RAW', CENTRAL_GSHEET_ID
+  );
+  // Retire du cache (vendue)
+  stockCacheCards.delete(key);
+  return { status: 'OK' };
+}
+
+// Applique la vente d'un scellé :
+//  1. Lit la ligne complète du lot (A:AF) pour récupérer qty + infos comptables
+//  2. Vérifie l'overdraw
+//  3. Décrément qty dans Scelle_Stock
+//  4. Appende une ligne de transaction dans Scelle_Transactions
+//
+// Mapping colonnes (col C = Key insérée → tout ce qui suit est décalé +1) :
+//   A(0) Origine   C(2) Key   D(3) Nom Série   F(5) Nom_Item   G(6) Quantité
+//   L(11) Côte/u   S(18) Facture d'achat   W(22) Prix d'achat
+//   AE(30) TVA_Achat   AF(31) TVA_Vente
+async function applySealedSale(rowIdx, salesRow) {
+  const key       = (salesRow[4] || '').toString().trim(); // barcode scanné
+  const qtySold   = parseInt(salesRow[9]) || 1;
+  const salePrice = parseFloat(salesRow[10]) || 0; // total pour qtySold unités
+
+  const sealed = stockCacheSealed.get(key);
+  if (!sealed) {
+    await writeAnomaly(rowIdx, salesRow, 'SEALED_NOT_FOUND', `Barcode "${key}" absent du cache scellé`);
+    return { status: 'ANOMALY_SEALED_NOT_FOUND' };
+  }
+
+  // Lecture de la ligne complète du lot (A:AF = 32 colonnes)
+  const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AF${sealed.sheetRow}`, CENTRAL_GSHEET_ID);
+  const sr = (fullRowRes.values && fullRowRes.values[0]) || [];
+
+  const currentQty = parseInt(sr[6]) || 0; // col G = Quantité (décalée +1 par col C Key)
+  if (currentQty < qtySold) {
+    await writeAnomaly(rowIdx, salesRow, 'SEALED_OVERDRAW',
+      `Stock actuel = ${currentQty}, vente demande ${qtySold} unité(s) · row ${sealed.sheetRow}`);
+    return { status: 'ANOMALY_SEALED_OVERDRAW' };
+  }
+
+  // ── 1. Décrément qty dans Scelle_Stock ──────────────────────────────────
+  const newQty = currentQty - qtySold;
+  await sheetsUpdate(
+    `'${SHEET_SEALED}'!${sealed.qtyColLetter}${sealed.sheetRow}`,
+    [[newQty]], 'RAW', CENTRAL_GSHEET_ID
+  );
+  sealed.qty = newQty;
+  if (newQty === 0) stockCacheSealed.delete(key);
+
+  // ── 2. Calculs dérivés ──────────────────────────────────────────────────
+  const paTotalLot = parsePrix(sr[22]); // col W = Prix d'achat (total lot restant avant vente)
+  const paForSale  = currentQty > 0
+    ? Math.round(paTotalLot / currentQty * qtySold * 100) / 100
+    : 0;
+  const marge   = Math.round((salePrice - paForSale) * 100) / 100;
+  const margeP  = salePrice > 0 ? (marge / salePrice * 100).toFixed(1) + '%' : '0.0%';
+  const coteU   = parsePrix(sr[11]); // col L = Côte/u
+  const coteTot = Math.round(coteU * qtySold * 100) / 100;
+  const now     = new Date(salesRow[0] || new Date().toISOString());
+
+  // ── 3. Ligne de transaction (A → AF, 32 colonnes) ───────────────────────
+  const txRow = [
+    sr[0]  || '',           // A  Origine
+    sr[1]  || '',           // B  Code Série
+    key,                     // C  Key (barcode scanné)
+    sr[3]  || '',           // D  Nom Série
+    sr[4]  || '',           // E  Type_Item
+    sr[5]  || sealed.name,  // F  Nom_Item
+    qtySold,                 // G  Quantité
+    sr[7]  || '',           // H  Etat
+    sr[8]  || '',           // I  CM
+    sr[9]  || '',           // J  Vinted
+    sr[10] || '',           // K  Ebay
+    sr[11] || '',           // L  Côte/u
+    coteTot || '',          // M  Côte Totale (qtySold × Côte/u)
+    'vendu',                 // N  Statut
+    salePrice,               // O  Prix de vente (total pour qtySold)
+    currentEventName,        // P  Acheteur → nom de l'event (client anonyme)
+    salesRow[1] || '',       // Q  Source → vendeur
+    formatFrDate(now),       // R  Date_Transaction
+    sr[18] || '',           // S  Facture d'achat (du lot)
+    currentEventName,        // T  Facture de vente
+    '',                      // U  Commentaire
+    'Pro',                   // V  Type_Vente (convention = Pro)
+    paForSale,               // W  Prix d'achat (proportionnel qtySold/currentQty)
+    marge,                   // X  Marge
+    margeP,                  // Y  % Marge
+    '',                      // Z  (vide)
+    key,                     // AA Code Technique (= Key pour l'instant)
+    formatFrDate(now),       // AB Date_Vente
+    currentEventName,        // AC Facture_Vente
+    '',                      // AD Pays_Vente
+    sr[30] || '',           // AE TVA_Achat (du lot — Régime normal ou TVA sur la marge)
+    'Régime normal',         // AF TVA_Vente (vente pro convention)
+  ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
+
+  // ── 4. Append dans Scelle_Transactions ─────────────────────────────────
+  await sheetsAppend(`'${SHEET_SEALED_TX}'!A:AF`, [txRow], 'USER_ENTERED', CENTRAL_GSHEET_ID);
+
+  return { status: 'OK' };
+}
+
+async function applyManualSale(rowIdx, salesRow) {
+  // Rien à faire côté stock — article hors stock
+  return { status: 'OK_MANUAL' };
+}
+
+async function writeAnomaly(salesRowIdx, salesRow, type, details) {
+  const row = [
+    new Date().toISOString(),
+    (salesRow[3]  || '').toString(),  // TX_ID
+    (salesRow[1]  || '').toString(),  // Vendeur
+    (salesRow[4]  || '').toString(),  // Clé/Barcode
+    (salesRow[5]  || '').toString(),  // Nom
+    (salesRow[11] || '').toString(),  // Source
+    type,
+    details,
+    salesRowIdx,
+    '',  // Resolved
+    ''   // Notes
+  ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
+  await sheetsAppend(`${SHEET_ANOMALIES}!A:K`, [row], 'USER_ENTERED', EVENTS_GSHEET_ID);
+}
+
+async function markSyncedRow(rowIdx, status) {
+  if (!salesHeaderInfo) return;
+  const c1 = colIdx2letter(salesHeaderInfo.syncedCol);
+  const c2 = colIdx2letter(salesHeaderInfo.syncedAtCol);
+  await sheetsUpdate(
+    `${SHEET_SALES}!${c1}${rowIdx}:${c2}${rowIdx}`,
+    [[ status, new Date().toISOString() ]],
+    'RAW', EVENTS_GSHEET_ID
+  );
+}
+
+function updateSyncUI(msg) {
+  const txt = document.getElementById('syncStatusText');
+  const badge = document.getElementById('syncBadge');
+  if (!txt) return;
+  const pending = lastSyncStats.pending || 0;
+  const last = lastSyncStats.lastRunAt ? new Date(lastSyncStats.lastRunAt).toLocaleTimeString('fr-FR') : '—';
+  const baseMsg = msg || (currentEventName ? 'En attente du prochain cycle…' : 'En pause — pas d\'event configuré');
+  txt.innerHTML = `
+    <div>${esc(baseMsg)}</div>
+    <div style="margin-top:6px;font-size:.72rem;color:var(--muted);">
+      <span class="sync-pending-count">${pending}</span> ligne(s) en attente ·
+      ${lastSyncStats.processed || 0} appliquée(s) au dernier tick ·
+      Dernier cycle : ${esc(last)}
+    </div>
+  `;
+  badge.textContent = pending > 0 ? pending + ' pending' : (currentEventName ? '✓' : 'pause');
+  badge.className = 'badge ' + (pending > 0 ? 'yellow' : (currentEventName ? 'green' : ''));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STATS (lecture ventes_detail event courant)
+// ═══════════════════════════════════════════════════════════════
+function startStatsLoop() {
+  stopStatsLoop();
+  loadStats();
+  statsTimer = setInterval(loadStats, STATS_REFRESH_MS);
+}
+function stopStatsLoop() {
+  if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+}
+
+async function loadStats() {
+  if (!isAuth() || !isAuthorizedMaster) return;
+  document.getElementById('statsLastUpdate').textContent = 'Chargement…';
+  try {
+    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 14);
+    const data = await sheetsGet(`${SHEET_SALES}!A:${lastCol}`, EVENTS_GSHEET_ID);
+    const rows = data.values || [];
+    const allData = rows.slice(1);  // skip header
+    // Tout l'event est dans le buffer (puisqu'on vide à la clôture)
+    if (allData.length === 0) {
+      renderStatsEmpty();
+      await loadAnomaliesList([]);
+      return;
+    }
+    const allTx = new Set(allData.map(r => r[3]));
+    const totalCA = allData.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
+    const totalNb = allData.reduce((s, r) => s + (parseInt(r[9]) || 1), 0);
+    const avgTx = allTx.size > 0 ? totalCA / allTx.size : 0;
+    document.getElementById('kpiCA').textContent  = parseFloat(totalCA.toFixed(2)) + '€';
+    document.getElementById('kpiNb').textContent  = totalNb;
+    document.getElementById('kpiTx').textContent  = allTx.size;
+    document.getElementById('kpiAvg').textContent = parseFloat(avgTx.toFixed(2)) + '€';
+
+    const byCat = {};
+    allData.forEach(r => {
+      const cat = r[7] || 'Autre';
+      byCat[cat] = (byCat[cat] || 0) + (parseFloat(r[10]) || 0);
+    });
+    renderSplit('splitCat', byCat, totalCA);
+
+    const byLic = {};
+    allData.forEach(r => {
+      const lic = r[8] || 'Autre';
+      byLic[lic] = (byLic[lic] || 0) + (parseFloat(r[10]) || 0);
+    });
+    renderSplit('splitLic', byLic, totalCA);
+
+    const byVendor = {};
+    allData.forEach(r => {
+      const v = r[1] || 'Inconnu';
+      if (!byVendor[v]) byVendor[v] = { ca: 0, nb: 0 };
+      byVendor[v].ca += parseFloat(r[10]) || 0;
+      byVendor[v].nb += parseInt(r[9]) || 1;
+    });
+    renderLeaderboard(byVendor);
+
+    const last50 = allData.slice(-50).reverse();
+    renderSalesLog(last50);
+
+    await loadAnomaliesList();
+
+    document.getElementById('statsLastUpdate').textContent =
+      'MAJ ' + new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  } catch (e) {
+    showToast('✗ Stats : ' + e.message, true);
+    document.getElementById('statsLastUpdate').textContent = 'Erreur';
+  }
+}
+
+function renderStatsEmpty() {
+  ['kpiCA','kpiNb','kpiTx','kpiAvg'].forEach(id => document.getElementById(id).textContent = '—');
+  ['splitCat','splitLic','leaderboard','salesLog','anomalies'].forEach(id => {
+    document.getElementById(id).innerHTML = '<div style="font-family:\'Space Mono\',monospace;font-size:.65rem;color:var(--muted);">Aucune donnée pour cet event.</div>';
+  });
+  ['lbBadge','salesLogBadge','anomBadge'].forEach(id => document.getElementById(id).textContent = '0');
+}
+
+function renderSplit(containerId, data, total) {
+  const el = document.getElementById(containerId);
+  const sorted = Object.entries(data).sort((a, b) => b[1] - a[1]);
+  if (sorted.length === 0) { el.innerHTML = '<div style="color:var(--muted);font-size:.7rem;">—</div>'; return; }
+  el.innerHTML = sorted.map(([label, val]) => {
+    const pct = total > 0 ? ((val / total) * 100).toFixed(0) : 0;
+    return `<div class="split-row">
+      <span class="split-label">${esc(label)}</span>
+      <span><span class="split-val">${parseFloat(val.toFixed(2))}€</span> <span class="split-pct">${pct}%</span></span>
+    </div>`;
+  }).join('');
+}
+
+function renderLeaderboard(data) {
+  const el = document.getElementById('leaderboard');
+  const badge = document.getElementById('lbBadge');
+  const sorted = Object.entries(data).sort((a, b) => b[1].ca - a[1].ca);
+  badge.textContent = sorted.length;
+  if (sorted.length === 0) { el.innerHTML = '<div style="color:var(--muted);font-size:.7rem;">—</div>'; return; }
+  const medals = ['🥇','🥈','🥉'];
+  const rankClasses = ['gold','silver','bronze'];
+  el.innerHTML = sorted.map(([name, stats], i) => `
+    <div class="lb-item">
+      <div class="lb-rank ${rankClasses[i] || ''}">${medals[i] || (i + 1)}</div>
+      <div class="lb-name">${esc(name)}</div>
+      <div style="text-align:right;">
+        <div class="lb-ca">${parseFloat(stats.ca.toFixed(2))}€</div>
+        <div class="lb-stats">${stats.nb} article${stats.nb > 1 ? 's' : ''}</div>
+      </div>
+    </div>`).join('');
+}
+
+function renderSalesLog(rows) {
+  const el = document.getElementById('salesLog');
+  const badge = document.getElementById('salesLogBadge');
+  badge.textContent = rows.length;
+  if (rows.length === 0) { el.innerHTML = '<div style="color:var(--muted);font-size:.7rem;">—</div>'; return; }
+  el.innerHTML = rows.map(r => {
+    const time = r[0] ? new Date(r[0]).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '—';
+    const vendor = (r[1] || '').split(' ')[0];
+    const name = r[5] || '—';
+    const prix = parseFloat(r[10] || 0);
+    const synced = (r[12] || '').toString();
+    let icon = '';
+    if (synced.startsWith('ANOMALY_'))      icon = ' ⚠';
+    else if (synced === 'OK' || synced === 'OK_MANUAL') icon = ' ✓';
+    else                                    icon = ' ⏳';
+    return `<div class="sale-row">
+      <span class="sale-time">${esc(time)}${icon}</span>
+      <span class="sale-vendor">${esc(vendor)}</span>
+      <span class="sale-name">${esc(name)}</span>
+      <span class="sale-price">${parseFloat(prix.toFixed(2))}€</span>
+    </div>`;
+  }).join('');
+}
+
+async function loadAnomaliesList() {
+  try {
+    const r = await sheetsGet(`${SHEET_ANOMALIES}!A:K`, EVENTS_GSHEET_ID);
+    const rows = r.values || [];
+    const data = rows.slice(1);
+    renderAnomalies(data);
+  } catch (e) {
+    document.getElementById('anomalies').innerHTML = '<div style="color:var(--muted);font-size:.7rem;">Impossible de lire les anomalies.</div>';
+  }
+}
+
+function renderAnomalies(rows) {
+  const el = document.getElementById('anomalies');
+  const badge = document.getElementById('anomBadge');
+  const open = rows.filter(r => !(r[9] || '').toString().trim());
+  badge.textContent = open.length;
+  badge.className = 'badge ' + (open.length > 0 ? 'yellow' : 'green');
+  if (rows.length === 0) {
+    el.innerHTML = '<div style="font-family:\'Space Mono\',monospace;font-size:.65rem;color:var(--muted);">Aucune anomalie 🎉</div>';
+    return;
+  }
+  el.innerHTML = rows.slice().reverse().map(r => {
+    const ts = r[0] ? new Date(r[0]).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '—';
+    const type = r[6] || '—';
+    const details = r[7] || '';
+    const name = r[4] || r[3] || '—';
+    const resolved = (r[9] || '').toString().trim();
+    return `<div class="anom-row ${resolved ? 'resolved' : ''}">
+      <div class="anom-icon">${resolved ? '✓' : '⚠'}</div>
+      <div class="anom-info">
+        <div class="anom-type">${esc(type)}${resolved ? ' · RÉSOLU' : ''}</div>
+        <div class="anom-detail">${esc(name)}</div>
+        <div class="anom-meta">${esc(ts)} · ${esc(details)}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CLOSE EVENT
+// ═══════════════════════════════════════════════════════════════
+function openCloseEventModal() {
+  if (!currentEventName) { showToast('⚠ Aucun event à clôturer', true); return; }
+  document.getElementById('closeModalEventName').textContent = currentEventName;
+  document.getElementById('closeModalSummary').innerHTML = 'Chargement du résumé…';
+  document.getElementById('closeEventModal').classList.remove('hidden');
+  loadCloseSummary();
+}
+function closeCloseEventModal() {
+  document.getElementById('closeEventModal').classList.add('hidden');
+}
+async function loadCloseSummary() {
+  try {
+    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 14);
+    const [salesR, anomR] = await Promise.all([
+      sheetsGet(`${SHEET_SALES}!A:${lastCol}`, EVENTS_GSHEET_ID),
+      sheetsGet(`${SHEET_ANOMALIES}!A:K`, EVENTS_GSHEET_ID),
+    ]);
+    const sales = (salesR.values || []).slice(1);
+    const anoms = (anomR.values || []).slice(1);
+    const pending = sales.filter(r => !(r[12] || '').toString().trim()).length;
+    const totalCA = sales.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
+    const txs = new Set(sales.map(r => r[3])).size;
+    document.getElementById('closeModalSummary').innerHTML = `
+      <strong>${sales.length}</strong> ligne(s) de vente · <strong>${txs}</strong> transaction(s)<br>
+      CA total : <strong>${parseFloat(totalCA.toFixed(2))}€</strong><br>
+      Anomalies : <strong>${anoms.length}</strong><br>
+      ${pending > 0 ? `<span style="color:var(--warning);">⚠ ${pending} ligne(s) en attente de sync — elles seront drainées avant archivage.</span>` : '<span style="color:var(--success);">✓ Toutes les ventes sont synchronisées.</span>'}
+    `;
+  } catch (e) {
+    document.getElementById('closeModalSummary').innerHTML = '<span style="color:var(--danger);">Impossible de charger le résumé : ' + esc(e.message) + '</span>';
+  }
+}
+
+async function confirmCloseEvent() {
+  const btn = document.getElementById('btnConfirmClose');
+  btn.disabled = true; btn.textContent = '⏳ Clôture en cours…';
+  try {
+    // 1. Forcer un drain
+    btn.textContent = '⏳ Drain sync…';
+    await ensureSyncDrain(CLOSE_DRAIN_TIMEOUT_MS);
+
+    // 2. Lire les données actuelles
+    btn.textContent = '⏳ Lecture…';
+    const lastCol = colIdx2letter(salesHeaderInfo.headerCount);
+    const [salesR, anomR] = await Promise.all([
+      sheetsGet(`${SHEET_SALES}!A:${lastCol}`, EVENTS_GSHEET_ID),
+      sheetsGet(`${SHEET_ANOMALIES}!A:K`, EVENTS_GSHEET_ID),
+    ]);
+    const salesHeader = (salesR.values && salesR.values[0]) || VENTES_HEADERS;
+    const sales = (salesR.values || []).slice(1);
+    const anomHeader = (anomR.values && anomR.values[0]) || ANOMALIES_HEADERS;
+    const anoms = (anomR.values || []).slice(1);
+
+    // 3. Calculer le contenu du tab archive
+    btn.textContent = '⏳ Préparation…';
+    const archiveName = `${formatIsoDate(new Date())}_${slugify(currentEventName)}`;
+    const archiveContent = buildArchiveContent(salesHeader, sales, anomHeader, anoms);
+
+    // 4. Créer le tab
+    btn.textContent = '⏳ Création tab…';
+    let actualTabName = archiveName;
+    try {
+      await sheetsBatch([{ addSheet: { properties: { title: archiveName } } }], EVENTS_GSHEET_ID);
+    } catch (e) {
+      // Si déjà existe, on ajoute un suffixe heure
+      actualTabName = archiveName + '_' + new Date().toTimeString().slice(0,5).replace(':','');
+      await sheetsBatch([{ addSheet: { properties: { title: actualTabName } } }], EVENTS_GSHEET_ID);
+    }
+
+    // 5. Écrire le contenu
+    btn.textContent = '⏳ Écriture archive…';
+    const lastWriteCol = colIdx2letter(Math.max(7, salesHeaderInfo.headerCount));
+    await sheetsUpdate(
+      `'${actualTabName}'!A1:${lastWriteCol}${archiveContent.length}`,
+      archiveContent, 'USER_ENTERED', EVENTS_GSHEET_ID
+    );
+
+    // 6. Clear les buffers
+    btn.textContent = '⏳ Vidage buffers…';
+    await sheetsClear(`${SHEET_SALES}!A2:${lastCol}`, EVENTS_GSHEET_ID);
+    await sheetsClear(`${SHEET_ANOMALIES}!A2:K`, EVENTS_GSHEET_ID);
+
+    // 7. Vider event_name dans app_state
+    await sheetsUpdate(`${SHEET_STATE}!B2`, [['']], 'RAW', EVENTS_GSHEET_ID);
+
+    // 8. Reset state local
+    currentEventName = '';
+    document.getElementById('eventNameInput').value = '';
+    renderEventBanner();
+    updateSyncUI();
+    loadStats();
+
+    closeCloseEventModal();
+    showToast(`✓ Event archivé dans "${actualTabName}"`);
+  } catch (e) {
+    showToast('✗ Clôture : ' + e.message, true);
+    console.error('confirmCloseEvent failed:', e);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Clôturer';
+  }
+}
+
+async function ensureSyncDrain(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    // Force un sync tick
+    await masterSyncTick(true);
+    if (lastSyncStats.pending === 0) return;
+    await sleep(1500);
+  }
+  // Timeout : on warn mais on continue
+  console.warn('ensureSyncDrain timeout, pending:', lastSyncStats.pending);
+}
+
+function buildArchiveContent(salesHeader, sales, anomHeader, anoms) {
+  // Calcul KPIs
+  const allTx = new Set(sales.map(r => r[3]));
+  const totalCA = sales.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
+  const totalNb = sales.reduce((s, r) => s + (parseInt(r[9]) || 1), 0);
+  const avgTx = allTx.size > 0 ? totalCA / allTx.size : 0;
+
+  const byCat = {}, byLic = {}, byVendor = {};
+  sales.forEach(r => {
+    const ca = parseFloat(r[10]) || 0;
+    const nb = parseInt(r[9]) || 1;
+    const cat = r[7] || 'Autre'; const lic = r[8] || 'Autre'; const v = r[1] || 'Inconnu';
+    byCat[cat] = (byCat[cat] || 0) + ca;
+    byLic[lic] = (byLic[lic] || 0) + ca;
+    if (!byVendor[v]) byVendor[v] = { ca: 0, nb: 0 };
+    byVendor[v].ca += ca; byVendor[v].nb += nb;
+  });
+
+  const dates = sales.map(r => r[0]).filter(Boolean).map(d => new Date(d)).filter(d => !isNaN(d));
+  const dateStart = dates.length ? new Date(Math.min(...dates.map(d => d.getTime()))) : new Date();
+  const dateEnd   = dates.length ? new Date(Math.max(...dates.map(d => d.getTime()))) : new Date();
+  const dateRange = formatFrDate(dateStart) + (formatFrDate(dateStart) !== formatFrDate(dateEnd) ? ` → ${formatFrDate(dateEnd)}` : '');
+
+  const out = [];
+  const blank = ['', '', '', '', '', '', ''];
+  // Title
+  out.push([currentEventName, '', '', '', '', '', '']);
+  out.push([`Période : ${dateRange}`, '', '', '', '', '', '']);
+  out.push(blank);
+  out.push(['── RÉSUMÉ ──', '', '', '', '', '', '']);
+  out.push(['CA total',                parseFloat(totalCA.toFixed(2)) + '€', '', '', '', '', '']);
+  out.push(['Articles vendus',         totalNb, '', '', '', '', '']);
+  out.push(['Transactions',            allTx.size, '', '', '', '', '']);
+  out.push(['Panier moyen',            parseFloat(avgTx.toFixed(2)) + '€', '', '', '', '', '']);
+  out.push(blank);
+  out.push(['── PAR CATÉGORIE ──', '', '', '', '', '', '']);
+  Object.entries(byCat).sort((a,b) => b[1] - a[1]).forEach(([k, v]) => {
+    const pct = totalCA > 0 ? ((v / totalCA) * 100).toFixed(0) + '%' : '';
+    out.push([k, parseFloat(v.toFixed(2)) + '€', pct, '', '', '', '']);
+  });
+  out.push(blank);
+  out.push(['── PAR LICENCE ──', '', '', '', '', '', '']);
+  Object.entries(byLic).sort((a,b) => b[1] - a[1]).forEach(([k, v]) => {
+    const pct = totalCA > 0 ? ((v / totalCA) * 100).toFixed(0) + '%' : '';
+    out.push([k, parseFloat(v.toFixed(2)) + '€', pct, '', '', '', '']);
+  });
+  out.push(blank);
+  out.push(['── PAIEMENTS (à compléter en EOD) ──', '', '', '', '', '', '']);
+  const payStartRow = out.length + 1; // 1-indexed for SUM formula
+  out.push(['Cash', '', '', '', '', '', '']);
+  out.push(['QR code / virement instantané', '', '', '', '', '', '']);
+  out.push(['PayPal terminal', '', '', '', '', '', '']);
+  out.push(['Virement classique', '', '', '', '', '', '']);
+  out.push(['Autre', '', '', '', '', '', '']);
+  const payEndRow = out.length;
+  out.push(['TOTAL paiements (contrôle)', `=SUM(B${payStartRow}:B${payEndRow})`, `= doit valoir ${parseFloat(totalCA.toFixed(2))}€`, '', '', '', '']);
+  out.push(blank);
+  out.push(['── TOP VENDEURS ──', '', '', '', '', '', '']);
+  Object.entries(byVendor).sort((a,b) => b[1].ca - a[1].ca).forEach(([name, st], i) => {
+    out.push([`${i+1}. ${name}`, parseFloat(st.ca.toFixed(2)) + '€', `${st.nb} article(s)`, '', '', '', '']);
+  });
+  out.push(blank);
+  out.push(['── ANOMALIES (' + anoms.length + ') ──', '', '', '', '', '', '']);
+  out.push(anomHeader.slice(0, 7));
+  anoms.forEach(r => out.push((r || []).slice(0, 7)));
+  out.push(blank);
+  out.push(['── VENTES (' + sales.length + ' lignes) ──', '', '', '', '', '', '']);
+  out.push(salesHeader.slice(0, 7));
+  sales.forEach(r => out.push((r || []).slice(0, 7)));
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════════════
+function showToast(msg, isErr = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (isErr ? ' err' : '') + ' show';
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BOOTSTRAP (après auth réussie et autorisation master)
+// ═══════════════════════════════════════════════════════════════
+async function bootstrap() {
+  // 1. Vérifier les schémas de la gsheet events
+  const ok = await verifyEventsSchema();
+  if (!ok) return;
+
+  // 2. Lire app_state pour récupérer event_name et device existants
+  try {
+    const r = await sheetsGet(`${SHEET_STATE}!A2:C2`, EVENTS_GSHEET_ID);
+    const row = (r.values && r.values[0]) || [];
+    currentEventName = (row[1] || '').toString().trim();
+    const dev = (row[2] || '').toString().trim();
+    if (dev) deviceLabel = dev;
+  } catch (e) {
+    currentEventName = '';
+  }
+  // Restaurer le device label depuis LS si absent du sheet
+  if (!deviceLabel) deviceLabel = lsLoad(LS_DEVICE, 'Master');
+  document.getElementById('eventNameInput').value = currentEventName;
+  document.getElementById('deviceLabelInput').value = deviceLabel;
+  renderEventBanner();
+
+  // 3. Charger le cache stock
+  await loadStockCache();
+
+  // 4. Démarrer les loops
+  startHeartbeat();
+  startSyncLoop();
+  startStatsLoop();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+async function init() {
+  updateNet();
+  await handleOAuthCallback();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && isAuth() && isAuthorizedMaster) {
+    // Forcer un heartbeat + sync tick au retour visibilité
+    writeHeartbeat();
+    masterSyncTick(true);
+    loadStats();
+  }
+});
+
+init();
+</script>
+
+</body>
+</html>
