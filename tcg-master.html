@@ -1,8 +1,11 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.5.3 (Session #5 — 2026-05-28)
+  Version : 1.5.4 (Session #5 — 2026-05-28)
 =============================================================
+  1.5.4  2026-05-28
+         - Fix detection derniere ligne Scelle_Transactions : col C → col B (Origine, toujours remplie)
+
   1.5.3  2026-05-28
          - Fix detection ligne Scelle_Transactions : derniere ligne remplie col C (au lieu de premiere ligne vide)
 
@@ -428,7 +431,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.3';
+const APP_VERSION      = '1.5.4';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1233,9 +1236,9 @@ async function applySealedSale(rowIdx, salesRow) {
   ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
 
   // ── 4. Append dans Scelle_Transactions ─────────────────────────────────────────
-  // Trouver la derniere ligne remplie en col C (Key) → ecrire à la suivante
-  const txColC    = await sheetsGet(`'${SHEET_SEALED_TX}'!C:C`, CENTRAL_GSHEET_ID);
-  const txValues  = txColC.values || [];
+  // Trouver la derniere ligne remplie en col B (Origine, toujours remplie) → ecrire à la suivante
+  const txColB    = await sheetsGet(`'${SHEET_SEALED_TX}'!B:B`, CENTRAL_GSHEET_ID);
+  const txValues  = txColB.values || [];
   let lastFilledRow = 0;
   for (let i = txValues.length - 1; i >= 0; i--) {
     if (txValues[i] && txValues[i][0] && txValues[i][0].toString().trim() !== '') {
