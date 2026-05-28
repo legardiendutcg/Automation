@@ -457,6 +457,7 @@ let syncTimer      = null;
 let statsTimer     = null;
 let syncEnabled    = true;
 let syncRunning    = false;
+const sealedRetryCount = new Map(); // rowIdx → nb tentatives échouées (SEALED_NOT_FOUND)
 let lastSyncStats  = { pending: 0, processed: 0, errors: 0, anomalies: 0, lastRunAt: null, lastError: null };
 
 let salesHeaderInfo = null; // { hasSync, syncedCol (1-indexed), syncedAtCol, headerCount }
@@ -814,7 +815,7 @@ async function loadStockCache() {
         iCodeSerie: find('Code Série'),
         iQty:       find('Quantité'),
         iStatut:    find('Statut'),
-        iPrix:      find('Prix de vente')
+        iPrix:      find('Côte Totale')
       };
       if (sealedColIdx.iKey < 0) throw new Error('Colonne "Key" introuvable dans ' + SHEET_SEALED);
       stockCacheSealed.clear();
@@ -1020,9 +1021,13 @@ async function masterSyncTick(forced = false) {
         else if (source === 'manuel') result = await applyManualSale(p.rowIdx, row);
         else                          result = { status: 'WARN_UNKNOWN_SOURCE' };
 
-        await markSyncedRow(p.rowIdx, result.status);
-        if (result.status === 'OK' || result.status === 'OK_MANUAL') processed++;
-        else anomalies++;
+        if (result.status === 'RETRY_PENDING') {
+          // Ligne laissée pending — sera retraitée au prochain tick sans markSyncedRow
+        } else {
+          await markSyncedRow(p.rowIdx, result.status);
+          if (result.status === 'OK' || result.status === 'OK_MANUAL') processed++;
+          else anomalies++;
+        }
       } catch (e) {
         errors++; lastErr = e;
         console.error('Sync row failed:', p.rowIdx, e);
@@ -1109,11 +1114,21 @@ async function applySealedSale(rowIdx, salesRow) {
 
   const sealed = stockCacheSealed.get(key);
   if (!sealed) {
-    await writeAnomaly(rowIdx, salesRow, 'SEALED_NOT_FOUND', `Barcode "${key}" absent du cache scellé`);
+    const retries = (sealedRetryCount.get(rowIdx) || 0) + 1;
+    sealedRetryCount.set(rowIdx, retries);
+    if (retries < 3) {
+      // Cache peut-être pas encore à jour — refresh silencieux et on retente au prochain tick
+      loadStockCache();
+      return { status: 'RETRY_PENDING' };
+    }
+    // 3 tentatives échouées → anomalie
+    sealedRetryCount.delete(rowIdx);
+    await writeAnomaly(rowIdx, salesRow, 'SEALED_NOT_FOUND', `Barcode "${key}" absent du cache scellé après 3 tentatives`);
     return { status: 'ANOMALY_SEALED_NOT_FOUND' };
   }
 
   // Lecture de la ligne complète du lot (A:AF = 32 colonnes)
+  sealedRetryCount.delete(rowIdx); // reset compteur retry si l'article est trouvé
   const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AF${sealed.sheetRow}`, CENTRAL_GSHEET_ID);
   const sr = (fullRowRes.values && fullRowRes.values[0]) || [];
 
