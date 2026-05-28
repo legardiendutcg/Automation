@@ -1,8 +1,15 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.5.5 (Session #5 — 2026-05-28)
+  Version : 1.5.7 (Session #5 — 2026-05-28)
 =============================================================
+  1.5.7  2026-05-28
+         - Fix parsePrix locale belge : point = milliers, virgule = decimale
+
+  1.5.6  2026-05-28
+         - Formatage transaction : copie format ligne precedente via copyPaste API
+         - Fetch sheetId numerique Scelle_Transactions au chargement du cache
+
   1.5.5  2026-05-28
          - Log diagnostic transaction (nextTxRow, txRow.length)
 
@@ -434,7 +441,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.5';
+const APP_VERSION      = '1.5.7';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -493,6 +500,7 @@ let statsTimer     = null;
 let syncEnabled    = true;
 let syncRunning    = false;
 const sealedRetryCount = new Map();
+let sealedTxSheetNumId = null; // sheetId numérique de Scelle_Transactions
 let lastSyncStats  = { pending: 0, processed: 0, errors: 0, anomalies: 0, lastRunAt: null, lastError: null };
 
 let salesHeaderInfo = null; // { hasSync, syncedCol (1-indexed), syncedAtCol, headerCount }
@@ -515,7 +523,15 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function parsePrix(str) {
   if (str === null || str === undefined || str === '') return 0;
-  return parseFloat(String(str).replace('€', '').replace(',', '.').trim()) || 0;
+  let s = String(str).replace(/€/g, '').replace(/\u00a0/g, '').replace(/ /g, '').trim();
+  if (s.includes('.') && s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (/\.\d{3}$/.test(s)) {
+    s = s.replace(/\./g, '');
+  } else {
+    s = s.replace(',', '.');
+  }
+  return parseFloat(s) || 0;
 }
 function formatPrice(p) {
   const n = parseFloat(p);
@@ -885,6 +901,15 @@ async function loadStockCache() {
         });
       }
     }
+    // Récupérer le sheetId numérique de Scelle_Transactions (pour copyPaste format)
+    try {
+      const meta = await sheetsRequest('GET',
+        `https://sheets.googleapis.com/v4/spreadsheets/${CENTRAL_GSHEET_ID}?fields=sheets.properties`);
+      const txSheet = (meta.sheets || []).find(s => s.properties.title === SHEET_SEALED_TX);
+      if (txSheet) sealedTxSheetNumId = txSheet.properties.sheetId;
+      console.log('[Cache] sealedTxSheetNumId:', sealedTxSheetNumId);
+    } catch(e) { console.warn('sheetId fetch failed:', e); }
+
     lastCacheRefresh = Date.now();
     updateCachePill('fresh');
     showToast(`✓ Cache : ${stockCacheCards.size} cartes · ${stockCacheSealed.size} scellés`);
@@ -1141,6 +1166,20 @@ async function applyCardSale(rowIdx, salesRow) {
   );
   // Retire du cache (vendue)
   stockCacheCards.delete(key);
+  // Copier le format de la ligne précédente
+  if (sealedTxSheetNumId !== null && nextTxRow > 1) {
+    try {
+      await sheetsBatch([{
+        copyPaste: {
+          source:      { sheetId: sealedTxSheetNumId, startRowIndex: nextTxRow - 2, endRowIndex: nextTxRow - 1, startColumnIndex: 0, endColumnIndex: 33 },
+          destination: { sheetId: sealedTxSheetNumId, startRowIndex: nextTxRow - 1, endRowIndex: nextTxRow,     startColumnIndex: 0, endColumnIndex: 33 },
+          pasteType: 'PASTE_FORMAT',
+          pasteOrientation: 'NORMAL'
+        }
+      }], CENTRAL_GSHEET_ID);
+    } catch(e) { console.warn('Format copy failed (non-bloquant):', e); }
+  }
+
   return { status: 'OK' };
 }
 

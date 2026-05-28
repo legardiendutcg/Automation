@@ -1,10 +1,13 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.5.1 (Session #5 — 2026-05-28)
+  Version : 1.5.2 (Session #5 — 2026-05-28)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.5.2  2026-05-28
+         - Fix parsePrix locale belge : point = milliers, virgule = decimale
+
   1.5.1  2026-05-28  Session #5
          - Panneau de scan : retrait du prix (toujours affiché dans le panier)
 
@@ -472,7 +475,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.1';
+const APP_VERSION      = '1.5.2';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -568,7 +571,15 @@ function sleep(ms) {
 
 function parsePrix(str) {
   if (str === null || str === undefined || str === '') return 0;
-  return parseFloat(String(str).replace('€', '').replace(',', '.').trim()) || 0;
+  let s = String(str).replace(/€/g, '').replace(/\u00a0/g, '').replace(/ /g, '').trim();
+  if (s.includes('.') && s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (/\.\d{3}$/.test(s)) {
+    s = s.replace(/\./g, '');
+  } else {
+    s = s.replace(',', '.');
+  }
+  return parseFloat(s) || 0;
 }
 
 function formatPrice(p) {
