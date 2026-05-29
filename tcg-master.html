@@ -1,8 +1,22 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.6.2 (Session #7 — 2026-05-29)
+  Version : 1.6.3 (Session #8 — 2026-05-29)
 =============================================================
+  1.6.3  2026-05-29  Session #8 (alignement avec tcg-sales)
+         - [Fix 🔴] Onglet cartes renommé "cartes_stock_et_transactions" (plus de "&")
+           → corrige le 400 "Unable to parse range" depuis le renommage de la GSheet.
+         - [Robustesse] Helper a1() qui encadre TOUJOURS le nom d'onglet de quotes
+           simples ; appliqué à toutes les plages A1 (lecture ET écriture).
+         - [Fix] Classe HttpError explicite (fin du tri d'erreurs par texte de message).
+         - [Feature] Journal d'événements (logEvent) : toasts + diagnostics persistés
+           (localStorage, anneau 300) + console. exportLog() en console F12.
+         - [Fix] Formateur monétaire UI via Intl fr-BE ("12,50 €") ; KPIs CA/panier alignés.
+           (NB : le format des nombres dans l'archive de clôture n'a PAS été modifié.)
+         - [Fix] parseInt base 10 ; init().catch.
+         - [Note] Les colonnes cartes restent en offsets/lettres fixes (P, P:T, AF) :
+           la détection dynamique n'est PAS transposée ici car master ÉCRIT par lettre
+           de colonne — à traiter dans une passe dédiée et testée.
   1.6.2  2026-05-29  Session #7 (correctifs de la revue de code)
          - [Fix 🔴] applyCardSale : suppression du bloc copyPaste parasite (copié depuis
            applySealedSale) qui référençait nextTxRow hors scope → ReferenceError à CHAQUE
@@ -482,7 +496,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.6.2';
+const APP_VERSION      = '1.6.3';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -490,7 +504,7 @@ const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
 const CENTRAL_GSHEET_ID = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const EVENTS_GSHEET_ID  = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
 
-const SHEET_CARDS     = 'Cartes_Stock_&_Transactions';
+const SHEET_CARDS     = 'cartes_stock_et_transactions';
 const SHEET_SEALED    = 'Scelle_Stock';
 const SHEET_SEALED_TX = 'Scelle_Transactions';
 const SHEET_SALES     = 'ventes_detail';
@@ -515,6 +529,8 @@ const CLOSE_DRAIN_TIMEOUT_MS = 30000;
 // LocalStorage keys
 const LS_TOKEN  = 'tcg_master_token_v1';
 const LS_DEVICE = 'tcg_master_device_v1';
+const LS_LOG    = 'tcg_master_log_v1';   // journal d'événements (anneau)
+const LOG_MAX   = 300;
 
 // ═══════════════════════════════════════════════════════════════
 // STATE
@@ -524,6 +540,9 @@ let gTokenExpiry = 0;
 let gUserEmail   = '';
 let gUserName    = '';
 let isAuthorizedMaster = false;
+
+// Journal d'événements (anneau persistant — voir logEvent / exportLog)
+let eventLog = [];
 
 let stockCacheCards  = new Map();
 let stockCacheSealed = new Map();
@@ -575,10 +594,11 @@ function parsePrix(str) {
   }
   return parseFloat(s) || 0;
 }
+// Formateur monétaire unique — toujours "12,50 €" (virgule, 2 décimales, locale belge)
+const MONEY_FMT = new Intl.NumberFormat('fr-BE', { style: 'currency', currency: 'EUR' });
 function formatPrice(p) {
   const n = parseFloat(p);
-  if (isNaN(n)) return '0€';
-  return parseFloat(n.toFixed(2)) + '€';
+  return MONEY_FMT.format(isNaN(n) ? 0 : n);
 }
 function colIdx2letter(n) {
   let result = '';
@@ -708,7 +728,7 @@ async function handleOAuthCallback() {
   if (hash.includes('access_token')) {
     const params = new URLSearchParams(hash);
     const token = params.get('access_token');
-    const expiresIn = parseInt(params.get('expires_in') || '3600');
+    const expiresIn = parseInt(params.get('expires_in') || '3600', 10);
     if (params.get('state') === sessionStorage.getItem('oauth_state')) {
       gAccessToken = token;
       gTokenExpiry = Date.now() + expiresIn * 1000;
@@ -752,6 +772,22 @@ function logout() {
 // ═══════════════════════════════════════════════════════════════
 // SHEETS API (avec gsheetId paramétrable, retry/backoff)
 // ═══════════════════════════════════════════════════════════════
+// Encadre TOUJOURS le nom d'onglet de quotes simples → robuste aux caractères
+// spéciaux (&, espace, etc.). Les quotes internes sont doublées (échappement A1).
+function a1(sheet, rng) {
+  return "'" + String(sheet).replace(/'/g, "''") + "'!" + rng;
+}
+
+// Erreur HTTP explicite (status connu) — distincte d'une erreur réseau (status inconnu).
+class HttpError extends Error {
+  constructor(method, status, body) {
+    super(method + ' ' + status + (body ? ': ' + String(body).substring(0, 200) : ''));
+    this.name = 'HttpError';
+    this.method = method;
+    this.status = status;
+  }
+}
+
 async function sheetsRequest(method, url, body) {
   let lastErr = null;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
@@ -763,16 +799,18 @@ async function sheetsRequest(method, url, body) {
         body: body ? JSON.stringify(body) : undefined
       });
       if (res.ok) return res.json();
-      if (res.status === 429 || res.status >= 500) { lastErr = new Error(method + ' ' + res.status); continue; }
+      // 429 (rate limit) ou 5xx → réessai
+      if (res.status === 429 || res.status >= 500) { lastErr = new HttpError(method, res.status); continue; }
+      // 4xx → erreur définitive, pas de réessai
       const txt = await res.text();
-      throw new Error(method + ' ' + res.status + ': ' + txt.substring(0, 200));
+      throw new HttpError(method, res.status, txt);
     } catch (e) {
       lastErr = e;
-      if (!e.message.includes(method + ' ')) continue;
-      throw e;
+      // Erreur HTTP définitive (4xx hors 429) → on remonte. Sinon (réseau) → réessai.
+      if (e instanceof HttpError && e.status >= 400 && e.status < 500 && e.status !== 429) throw e;
     }
   }
-  throw lastErr || new Error(method + ' failed after retries');
+  throw lastErr || new Error(method + ' : échec après retries');
 }
 
 async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID, valueRenderOption = null) {
@@ -843,7 +881,7 @@ async function verifyEventsSchema() {
 // STOCK CACHE (central gsheet)
 // ═══════════════════════════════════════════════════════════════
 async function findCardsHeaderRow() {
-  const r = await sheetsGet(`${SHEET_CARDS}!A1:AF300`, CENTRAL_GSHEET_ID);
+  const r = await sheetsGet(a1(SHEET_CARDS, `A1:AF300`), CENTRAL_GSHEET_ID);
   const rows = r.values || [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -865,7 +903,7 @@ async function loadStockCache() {
   try {
     cardHeaderRow = await findCardsHeaderRow();
     // Read N..AF starting at header+1 (we need col D=clé, col P=statut, plus all the others)
-    const cardData = await sheetsGet(`${SHEET_CARDS}!C${cardHeaderRow + 1}:AF`, CENTRAL_GSHEET_ID);
+    const cardData = await sheetsGet(a1(SHEET_CARDS, `C${cardHeaderRow + 1}:AF`), CENTRAL_GSHEET_ID);
     const rows = cardData.values || [];
     stockCacheCards.clear();
     for (let i = 0; i < rows.length; i++) {
@@ -888,7 +926,7 @@ async function loadStockCache() {
     }
 
     // Scelle_Stock (A:AF — Code Technique est en col AA depuis l'ajout de la col C Key)
-    const sealedData = await sheetsGet(`'${SHEET_SEALED}'!A:AF`, CENTRAL_GSHEET_ID);
+    const sealedData = await sheetsGet(a1(SHEET_SEALED, `A:AF`), CENTRAL_GSHEET_ID);
     const sRows = sealedData.values || [];
     if (sRows.length > 0) {
       // Détection dynamique de la ligne d'en-tête (le header n'est pas forcément en ligne 1)
@@ -931,7 +969,7 @@ async function loadStockCache() {
         // Indexation par Key (barcode) — article ignoré tant que Key est vide
         const itemKey = (row[sealedColIdx.iKey] || '').toString().trim();
         if (!itemKey) continue;
-        const qty = parseInt(row[sealedColIdx.iQty]) || 0;
+        const qty = parseInt(row[sealedColIdx.iQty], 10) || 0;
         if (qty <= 0) continue;
         stockCacheSealed.set(itemKey, {
           key: itemKey,
@@ -1010,7 +1048,7 @@ async function saveEventConfig() {
   try {
     // Écrit dans app_state!A2:D2 immédiatement (heartbeat fera le ts à chaque tick)
     await sheetsUpdate(
-      `${SHEET_STATE}!A2:D2`,
+      a1(SHEET_STATE, `A2:D2`),
       [[ new Date().toISOString(), newName, newDevice, newBuyer ]],
       'RAW', EVENTS_GSHEET_ID
     );
@@ -1053,7 +1091,7 @@ async function writeHeartbeat() {
   if (!isAuth() || !isAuthorizedMaster || !navigator.onLine) return;
   try {
     await sheetsUpdate(
-      `${SHEET_STATE}!A2:D2`,
+      a1(SHEET_STATE, `A2:D2`),
       [[ new Date().toISOString(), currentEventName, deviceLabel || 'Master', defaultBuyer ]],
       'RAW', EVENTS_GSHEET_ID
     );
@@ -1103,7 +1141,7 @@ async function masterSyncTick(forced = false) {
   try {
     // 1. Lire toutes les lignes de ventes_detail (events gsheet)
     const lastCol = colIdx2letter(salesHeaderInfo.headerCount);
-    const data = await sheetsGet(`${SHEET_SALES}!A2:${lastCol}`, EVENTS_GSHEET_ID);
+    const data = await sheetsGet(a1(SHEET_SALES, `A2:${lastCol}`), EVENTS_GSHEET_ID);
     const rows = data.values || [];
     const syncedColIdx0 = salesHeaderInfo.syncedCol - 1;
 
@@ -1190,7 +1228,7 @@ async function applyCardSale(rowIdx, salesRow) {
   // Re-read col P en live (anti-cache-stale, anti-race)
   let currentP = '';
   try {
-    const r = await sheetsGet(`${SHEET_CARDS}!P${card.sheetRow}`, CENTRAL_GSHEET_ID);
+    const r = await sheetsGet(a1(SHEET_CARDS, `P${card.sheetRow}`), CENTRAL_GSHEET_ID);
     currentP = (r.values && r.values[0] && r.values[0][0] || '').toString().trim();
   } catch (e) {
     currentP = ''; // best effort
@@ -1202,13 +1240,13 @@ async function applyCardSale(rowIdx, salesRow) {
   }
   // Apply : P=vendue, Q=prix, R=Acheteur, S=Pro, T=date
   await sheetsUpdate(
-    `${SHEET_CARDS}!P${card.sheetRow}:T${card.sheetRow}`,
+    a1(SHEET_CARDS, `P${card.sheetRow}:T${card.sheetRow}`),
     [[ 'vendue', prix, saleBuyer, CARD_DEFAULT_PAYS, formatFrDate(new Date()) ]],
     'USER_ENTERED', CENTRAL_GSHEET_ID
   );
   // AF = TVA_Vente choisie côté Sales (défaut Régime normal)
   await sheetsUpdate(
-    `${SHEET_CARDS}!AF${card.sheetRow}`,
+    a1(SHEET_CARDS, `AF${card.sheetRow}`),
     [[ saleTva ]],
     'RAW', CENTRAL_GSHEET_ID
   );
@@ -1232,7 +1270,7 @@ async function applyCardSale(rowIdx, salesRow) {
 //   AE(30) TVA_Achat   AF(31) TVA_Vente
 async function applySealedSale(rowIdx, salesRow) {
   const key       = (salesRow[4] || '').toString().trim(); // barcode scanné
-  const qtySold   = parseInt(salesRow[9]) || 1;
+  const qtySold   = parseInt(salesRow[9], 10) || 1;
   const salePrice = parseFloat(salesRow[10]) || 0; // total pour qtySold unités
   const saleTva   = (salesRow[12] || '').toString().trim() || 'Régime normal'; // col M ventes_detail
   const saleBuyer = (salesRow[13] || '').toString().trim() || currentEventName;  // col N ventes_detail
@@ -1249,10 +1287,10 @@ async function applySealedSale(rowIdx, salesRow) {
   }
   sealedRetryCount.delete(rowIdx);
   // Lecture de la ligne complète du lot (A:AG = 33 colonnes, AG = TVA_Vente)
-  const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AG${sealed.sheetRow}`, CENTRAL_GSHEET_ID, 'UNFORMATTED_VALUE');
+  const fullRowRes = await sheetsGet(a1(SHEET_SEALED, `A${sealed.sheetRow}:AG${sealed.sheetRow}`), CENTRAL_GSHEET_ID, 'UNFORMATTED_VALUE');
   const sr = (fullRowRes.values && fullRowRes.values[0]) || [];
 
-  const currentQty = parseInt(sr[sealedColIdx.iQty]) || 0; // dynamique via sealedColIdx
+  const currentQty = parseInt(sr[sealedColIdx.iQty], 10) || 0; // dynamique via sealedColIdx
   if (currentQty < qtySold) {
     await writeAnomaly(rowIdx, salesRow, 'SEALED_OVERDRAW',
       `Stock actuel = ${currentQty}, vente demande ${qtySold} unité(s) · row ${sealed.sheetRow}`);
@@ -1262,7 +1300,7 @@ async function applySealedSale(rowIdx, salesRow) {
   // ── 1. Décrément qty dans Scelle_Stock ──────────────────────────────────
   const newQty = currentQty - qtySold;
   await sheetsUpdate(
-    `'${SHEET_SEALED}'!${sealed.qtyColLetter}${sealed.sheetRow}`,
+    a1(SHEET_SEALED, `${sealed.qtyColLetter}${sealed.sheetRow}`),
     [[newQty]], 'RAW', CENTRAL_GSHEET_ID
   );
   sealed.qty = newQty;
@@ -1323,7 +1361,7 @@ async function applySealedSale(rowIdx, salesRow) {
 
   // ── 4. Append dans Scelle_Transactions ─────────────────────────────────────────
   // 1. Trouver la derniere ligne remplie (col B = Origine, toujours remplie)
-  const txColB   = await sheetsGet(`'${SHEET_SEALED_TX}'!B:B`, CENTRAL_GSHEET_ID);
+  const txColB   = await sheetsGet(a1(SHEET_SEALED_TX, `B:B`), CENTRAL_GSHEET_ID);
   const txValues = txColB.values || [];
   let lastFilledRow = 0;
   for (let i = txValues.length - 1; i >= 0; i--) {
@@ -1383,7 +1421,7 @@ async function applySealedSale(rowIdx, salesRow) {
   ];
   // batchUpdate values : un range par cellule
   const data = staticCols.map(c => ({
-    range:  `'${SHEET_SEALED_TX}'!${c.col}${nextTxRow}`,
+    range:  a1(SHEET_SEALED_TX, `${c.col}${nextTxRow}`),
     values: [[ c.val ]]
   }));
   await sheetsRequest('POST',
@@ -1412,7 +1450,7 @@ async function writeAnomaly(salesRowIdx, salesRow, type, details) {
     '',  // Resolved
     ''   // Notes
   ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
-  await sheetsAppend(`${SHEET_ANOMALIES}!A:K`, [row], 'USER_ENTERED', EVENTS_GSHEET_ID);
+  await sheetsAppend(a1(SHEET_ANOMALIES, `A:K`), [row], 'USER_ENTERED', EVENTS_GSHEET_ID);
 }
 
 async function markSyncedRow(rowIdx, status) {
@@ -1420,7 +1458,7 @@ async function markSyncedRow(rowIdx, status) {
   const c1 = colIdx2letter(salesHeaderInfo.syncedCol);
   const c2 = colIdx2letter(salesHeaderInfo.syncedAtCol);
   await sheetsUpdate(
-    `${SHEET_SALES}!${c1}${rowIdx}:${c2}${rowIdx}`,
+    a1(SHEET_SALES, `${c1}${rowIdx}:${c2}${rowIdx}`),
     [[ status, new Date().toISOString() ]],
     'RAW', EVENTS_GSHEET_ID
   );
@@ -1462,7 +1500,7 @@ async function loadStats() {
   document.getElementById('statsLastUpdate').textContent = 'Chargement…';
   try {
     const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 16);
-    const data = await sheetsGet(`${SHEET_SALES}!A:${lastCol}`, EVENTS_GSHEET_ID);
+    const data = await sheetsGet(a1(SHEET_SALES, `A:${lastCol}`), EVENTS_GSHEET_ID);
     const rows = data.values || [];
     const allData = rows.slice(1);  // skip header
     // Tout l'event est dans le buffer (puisqu'on vide à la clôture)
@@ -1473,12 +1511,12 @@ async function loadStats() {
     }
     const allTx = new Set(allData.map(r => r[3]));
     const totalCA = allData.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
-    const totalNb = allData.reduce((s, r) => s + (parseInt(r[9]) || 1), 0);
+    const totalNb = allData.reduce((s, r) => s + (parseInt(r[9], 10) || 1), 0);
     const avgTx = allTx.size > 0 ? totalCA / allTx.size : 0;
-    document.getElementById('kpiCA').textContent  = parseFloat(totalCA.toFixed(2)) + '€';
+    document.getElementById('kpiCA').textContent  = formatPrice(totalCA);
     document.getElementById('kpiNb').textContent  = totalNb;
     document.getElementById('kpiTx').textContent  = allTx.size;
-    document.getElementById('kpiAvg').textContent = parseFloat(avgTx.toFixed(2)) + '€';
+    document.getElementById('kpiAvg').textContent = formatPrice(avgTx);
 
     const byCat = {};
     allData.forEach(r => {
@@ -1499,7 +1537,7 @@ async function loadStats() {
       const v = r[1] || 'Inconnu';
       if (!byVendor[v]) byVendor[v] = { ca: 0, nb: 0 };
       byVendor[v].ca += parseFloat(r[10]) || 0;
-      byVendor[v].nb += parseInt(r[9]) || 1;
+      byVendor[v].nb += parseInt(r[9], 10) || 1;
     });
     renderLeaderboard(byVendor);
 
@@ -1582,7 +1620,7 @@ function renderSalesLog(rows) {
 
 async function loadAnomaliesList() {
   try {
-    const r = await sheetsGet(`${SHEET_ANOMALIES}!A:K`, EVENTS_GSHEET_ID);
+    const r = await sheetsGet(a1(SHEET_ANOMALIES, `A:K`), EVENTS_GSHEET_ID);
     const rows = r.values || [];
     const data = rows.slice(1);
     renderAnomalies(data);
@@ -1635,8 +1673,8 @@ async function loadCloseSummary() {
   try {
     const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 16);
     const [salesR, anomR] = await Promise.all([
-      sheetsGet(`${SHEET_SALES}!A:${lastCol}`, EVENTS_GSHEET_ID),
-      sheetsGet(`${SHEET_ANOMALIES}!A:K`, EVENTS_GSHEET_ID),
+      sheetsGet(a1(SHEET_SALES, `A:${lastCol}`), EVENTS_GSHEET_ID),
+      sheetsGet(a1(SHEET_ANOMALIES, `A:K`), EVENTS_GSHEET_ID),
     ]);
     const sales = (salesR.values || []).slice(1);
     const anoms = (anomR.values || []).slice(1);
@@ -1666,8 +1704,8 @@ async function confirmCloseEvent() {
     btn.textContent = '⏳ Lecture…';
     const lastCol = colIdx2letter(salesHeaderInfo.headerCount);
     const [salesR, anomR] = await Promise.all([
-      sheetsGet(`${SHEET_SALES}!A:${lastCol}`, EVENTS_GSHEET_ID),
-      sheetsGet(`${SHEET_ANOMALIES}!A:K`, EVENTS_GSHEET_ID),
+      sheetsGet(a1(SHEET_SALES, `A:${lastCol}`), EVENTS_GSHEET_ID),
+      sheetsGet(a1(SHEET_ANOMALIES, `A:K`), EVENTS_GSHEET_ID),
     ]);
     const salesHeader = (salesR.values && salesR.values[0]) || VENTES_HEADERS;
     const sales = (salesR.values || []).slice(1);
@@ -1700,11 +1738,11 @@ async function confirmCloseEvent() {
 
     // 6. Clear les buffers
     btn.textContent = '⏳ Vidage buffers…';
-    await sheetsClear(`${SHEET_SALES}!A2:${lastCol}`, EVENTS_GSHEET_ID);
-    await sheetsClear(`${SHEET_ANOMALIES}!A2:K`, EVENTS_GSHEET_ID);
+    await sheetsClear(a1(SHEET_SALES, `A2:${lastCol}`), EVENTS_GSHEET_ID);
+    await sheetsClear(a1(SHEET_ANOMALIES, `A2:K`), EVENTS_GSHEET_ID);
 
     // 7. Vider event_name dans app_state
-    await sheetsUpdate(`${SHEET_STATE}!B2`, [['']], 'RAW', EVENTS_GSHEET_ID);
+    await sheetsUpdate(a1(SHEET_STATE, `B2`), [['']], 'RAW', EVENTS_GSHEET_ID);
 
     // 8. Reset state local
     currentEventName = '';
@@ -1739,13 +1777,13 @@ function buildArchiveContent(salesHeader, sales, anomHeader, anoms) {
   // Calcul KPIs
   const allTx = new Set(sales.map(r => r[3]));
   const totalCA = sales.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
-  const totalNb = sales.reduce((s, r) => s + (parseInt(r[9]) || 1), 0);
+  const totalNb = sales.reduce((s, r) => s + (parseInt(r[9], 10) || 1), 0);
   const avgTx = allTx.size > 0 ? totalCA / allTx.size : 0;
 
   const byCat = {}, byLic = {}, byVendor = {};
   sales.forEach(r => {
     const ca = parseFloat(r[10]) || 0;
-    const nb = parseInt(r[9]) || 1;
+    const nb = parseInt(r[9], 10) || 1;
     const cat = r[7] || 'Autre'; const lic = r[8] || 'Autre'; const v = r[1] || 'Inconnu';
     byCat[cat] = (byCat[cat] || 0) + ca;
     byLic[lic] = (byLic[lic] || 0) + ca;
@@ -1808,13 +1846,27 @@ function buildArchiveContent(salesHeader, sales, anomHeader, anoms) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// TOAST
+// TOAST + JOURNAL D'ÉVÉNEMENTS
 // ═══════════════════════════════════════════════════════════════
+// Garde une trace persistée des toasts et diagnostics (anneau LOG_MAX).
+// exportLog() (console F12) renvoie tout le journal pour copier/analyser.
+function logEvent(level, msg, data) {
+  const e = { t: new Date().toISOString(), level, msg, data: data ?? null };
+  eventLog.push(e);
+  if (eventLog.length > LOG_MAX) eventLog = eventLog.slice(-LOG_MAX);
+  try { localStorage.setItem(LS_LOG, JSON.stringify(eventLog)); } catch (_) {}
+  const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  fn('[log:' + level + '] ' + msg, data ?? '');
+}
+function exportLog() { return JSON.stringify(eventLog, null, 2); }
+window.exportLog = exportLog;
+
 function showToast(msg, isErr = false) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.className = 'toast' + (isErr ? ' err' : '') + ' show';
   setTimeout(() => t.classList.remove('show'), 2800);
+  logEvent(isErr ? 'error' : 'info', 'toast: ' + msg);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1827,7 +1879,7 @@ async function bootstrap() {
 
   // 2. Lire app_state pour récupérer event_name, device et acheteur par défaut existants
   try {
-    const r = await sheetsGet(`${SHEET_STATE}!A2:D2`, EVENTS_GSHEET_ID);
+    const r = await sheetsGet(a1(SHEET_STATE, `A2:D2`), EVENTS_GSHEET_ID);
     const row = (r.values && r.values[0]) || [];
     currentEventName = (row[1] || '').toString().trim();
     const dev = (row[2] || '').toString().trim();
@@ -1858,6 +1910,8 @@ async function bootstrap() {
 // ═══════════════════════════════════════════════════════════════
 async function init() {
   const vb = document.getElementById('versionBadge'); if(vb) vb.textContent = 'v' + APP_VERSION;
+  eventLog = lsLoad(LS_LOG, []);
+  logEvent('info', 'Démarrage master v' + APP_VERSION);
   updateNet();
   await handleOAuthCallback();
 }
@@ -1871,7 +1925,11 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-init();
+init().catch(e => {
+  console.error('init failed', e);
+  logEvent('error', 'init a échoué', { message: e && e.message });
+  try { showToast('✗ Erreur au démarrage', true); } catch (_) {}
+});
 </script>
 
 </body>
