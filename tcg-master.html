@@ -1,8 +1,19 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.5.10 (Session #5 — 2026-05-28)
+  Version : 1.6.0 (Session #6 — 2026-05-29)
 =============================================================
+  1.6.0  2026-05-29  Session #6
+         - [Feature] TVA_Vente piloté par Sales : la valeur choisie (ventes_detail col M)
+           est écrite en col AG (scellé) / col AF (carte) au lieu du "Régime normal" hardcodé.
+         - [Fix] Scellé : la col AG (TVA_Vente) n'était jamais écrite (absente de staticCols) → ajoutée.
+         - [Feature] Acheteur piloté par Sales : ventes_detail col N → écrit en Acheteur
+           (col Q scellé / col R carte). Fallback currentEventName si vide.
+         - [Feature] Acheteur par défaut publié dans app_state col D (champ event control) ;
+           découplage session (gate sync, cols facture) / acheteur.
+         - VENTES_HEADERS : +TVA_Vente +Acheteur avant Synced/SyncedAt (ventes_detail A:P) ;
+           app_state passe en A2:D2.
+
   1.5.10 2026-05-28
          - Arrondi unitPa a 4 decimales pour formules X propres
          - Fail explicite si sealedTxSheetNumId null (anomalie au lieu de comportement silencieux)
@@ -312,7 +323,12 @@ header{display:flex;justify-content:space-between;align-items:center;
             <input id="eventNameInput" type="text" placeholder="Ex: Brocante des Gotteaux" style="flex:1;min-width:200px;" autocomplete="off">
             <button class="btn btn-primary btn-sm" onclick="saveEventConfig()">💾 Enregistrer</button>
           </div>
-          <div class="field-hint">Cette valeur sera écrite en colonne R de chaque carte vendue.</div>
+          <div class="field-hint">Active la sync et sert de référence facture (cols U / AD). En vente à domicile / RMP, mets un label de session ici (ex: « RMP 29/05 ») et laisse l'acheteur ci-dessous vide pour que le vendeur le saisisse.</div>
+        </div>
+        <div class="field">
+          <label class="field-label">Acheteur par défaut (optionnel)</label>
+          <input id="defaultBuyerInput" type="text" placeholder="Ex: nom de l'event, ou laisser vide" autocomplete="off">
+          <div class="field-hint">Si renseigné, ce nom est imposé en lecture seule à tous les vendeurs et écrit en Acheteur. Si vide, chaque vendeur saisit l'acheteur dans Sales. (Enregistré avec le bouton ci-dessus.)</div>
         </div>
         <div class="field">
           <label class="field-label">Label de cet appareil</label>
@@ -457,7 +473,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.10';
+const APP_VERSION      = '1.6.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -509,6 +525,7 @@ let cacheLoading     = false;
 
 let currentEventName = '';
 let deviceLabel      = '';
+let defaultBuyer     = '';   // Acheteur par défaut publié vers Sales (app_state col D) ; vide = Sales saisit
 
 let heartbeatTimer = null;
 let syncTimer      = null;
@@ -774,8 +791,8 @@ async function sheetsClear(range, gsheetId = CENTRAL_GSHEET_ID) {
 // ═══════════════════════════════════════════════════════════════
 // SCHEMA VERIFICATION (events gsheet)
 // ═══════════════════════════════════════════════════════════════
-const APP_STATE_HEADERS  = ['master_alive_ts', 'master_event_name', 'master_device'];
-const VENTES_HEADERS     = ['Timestamp','Vendeur','Email','TX_ID','Clé/Barcode','Nom','Type','Catégorie','Licence','Quantité','Prix','Source','Synced','SyncedAt'];
+const APP_STATE_HEADERS  = ['master_alive_ts', 'master_event_name', 'master_device', 'master_default_buyer'];
+const VENTES_HEADERS     = ['Timestamp','Vendeur','Email','TX_ID','Clé/Barcode','Nom','Type','Catégorie','Licence','Quantité','Prix','Source','TVA_Vente','Acheteur','Synced','SyncedAt'];
 const ANOMALIES_HEADERS  = ['Timestamp','TX_ID','Vendeur','Clé/Barcode','Nom article','Source','Type anomalie','Détails','Synced_From_Row','Resolved','Notes'];
 
 async function verifyEventsSchema() {
@@ -980,15 +997,17 @@ setInterval(() => {
 async function saveEventConfig() {
   const newName = document.getElementById('eventNameInput').value.trim();
   const newDevice = document.getElementById('deviceLabelInput').value.trim() || 'Master';
+  const newBuyer = document.getElementById('defaultBuyerInput').value.trim();
   try {
-    // Écrit dans app_state!A2:C2 immédiatement (heartbeat fera le ts à chaque tick)
+    // Écrit dans app_state!A2:D2 immédiatement (heartbeat fera le ts à chaque tick)
     await sheetsUpdate(
-      `${SHEET_STATE}!A2:C2`,
-      [[ new Date().toISOString(), newName, newDevice ]],
+      `${SHEET_STATE}!A2:D2`,
+      [[ new Date().toISOString(), newName, newDevice, newBuyer ]],
       'RAW', EVENTS_GSHEET_ID
     );
     currentEventName = newName;
     deviceLabel = newDevice;
+    defaultBuyer = newBuyer;
     lsSave(LS_DEVICE, newDevice);
     renderEventBanner();
     updateSyncUI();
@@ -1025,8 +1044,8 @@ async function writeHeartbeat() {
   if (!isAuth() || !isAuthorizedMaster || !navigator.onLine) return;
   try {
     await sheetsUpdate(
-      `${SHEET_STATE}!A2:C2`,
-      [[ new Date().toISOString(), currentEventName, deviceLabel || 'Master' ]],
+      `${SHEET_STATE}!A2:D2`,
+      [[ new Date().toISOString(), currentEventName, deviceLabel || 'Master', defaultBuyer ]],
       'RAW', EVENTS_GSHEET_ID
     );
   } catch (e) {
@@ -1151,6 +1170,8 @@ async function masterSyncTick(forced = false) {
 async function applyCardSale(rowIdx, salesRow) {
   const key = (salesRow[4] || '').toString().trim();   // col E
   const prix = parseFloat(salesRow[10]) || 0;          // col K
+  const saleTva   = (salesRow[12] || '').toString().trim() || 'Régime normal'; // col M ventes_detail
+  const saleBuyer = (salesRow[13] || '').toString().trim() || currentEventName;  // col N ventes_detail
   // pre-check: lire actuellement col P et col D (clé) de la carte
   let card = stockCacheCards.get(key);
   if (!card) {
@@ -1170,16 +1191,16 @@ async function applyCardSale(rowIdx, salesRow) {
       `Col P déjà remplie (valeur actuelle: "${currentP}") · row ${card.sheetRow}`);
     return { status: 'ANOMALY_P_NON_BLANK' };
   }
-  // Apply : P=vendue, Q=prix, R=event, S=Pro, T=date
+  // Apply : P=vendue, Q=prix, R=Acheteur, S=Pro, T=date
   await sheetsUpdate(
     `${SHEET_CARDS}!P${card.sheetRow}:T${card.sheetRow}`,
-    [[ 'vendue', prix, currentEventName, CARD_DEFAULT_PAYS, formatFrDate(new Date()) ]],
+    [[ 'vendue', prix, saleBuyer, CARD_DEFAULT_PAYS, formatFrDate(new Date()) ]],
     'USER_ENTERED', CENTRAL_GSHEET_ID
   );
-  // AF = Régime normal
+  // AF = TVA_Vente choisie côté Sales (défaut Régime normal)
   await sheetsUpdate(
     `${SHEET_CARDS}!AF${card.sheetRow}`,
-    [[ CARD_DEFAULT_REGIME_FISC ]],
+    [[ saleTva ]],
     'RAW', CENTRAL_GSHEET_ID
   );
   // Retire du cache (vendue)
@@ -1215,6 +1236,8 @@ async function applySealedSale(rowIdx, salesRow) {
   const key       = (salesRow[4] || '').toString().trim(); // barcode scanné
   const qtySold   = parseInt(salesRow[9]) || 1;
   const salePrice = parseFloat(salesRow[10]) || 0; // total pour qtySold unités
+  const saleTva   = (salesRow[12] || '').toString().trim() || 'Régime normal'; // col M ventes_detail
+  const saleBuyer = (salesRow[13] || '').toString().trim() || currentEventName;  // col N ventes_detail
 
   const sealed = stockCacheSealed.get(key);
   if (!sealed) {
@@ -1281,11 +1304,11 @@ async function applySealedSale(rowIdx, salesRow) {
     coteTot || '',                              // N  Côte Totale
     'vendu',                                    // O  Statut
     salePrice,                                  // P  Prix de vente
-    currentEventName,                           // Q  Acheteur
+    saleBuyer,                                  // Q  Acheteur (Sales col N, sinon event)
     salesRow[1] || '',                          // R  Source
     formatFrDate(now),                          // S  Date_Transaction
     sr[sealedColIdx.iFactureAchat] || '',      // T  Facture d'achat
-    currentEventName,                           // U  Facture de vente
+    currentEventName,                           // U  Facture de vente (référence session)
     '',                                         // V  Commentaire
     'Pro',                                      // W  Type_Vente
     paForSale,                                  // X  Prix d'achat
@@ -1294,10 +1317,10 @@ async function applySealedSale(rowIdx, salesRow) {
     '',                                         // AA (vide)
     key,                                        // AB Code Technique
     formatFrDate(now),                          // AC Date_Vente
-    currentEventName,                           // AD Facture_Vente
+    currentEventName,                           // AD Facture_Vente (référence session)
     '',                                         // AE Pays_Vente
     sr[sealedColIdx.iTvaAchat]  || '',         // AF TVA_Achat
-    'Régime normal',                              // AG TVA_Vente
+    saleTva,                                    // AG TVA_Vente (Sales col M, défaut Régime normal)
   ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
 
   // ── 4. Append dans Scelle_Transactions ─────────────────────────────────────────
@@ -1357,7 +1380,8 @@ async function applySealedSale(rowIdx, salesRow) {
     {col: 'V', val: txRow[21]},  {col: 'W', val: txRow[22]},
     {col: 'X', val: xFormula},
     {col: 'AA', val: txRow[26]},
-    {col: 'AF', val: txRow[31]}
+    {col: 'AF', val: txRow[31]},
+    {col: 'AG', val: txRow[32]}   // TVA_Vente — était omis (jamais écrit) avant 1.6.0
   ];
   // batchUpdate values : un range par cellule
   const data = staticCols.map(c => ({
@@ -1439,7 +1463,7 @@ async function loadStats() {
   if (!isAuth() || !isAuthorizedMaster) return;
   document.getElementById('statsLastUpdate').textContent = 'Chargement…';
   try {
-    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 14);
+    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 16);
     const data = await sheetsGet(`${SHEET_SALES}!A:${lastCol}`, EVENTS_GSHEET_ID);
     const rows = data.values || [];
     const allData = rows.slice(1);  // skip header
@@ -1611,7 +1635,7 @@ function closeCloseEventModal() {
 }
 async function loadCloseSummary() {
   try {
-    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 14);
+    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 16);
     const [salesR, anomR] = await Promise.all([
       sheetsGet(`${SHEET_SALES}!A:${lastCol}`, EVENTS_GSHEET_ID),
       sheetsGet(`${SHEET_ANOMALIES}!A:K`, EVENTS_GSHEET_ID),
@@ -1803,13 +1827,14 @@ async function bootstrap() {
   const ok = await verifyEventsSchema();
   if (!ok) return;
 
-  // 2. Lire app_state pour récupérer event_name et device existants
+  // 2. Lire app_state pour récupérer event_name, device et acheteur par défaut existants
   try {
-    const r = await sheetsGet(`${SHEET_STATE}!A2:C2`, EVENTS_GSHEET_ID);
+    const r = await sheetsGet(`${SHEET_STATE}!A2:D2`, EVENTS_GSHEET_ID);
     const row = (r.values && r.values[0]) || [];
     currentEventName = (row[1] || '').toString().trim();
     const dev = (row[2] || '').toString().trim();
     if (dev) deviceLabel = dev;
+    defaultBuyer = (row[3] || '').toString().trim();
   } catch (e) {
     currentEventName = '';
   }
@@ -1817,6 +1842,8 @@ async function bootstrap() {
   if (!deviceLabel) deviceLabel = lsLoad(LS_DEVICE, 'Master');
   document.getElementById('eventNameInput').value = currentEventName;
   document.getElementById('deviceLabelInput').value = deviceLabel;
+  const dbInput = document.getElementById('defaultBuyerInput');
+  if (dbInput) dbInput.value = defaultBuyer;
   renderEventBanner();
 
   // 3. Charger le cache stock

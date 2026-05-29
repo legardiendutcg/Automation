@@ -1,10 +1,22 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.5.3 (Session #5 — 2026-05-28)
+  Version : 1.6.0 (Session #6 — 2026-05-29)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.6.0  2026-05-29  Session #6
+         - [Feature] Sélecteur TVA_Vente : liste lue dans Scelle_Stock!AG8:AG23
+           (source curée), défaut "Régime normal", valeur jointe à chaque ligne
+           de vente (nouvelle col M de ventes_detail). "réservée" exclu du menu.
+         - [Feature] Verrou "réservée" : un article dont la col TVA_Vente vaut
+           "réservée" est bloqué au scan (scellé col AG / carte col AF).
+         - [Feature] Acheteur côté Sales : si Master publie un acheteur par défaut
+           (app_state col D) → affiché en lecture seule ; sinon le vendeur le saisit
+           (nouvelle col N de ventes_detail). Validation bloquée si acheteur vide.
+         - ventes_detail passe en A:N (M=TVA_Vente, N=Acheteur ; Synced/SyncedAt → O/P)
+         - Lecture cache scellé étendue A:AF → A:AG ; lecture app_state A2:C2 → A2:D2
+
   1.5.3  2026-05-28
          - Coherence : normalisation apostrophes courbes dans find() (alignement avec master)
 
@@ -368,6 +380,27 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
       <div class="cart-empty" id="cartEmpty">Le panier est vide — scannez un article pour commencer</div>
     </div>
 
+    <!-- Type de vente (TVA_Vente) + Acheteur -->
+    <div style="margin-top:18px;display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="display:block;font-family:'Space Mono',monospace;font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Type de vente</label>
+        <select id="tvaVenteSelect" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;color:var(--text);font-family:'Syne',sans-serif;font-size:.9rem;outline:none;">
+          <option value="Régime normal">Régime normal</option>
+        </select>
+      </div>
+      <div id="buyerField">
+        <label style="display:block;font-family:'Space Mono',monospace;font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Acheteur</label>
+        <!-- rempli dynamiquement par updateBuyerField() : input libre OU affichage lecture seule -->
+        <input id="buyerInput" type="text" placeholder="Nom de l'acheteur" autocomplete="off"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;color:var(--text);font-family:'Syne',sans-serif;font-size:.9rem;outline:none;"
+          oninput="updateValidateButton()">
+        <div id="buyerLocked" class="hidden" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:.9rem;">
+          <span id="buyerLockedName" style="font-weight:700;"></span>
+          <span style="font-family:'Space Mono',monospace;font-size:.62rem;color:var(--muted);"> · défini par le Master</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Validate button -->
     <div style="margin-top:20px;">
       <button class="btn btn-primary btn-lg" id="btnValidate" onclick="validateSale()" disabled>
@@ -478,7 +511,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.5.3';
+const APP_VERSION      = '1.6.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -520,7 +553,9 @@ let gUserEmail   = '';
 let gUserName    = '';
 
 // Master status (lu via app_state)
-let masterStatus = { state: 'unknown', message: '—', ts: null, eventName: '', device: '', lastReadAt: 0 };
+let masterStatus = { state: 'unknown', message: '—', ts: null, eventName: '', device: '', defaultBuyer: '', lastReadAt: 0 };
+// Liste des régimes TVA_Vente proposables au vendeur (lue dans Scelle_Stock!AG8:AG23, "réservée" exclu)
+let tvaVenteOptions = [];
 
 // Cart : { uid, key, name, type, category, licence, qty, prixUnit, prixOriginal, source, rowRef?, currentQty?, sheetRow?, qtyColLetter?, etat?, dupStatus?, priceModified? }
 let cart         = [];
@@ -570,6 +605,15 @@ function safeForSheets(v) {
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// Normalise pour comparaison robuste (accents + casse) — évite les bugs locale belge
+function normAccent(s) {
+  return String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+}
+// Une cellule TVA_Vente vaut "réservée" (toutes variantes accent/genre/nombre) ?
+function isReservedValue(s) {
+  return normAccent(s).startsWith('reserv');
 }
 
 function parsePrix(str) {
@@ -711,9 +755,14 @@ function updateValidateButton() {
   if (adjBtn) adjBtn.disabled = false;
   // Bloque si un dup RED non-résolu
   const hasBlockingDup = cart.some(c => c.dupStatus === 'red');
+  // Bloque si acheteur requis (Master ne le fournit pas) et vide
+  const buyerMissing = !getResolvedBuyer();
   if (hasBlockingDup) {
     btn.disabled = true;
     btn.textContent = '⚠ Doublon impossible — retirez-le';
+  } else if (buyerMissing) {
+    btn.disabled = true;
+    btn.textContent = '⚠ Renseignez l\'acheteur';
   } else {
     btn.disabled = false;
     btn.textContent = '✓ Valider la vente';
@@ -853,18 +902,19 @@ async function readMasterHeartbeat() {
     return;
   }
   try {
-    const r = await sheetsGet(`${SHEET_STATE}!A2:C2`, EVENTS_GSHEET_ID);
+    const r = await sheetsGet(`${SHEET_STATE}!A2:D2`, EVENTS_GSHEET_ID);
     const row = (r.values && r.values[0]) || [];
     const tsRaw = (row[0] || '').toString().trim();
     const eventName = (row[1] || '').toString().trim();
     const device = (row[2] || '').toString().trim();
+    const defaultBuyer = (row[3] || '').toString().trim();
     let ts = null;
     if (tsRaw) {
       const d = new Date(tsRaw);
       if (!isNaN(d.getTime())) ts = d.getTime();
     }
     const ageMs = ts ? (Date.now() - ts) : Infinity;
-    masterStatus = { ts, ageMs, eventName, device, lastReadAt: Date.now() };
+    masterStatus = { ts, ageMs, eventName, device, defaultBuyer, lastReadAt: Date.now() };
     // Détermine l'état affiché
     if (!ts || ageMs > 60000) {
       masterStatus.state = 'offline';
@@ -877,10 +927,12 @@ async function readMasterHeartbeat() {
       masterStatus.message = 'Event actif : ' + eventName;
     }
     updateMasterStatusBar();
+    updateBuyerField();
   } catch (e) {
     // Tab app_state n'existe pas encore = master jamais lancé
-    masterStatus = { state: 'never', message: 'Master jamais initialisé · ouvre l\'app master une fois' };
+    masterStatus = { state: 'never', message: 'Master jamais initialisé · ouvre l\'app master une fois', defaultBuyer: '' };
     updateMasterStatusBar();
+    updateBuyerField();
   }
 }
 
@@ -901,6 +953,59 @@ function updateMasterStatusBar() {
 setInterval(() => {
   if (isAuth()) readMasterHeartbeat();
 }, 20000);
+
+// ═══════════════════════════════════════════════════════════════
+// TYPE DE VENTE (TVA_Vente) + ACHETEUR
+// ═══════════════════════════════════════════════════════════════
+function populateTvaSelect() {
+  const sel = document.getElementById('tvaVenteSelect');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  tvaVenteOptions.forEach(opt => {
+    const o = document.createElement('option');
+    o.value = opt; o.textContent = opt;
+    sel.appendChild(o);
+  });
+  // Restaure la sélection précédente si encore présente, sinon défaut "Régime normal"
+  const def = tvaVenteOptions.find(o => normAccent(o) === normAccent('Régime normal')) || tvaVenteOptions[0];
+  sel.value = (prev && tvaVenteOptions.includes(prev)) ? prev : def;
+}
+
+function resetTvaSelect() {
+  const sel = document.getElementById('tvaVenteSelect');
+  if (!sel) return;
+  const def = tvaVenteOptions.find(o => normAccent(o) === normAccent('Régime normal')) || tvaVenteOptions[0];
+  if (def) sel.value = def;
+}
+
+// Master fournit un acheteur par défaut → affichage lecture seule ; sinon saisie libre par le vendeur
+function masterProvidesBuyer() {
+  return !!(masterStatus && masterStatus.defaultBuyer && masterStatus.defaultBuyer.trim());
+}
+
+function updateBuyerField() {
+  const input  = document.getElementById('buyerInput');
+  const locked = document.getElementById('buyerLocked');
+  const lockedName = document.getElementById('buyerLockedName');
+  if (!input || !locked) return;
+  if (masterProvidesBuyer()) {
+    locked.classList.remove('hidden');
+    input.classList.add('hidden');
+    if (lockedName) lockedName.textContent = masterStatus.defaultBuyer.trim();
+  } else {
+    locked.classList.add('hidden');
+    input.classList.remove('hidden');
+  }
+  updateValidateButton();
+}
+
+// Acheteur effectif retenu pour la vente
+function getResolvedBuyer() {
+  if (masterProvidesBuyer()) return masterStatus.defaultBuyer.trim();
+  const input = document.getElementById('buyerInput');
+  return input ? input.value.trim() : '';
+}
 
 // ═══════════════════════════════════════════════════════════════
 // STOCK CACHE — load on login, refresh manual
@@ -952,12 +1057,13 @@ async function loadStockCache() {
         type:      (row[7] || '').toString().trim(),  // J
         etat:      (row[8] || '').toString().trim(),  // K
         prix:      parsePrix(row[14]),                 // Q (déjà rempli par TCG Integrator)
+        reserved:  isReservedValue(row[29]),           // AF = TVA_Vente (cartes) — "réservée" = verrou
         sheetRow:  cardHeaderRow + 1 + i
       });
     }
 
-    // 3. Charger Scelle_Stock (A:AF — Code Technique est en col AA depuis l'ajout de la col C Key)
-    const sealedData = await sheetsGet(`'${SHEET_SEALED}'!A:AF`, CENTRAL_GSHEET_ID);
+    // 3. Charger Scelle_Stock (A:AG — TVA_Vente est en col AG sur l'onglet scellé)
+    const sealedData = await sheetsGet(`'${SHEET_SEALED}'!A:AG`, CENTRAL_GSHEET_ID);
     const sRows = sealedData.values || [];
     if (sRows.length > 0) {
       // Détection dynamique de la ligne d'en-tête (le header n'est pas forcément en ligne 1)
@@ -984,6 +1090,7 @@ async function loadStockCache() {
         iCoteU:        find('Côte/u'),
         iCoteTot:      find('Côte Totale'),
         iStatut:       find('Statut'),
+        iTvaVente:     find('TVA_Vente'),
         // Côte/u (col M = prix unitaire) en priorité
         iPrix:         find('Côte/u') >= 0 ? find('Côte/u') : find('Côte Totale')
       };
@@ -1008,6 +1115,7 @@ async function loadStockCache() {
           type:     (row[sealedColIdx.iType]      || 'Scellé').toString().trim(),
           nomSerie: (row[sealedColIdx.iNomSerie]  || '').toString().trim(),
           prix:     parsePrix(row[sealedColIdx.iPrix]),
+          reserved: sealedColIdx.iTvaVente >= 0 ? isReservedValue(row[sealedColIdx.iTvaVente]) : false,
           qty,
           sheetRow: i + 1,
           qtyColLetter:   colIdx2letter(sealedColIdx.iQty + 1),
@@ -1015,6 +1123,26 @@ async function loadStockCache() {
         });
       }
     }
+
+    // 4. Charger la liste des régimes TVA_Vente proposables (zone curée Scelle_Stock!AG8:AG23)
+    try {
+      const tvaData = await sheetsGet(`'${SHEET_SEALED}'!AG8:AG23`, CENTRAL_GSHEET_ID);
+      const raw = (tvaData.values || []).map(r => (r[0] || '').toString().trim());
+      const seen = new Set();
+      tvaVenteOptions = raw.filter(v => {
+        if (!v) return false;
+        if (isReservedValue(v)) return false;          // "réservée" = verrou, jamais un choix de vente
+        const k = normAccent(v);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    } catch (e) {
+      console.warn('Chargement liste TVA_Vente échoué, fallback minimal:', e);
+      tvaVenteOptions = [];
+    }
+    if (tvaVenteOptions.length === 0) tvaVenteOptions = ['Régime normal'];
+    populateTvaSelect();
 
     lastCacheRefresh = Date.now();
     updateCachePill('fresh');
@@ -1130,6 +1258,14 @@ async function processScan(rawValue) {
       return;
     }
 
+    if (item.reserved) {
+      statusEl.textContent = '🔒 ' + item.name + ' — réservée, vente bloquée';
+      showToast('🔒 Article réservé — vente bloquée', true);
+      if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+      scanZone.classList.remove('scanning');
+      return;
+    }
+
     addToCart(item);
     statusEl.textContent = '✓ ' + item.name + ' ajouté';
     showToast('✓ ' + item.name);
@@ -1157,6 +1293,7 @@ function lookupCard(key) {
     prixUnit: c.prix,
     prixOriginal: c.prix,
     source: 'cartes',
+    reserved: !!c.reserved,
     sheetRow: c.sheetRow
   };
 }
@@ -1173,6 +1310,7 @@ function lookupSealed(barcode) {
     prixUnit: s.prix,
     prixOriginal: s.prix,
     source: 'scelle',
+    reserved: !!s.reserved,
     sheetRow: s.sheetRow,
     qtyColLetter: s.qtyColLetter,
     cachedQty: s.qty
@@ -1256,6 +1394,7 @@ function clearCartSilent() {
   // Vide sans confirmation ni snapshot (après validation)
   cart = [];
   renderCart();
+  resetTvaSelect(); // le type de vente revient à "Régime normal" pour la vente suivante
   document.getElementById('scanStatus').textContent = 'En attente de scan…';
 }
 
@@ -1520,6 +1659,17 @@ async function validateSale() {
     showToast('⚠ Retirez les doublons rouges avant validation', true);
     return;
   }
+  // Acheteur obligatoire (saisi par le vendeur si le Master n'en fournit pas)
+  const acheteur = getResolvedBuyer();
+  if (!acheteur) {
+    showToast('⚠ Renseignez l\'acheteur avant de valider', true);
+    const input = document.getElementById('buyerInput');
+    if (input && !input.classList.contains('hidden')) input.focus();
+    return;
+  }
+  // Type de vente (TVA_Vente) — défaut "Régime normal"
+  const tvaSel = document.getElementById('tvaVenteSelect');
+  const tvaVente = (tvaSel && tvaSel.value) ? tvaSel.value : 'Régime normal';
 
   const btn = document.getElementById('btnValidate');
   btn.disabled = true;
@@ -1530,6 +1680,7 @@ async function validateSale() {
   const txId = now.getTime().toString();
 
   // Build rows : 1 ligne par item du panier (quantité = c.qty)
+  // Schéma ventes_detail : A:N — M=TVA_Vente, N=Acheteur (Synced/SyncedAt = O/P, gérés par Master)
   const rows = cart.map(c => [
     ts,
     safeForSheets(gUserName),
@@ -1542,10 +1693,12 @@ async function validateSale() {
     safeForSheets(c.licence),
     c.qty,
     c.prixUnit * c.qty,
-    c.source
+    c.source,
+    safeForSheets(tvaVente),
+    safeForSheets(acheteur)
   ]);
 
-  const payload = { range: `${SHEET_SALES}!A:L`, values: rows, ts, txId, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
+  const payload = { range: `${SHEET_SALES}!A:N`, values: rows, ts, txId, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
 
   // Online → append direct ; offline → queue
   if (!navigator.onLine) {
