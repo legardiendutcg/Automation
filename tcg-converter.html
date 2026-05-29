@@ -2,10 +2,32 @@
 <!--
 =============================================================
   TCG INTEGRATOR — Le Gardien du TCG (outil back-office)
-  Version : 1.0.0 (Session #7 — 2026-05-29)
+  Version : 1.1.0 (Session #8 — 2026-05-29)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.1.0  2026-05-29  Session #8 (portage des garde-fous de Sales/Master)
+         L'Integrator était le fichier d'origine, jamais repassé après la mise en
+         place des garde-fous de Sales/Master. Cette session porte les deux
+         protections éprouvées, sans changer le comportement pour des données normales.
+         - [Sécu 🔴] esc() ajouté (identique à Sales/Master) et appliqué à TOUTES les
+           interpolations de données dans innerHTML : table d'aperçu, cartes "séries
+           inconnues", lignes prix de lot, cartes à prix élevé, récap d'injection,
+           étiquettes. Corrige une XSS DOM possible via un nom de carte/série piégé
+           dans le CSV importé ou une valeur scrapée (vol du jeton OAuth à la clé).
+           → Les attributs id/data dynamiques sont aussi échappés ; getElementById
+             reste cohérent (il compare à l'id décodé par le navigateur), donc AUCUN
+             site de lecture n'a été modifié.
+         - [Sécu 🔴] safeForSheets() ajouté (identique à Sales/Master) et appliqué aux
+           seules colonnes TEXTE issues du CSV dans buildCardRow (Key, Origine, Code
+           Série, Nom Série, Nom Carte, Type, Etat). Empêche l'injection de formules
+           (=HYPERLINK/=IMAGE…) dans la GSheet centrale via USER_ENTERED. Les formules
+           posées volontairement (adaptF), le QR et le prix ne sont PAS touchés.
+         - [Robustesse] buildLotRow : les guillemets d'un nom de lot sont désormais
+           doublés avant insertion dans les chaînes COUNTIF/SUMIF (évite une formule
+           cassée/injectée si une origine contient un ").
+         - [Note] CSP/SRI, flux OAuth (implicite → PKCE) et stockage du jeton restent
+           à traiter dans une passe dédiée AVEC smoke test (OAuth + scraping).
   1.0.0  2026-05-29  Session #7 (correctifs de la revue de code)
          - [Fix 🟡] parseCSV : normalisation des fins de ligne CRLF/CR → LF
            (évite un \r résiduel collé en fin de dernière colonne).
@@ -1057,6 +1079,28 @@ function parsePrix(str) {
   return parseFloat(s) || 0;
 }
 
+// HTML escape pour innerHTML — empêche XSS si une cellule CSV/scrapée contient du HTML.
+// Aligné sur esc() de tcg-sales.html / tcg-master.html.
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Anti-injection de formules : préfixe d'une apostrophe les valeurs qui commenceraient
+// par = + - @ avant écriture dans Google Sheets (USER_ENTERED interpréterait sinon une formule).
+// Aligné sur safeForSheets() de tcg-sales.html / tcg-master.html.
+// N'appliquer qu'aux champs TEXTE libres (jamais aux formules posées volontairement ni aux prix).
+function safeForSheets(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  if (/^[=+\-@]/.test(s)) return "'" + s;
+  return s;
+}
+
 // ============================================================
 // CARD NUMBER LOGIC
 // ============================================================
@@ -1285,15 +1329,15 @@ function renderTable() {
       : r.typeCarte.includes('Holo') ? 'tag-holo' : 'tag-normal';
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="accent">${r.rank}</td>
-      <td>${r.langue}</td>
-      <td style="color:var(--muted);font-size:.68rem">${r.origine}</td>
-      <td class="blue">${r.codeSerie}</td>
-      <td>${r.nomSerie}</td>
-      <td style="white-space:nowrap">${r.nomCarte}</td>
-      <td><span class="tag ${tagClass}">${r.typeCarte}</span></td>
-      <td>${r.etat}</td>
-      <td class="accent">${r.prixStr}</td>
+      <td class="accent">${esc(r.rank)}</td>
+      <td>${esc(r.langue)}</td>
+      <td style="color:var(--muted);font-size:.68rem">${esc(r.origine)}</td>
+      <td class="blue">${esc(r.codeSerie)}</td>
+      <td>${esc(r.nomSerie)}</td>
+      <td style="white-space:nowrap">${esc(r.nomCarte)}</td>
+      <td><span class="tag ${tagClass}">${esc(r.typeCarte)}</span></td>
+      <td>${esc(r.etat)}</td>
+      <td class="accent">${esc(r.prixStr)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -1360,13 +1404,13 @@ function renderSeriesCheck() {
     card.id = `pk-${setCode}`;
     card.innerHTML = `
       <div>
-        <div class="pk-setcode">${setCode}</div>
-        <div class="pk-status loading" id="pk-st-${setCode}">Recherche...</div>
+        <div class="pk-setcode">${esc(setCode)}</div>
+        <div class="pk-status loading" id="pk-st-${esc(setCode)}">Recherche...</div>
       </div>
-      <div class="form-group"><label>Nom Série</label><input type="text" id="pk-nom-${setCode}" placeholder="Nom de la série"></div>
-      <div class="form-group"><label>Code_Serie GSheet</label><input type="text" id="pk-code-${setCode}" placeholder="ex: ME4.0"></div>
-      <div class="form-group"><label>Length</label><input type="number" id="pk-len-${setCode}" placeholder="ex: 86"></div>
-      <div class="form-group"><label>Extra</label><input type="text" id="pk-ext-${setCode}" placeholder="ex: TG30"></div>
+      <div class="form-group"><label>Nom Série</label><input type="text" id="pk-nom-${esc(setCode)}" placeholder="Nom de la série"></div>
+      <div class="form-group"><label>Code_Serie GSheet</label><input type="text" id="pk-code-${esc(setCode)}" placeholder="ex: ME4.0"></div>
+      <div class="form-group"><label>Length</label><input type="number" id="pk-len-${esc(setCode)}" placeholder="ex: 86"></div>
+      <div class="form-group"><label>Extra</label><input type="text" id="pk-ext-${esc(setCode)}" placeholder="ex: TG30"></div>
     `;
     body.appendChild(card);
   });
@@ -1484,14 +1528,14 @@ function renderPriceCheck() {
     div.id = `lp-row-${orig.replace(/[^a-zA-Z0-9]/g,'_')}`;
     div.innerHTML = `
       <div>
-        <div class="lot-name">${orig}</div>
+        <div class="lot-name">${esc(orig)}</div>
         <div class="lot-meta">${info.count} cartes · CM: €${info.totalCM.toFixed(2)}</div>
       </div>
       <div class="form-group">
         <label>Prix d'achat (€)</label>
         <input type="number" step="0.01" min="0" placeholder="0.00"
           id="lp-${orig.replace(/[^a-zA-Z0-9]/g,'_')}"
-          data-origine="${orig}"
+          data-origine="${esc(orig)}"
           oninput="onPriceInput(this)">
       </div>
     `;
@@ -1559,8 +1603,8 @@ function renderHighValueCheck() {
     div.innerHTML = `
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <div style="flex:1;min-width:0;">
-          <div class="lot-name">${r.codeSerie} — ${r.nomCarte} &nbsp; ${reason}</div>
-          <div class="lot-meta">CM : €${r.prixNum.toFixed(2)} · État : ${r.etat}</div>
+          <div class="lot-name">${esc(r.codeSerie)} — ${esc(r.nomCarte)} &nbsp; ${reason}</div>
+          <div class="lot-meta">CM : €${r.prixNum.toFixed(2)} · État : ${esc(r.etat)}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
           <span style="font-family:'Space Mono',monospace;font-size:.7rem;color:var(--muted);">Prix de vente €</span>
@@ -1633,7 +1677,7 @@ function prepareInjectionTab() {
     const div = document.createElement('div');
     div.style.cssText = 'padding:10px 0;border-bottom:1px solid var(--border);';
     div.innerHTML = `
-      <span class="mono" style="color:var(--accent2)">${orig}</span>
+      <span class="mono" style="color:var(--accent2)">${esc(orig)}</span>
       <span class="mono" style="color:var(--muted);margin-left:16px;">${info.count} cartes</span>
       <span class="mono" style="color:var(--accent);margin-left:16px;">€${info.totalCM.toFixed(2)} CM</span>
       <span class="mono" style="color:var(--success);margin-left:16px;">Achat: €${(lotPrices[orig]||0).toFixed(2)}</span>
@@ -1890,7 +1934,7 @@ function adaptFormula(formula, fromRow, toRow) {
 // ============================================================
 function buildLotRow(lotName, cardCount, prixAchat, cardsInLot, targetRow) {
   const totalCM = cardsInLot.reduce((s,r) => s+r.prixNum, 0);
-  const origineRef = `"${lotName}"`;
+  const origineRef = `"${String(lotName).replace(/"/g, '""')}"`;  // échappe les guillemets pour la chaîne de formule
   const dataRange = `${SHEET_NAME}!$F$${cardHeaderRow+1}:$F$99999`;
   const prixRange = `${SHEET_NAME}!$Q$${cardHeaderRow+1}:$Q$99999`;
   const R = targetRow;
@@ -1926,18 +1970,18 @@ function buildCardRow(r, lotName, dailySeq, formulaTemplates, refRow, targetRow)
   };
 
   return [
-    qrLink,         // C - QR_Link
-    key,            // D - Key
-    'Yes',          // E - Print_Etiquette
-    lotName,        // F - Origine
-    r.codeSerie,    // G - Code Série
-    r.nomSerie,     // H - Nom Série
-    r.nomCarte,     // I - Nom Carte
-    r.typeCarte,    // J - Type
-    r.etat,         // K - Etat
+    qrLink,                    // C - QR_Link (URL, encodeURIComponent → sûr)
+    safeForSheets(key),        // D - Key
+    'Yes',                     // E - Print_Etiquette
+    safeForSheets(lotName),    // F - Origine
+    safeForSheets(r.codeSerie),// G - Code Série
+    safeForSheets(r.nomSerie), // H - Nom Série
+    safeForSheets(r.nomCarte), // I - Nom Carte
+    safeForSheets(r.typeCarte),// J - Type
+    safeForSheets(r.etat),     // K - Etat
     '', '', '', '', // L M N O (masquées)
     '',             // P - Statut Carte
-    r.prixStr,      // Q - Prix vente
+    r.prixStr,      // Q - Prix vente (toujours préfixé "€", jamais une formule)
     '', '', '', '', // R S T U
     adaptF(0),      // V - Prix achat (formule pro-rata)
     adaptF(1),      // W - Marge
@@ -2413,7 +2457,7 @@ function renderLabelSheets() {
           <div class="z-logo"><img src="${LOGO_IMG}" alt="Logo"></div>
           <div class="z-qr">${card.qrUrl ? `<img src="${card.qrUrl}" alt="QR" loading="lazy" onerror="this.style.display='none'">` : ''}</div>
           <div class="z-text">
-            ${lines.map(l => `<span style="font-size:${infoSz}pt">${l}</span>`).join('')}
+            ${lines.map(l => `<span style="font-size:${infoSz}pt">${esc(l)}</span>`).join('')}
           </div>
           <div class="z-price"><span style="font-size:${priceSz}pt">${priceStr}</span></div>
         `;

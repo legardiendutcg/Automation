@@ -1,8 +1,23 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.6.3 (Session #8 — 2026-05-29)
+  Version : 1.7.0 (Session #9 — 2026-05-29)
 =============================================================
+  1.7.0  2026-05-29  Session #9 (Option 1 — vue stock publiée, vendeurs sans accès CENTRAL)
+         - [Feature 🔒] publishStockView() : master projette un sous-ensemble SÛR du stock
+           (Key, Kind, Code/Nom série, Nom, Type, Etat, PrixVente, Qty, Reserved) + la liste
+           TVA_Vente brute dans un nouvel onglet EVENTS/STOCK_PUBLIC. AUCUNE donnée de coût/marge.
+           Objectif : Sales lit le stock depuis EVENTS au lieu de CENTRAL → les vendeurs n'ont
+           plus besoin d'aucun accès à la GSheet CENTRAL (corrige R3 sans exposer les marges).
+         - La vue est réécrite à chaque loadStockCache (bootstrap, auto 5 min, refresh manuel) ;
+           publication encapsulée (un échec n'affecte pas le cache de master).
+         - [Support] Flag Reserved préservé : capture de TVA_Vente (carte col AF / scellé col AG —
+           lecture scellés étendue A:AF → A:AG, + iTvaVente dans sealedColIdx) ; helpers
+           normAccent()/isReservedValue() portés de Sales.
+         - [NB] Onglet STOCK_PUBLIC créé automatiquement, mais à PROTÉGER manuellement dans
+           l'UI Sheets (Données > Protéger les feuilles → seul le propriétaire édite) puisque
+           les vendeurs y sont Éditeurs sur EVENTS. La vue se ré-aligne seule à chaque publication.
+         - [Test requis] Changement de flux de données → valider avec Sales 1.9.0 avant mise en ligne.
   1.6.3  2026-05-29  Session #8 (alignement avec tcg-sales)
          - [Fix 🔴] Onglet cartes renommé "cartes_stock_et_transactions" (plus de "&")
            → corrige le 400 "Unable to parse range" depuis le renommage de la GSheet.
@@ -496,7 +511,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.6.3';
+const APP_VERSION      = '1.7.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -510,6 +525,10 @@ const SHEET_SEALED_TX = 'Scelle_Transactions';
 const SHEET_SALES     = 'ventes_detail';
 const SHEET_ANOMALIES = 'anomalies';
 const SHEET_STATE     = 'app_state';
+// Vue stock publiée dans la GSheet EVENTS pour Sales (Option 1) : ne contient QUE
+// les champs sûrs (pas de coûts/marges). Permet aux vendeurs de NE PLUS accéder à CENTRAL.
+const SHEET_STOCK_PUBLIC = 'STOCK_PUBLIC';
+const STOCK_PUBLIC_HEADERS = ['Key','Kind','CodeSerie','NomSerie','Nom','Type','Etat','PrixVente','Qty','Reserved'];
 
 const MASTER_EMAILS = ['legardiendutcg@gmail.com'];
 
@@ -604,6 +623,14 @@ function colIdx2letter(n) {
   let result = '';
   while (n > 0) { n--; result = String.fromCharCode(65 + (n % 26)) + result; n = Math.floor(n / 26); }
   return result;
+}
+// Réservation : une cellule TVA_Vente valant "réservée" (toutes variantes) bloque la vente.
+// Porté de tcg-sales.html pour pouvoir publier le flag Reserved dans la vue STOCK_PUBLIC.
+function normAccent(s) {
+  return String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+}
+function isReservedValue(s) {
+  return normAccent(s).startsWith('reserv');
 }
 function formatFrDate(d) {
   // dd/MM/yyyy
@@ -921,12 +948,13 @@ async function loadStockCache() {
         type:      (row[7] || '').toString().trim(),  // J
         etat:      (row[8] || '').toString().trim(),  // K
         prix:      parsePrix(row[14]),                 // Q (index 14)
+        reserved:  isReservedValue(row[29]),           // AF (TVA_Vente carte) = index 29 dans la lecture C:AF
         sheetRow:  cardHeaderRow + 1 + i
       });
     }
 
-    // Scelle_Stock (A:AF — Code Technique est en col AA depuis l'ajout de la col C Key)
-    const sealedData = await sheetsGet(a1(SHEET_SEALED, `A:AF`), CENTRAL_GSHEET_ID);
+    // Scelle_Stock (A:AG — TVA_Vente est en col AG ; nécessaire pour le flag Reserved publié)
+    const sealedData = await sheetsGet(a1(SHEET_SEALED, `A:AG`), CENTRAL_GSHEET_ID);
     const sRows = sealedData.values || [];
     if (sRows.length > 0) {
       // Détection dynamique de la ligne d'en-tête (le header n'est pas forcément en ligne 1)
@@ -958,6 +986,7 @@ async function loadStockCache() {
         iFactureAchat: find("Facture d'achat"),
         iPa:           find("Prix d'achat"),
         iTvaAchat:     find('TVA_Achat'),
+        iTvaVente:     find('TVA_Vente'),
         iPrix:         find('Côte/u') >= 0 ? find('Côte/u') : find('Côte Totale')
       };
       console.log('[SealedColIdx master] indices:', JSON.stringify(sealedColIdx));
@@ -977,6 +1006,7 @@ async function loadStockCache() {
           type:     (row[sealedColIdx.iType]      || 'Scellé').toString().trim(),
           nomSerie: (row[sealedColIdx.iNomSerie]  || '').toString().trim(),
           prix:     parsePrix(row[sealedColIdx.iPrix]),
+          reserved: sealedColIdx.iTvaVente >= 0 ? isReservedValue(row[sealedColIdx.iTvaVente]) : false,
           qty,
           sheetRow: i + 1,
           qtyColLetter: colIdx2letter(sealedColIdx.iQty + 1)
@@ -991,6 +1021,14 @@ async function loadStockCache() {
       if (txSheet) sealedTxSheetNumId = txSheet.properties.sheetId;
       console.log('[Cache] sealedTxSheetNumId:', sealedTxSheetNumId);
     } catch(e) { console.warn('sheetId fetch failed:', e); }
+
+    // Option 1 — publie la vue stock sûre vers EVENTS/STOCK_PUBLIC pour Sales (non bloquant).
+    try {
+      await publishStockView();
+    } catch (e) {
+      console.warn('publishStockView failed:', e);
+      logEvent('warn', 'Publication STOCK_PUBLIC échouée', { message: e && e.message });
+    }
 
     lastCacheRefresh = Date.now();
     updateCachePill('fresh');
@@ -1008,6 +1046,64 @@ async function loadStockCache() {
 async function refreshStockCache() {
   if (cacheLoading) return;
   await loadStockCache();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PUBLICATION VUE STOCK (Option 1) — master → EVENTS/STOCK_PUBLIC
+// ═══════════════════════════════════════════════════════════════
+// Master est le SEUL à lire CENTRAL. Il projette ici un sous-ensemble SÛR du stock
+// (aucune donnée de coût/marge) dans la GSheet EVENTS, que les vendeurs lisent à la
+// place de CENTRAL. Les vendeurs n'ont donc plus besoin d'aucun accès à CENTRAL.
+// Colonnes A:J = stock (STOCK_PUBLIC_HEADERS) ; colonne L = liste TVA_Vente brute
+// (Sales applique son propre filtrage). La vue est réécrite à chaque rafraîchissement
+// du cache (elle se ré-aligne donc toute seule si elle est modifiée par erreur).
+async function ensureStockPublicTab() {
+  const meta = await sheetsRequest('GET',
+    `https://sheets.googleapis.com/v4/spreadsheets/${EVENTS_GSHEET_ID}?fields=sheets.properties`);
+  const exists = (meta.sheets || []).some(s => s.properties.title === SHEET_STOCK_PUBLIC);
+  if (!exists) {
+    await sheetsRequest('POST',
+      `https://sheets.googleapis.com/v4/spreadsheets/${EVENTS_GSHEET_ID}:batchUpdate`,
+      { requests: [{ addSheet: { properties: { title: SHEET_STOCK_PUBLIC } } }] });
+    logEvent('info', 'Onglet STOCK_PUBLIC créé dans EVENTS');
+  }
+}
+
+async function publishStockView() {
+  await ensureStockPublicTab();
+
+  // 1. Lignes stock (cartes + scellés) à partir des caches déjà chargés
+  const stockRows = [STOCK_PUBLIC_HEADERS.slice()];
+  for (const c of stockCacheCards.values()) {
+    stockRows.push([
+      c.key, 'card', c.codeSerie || '', c.nomSerie || '', c.name || '',
+      c.type || '', c.etat || '', (c.prix || 0), 1, c.reserved ? '1' : ''
+    ]);
+  }
+  for (const s of stockCacheSealed.values()) {
+    stockRows.push([
+      s.key, 'sealed', '', s.nomSerie || '', s.name || '',
+      s.type || '', '', (s.prix || 0), (s.qty || 0), s.reserved ? '1' : ''
+    ]);
+  }
+
+  // 2. Liste TVA_Vente brute (zone curée Scelle_Transactions!AG8:AG23 dans CENTRAL).
+  //    Publiée telle quelle ; Sales applique son propre filtrage (réservée/pas vendu/doublons).
+  let tvaCol = [['TVA_Options_Raw']];
+  try {
+    const tvaData = await sheetsGet(a1(SHEET_SEALED_TX, `AG8:AG23`), CENTRAL_GSHEET_ID);
+    (tvaData.values || []).forEach(r => {
+      const v = (r[0] || '').toString().trim();
+      if (v) tvaCol.push([v]);
+    });
+  } catch (e) { console.warn('Lecture TVA pour publication échouée:', e); }
+
+  // 3. Vide l'ancien contenu (gère le cas où le stock a rétréci), puis réécrit.
+  await sheetsClear(a1(SHEET_STOCK_PUBLIC, 'A:L'), EVENTS_GSHEET_ID);
+  await sheetsUpdate(a1(SHEET_STOCK_PUBLIC, `A1:J${stockRows.length}`), stockRows, 'RAW', EVENTS_GSHEET_ID);
+  await sheetsUpdate(a1(SHEET_STOCK_PUBLIC, `L1:L${tvaCol.length}`), tvaCol, 'RAW', EVENTS_GSHEET_ID);
+
+  logEvent('info', 'STOCK_PUBLIC publié', { cartes: stockCacheCards.size, scelles: stockCacheSealed.size, tva: tvaCol.length - 1 });
 }
 
 function updateCachePill(state) {
