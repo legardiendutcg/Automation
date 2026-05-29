@@ -121,9 +121,9 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 | AD | Pays_Vente | |
 | AE | TVA_Achat | (position historique de cette table — à confirmer, voir note) |
 | AF | — | (à confirmer contre le sheet live) |
-| AG | **TVA_Vente** | Régime normal / vente intracommunautaire / cadeau / **réservée** (= verrou, §4). Liste curée des valeurs : `Scelle_Stock!AG8:AG23` |
+| AG | **TVA_Vente** | Régime normal / vente intracommunautaire / cadeau / **réservée** (= verrou, §4). Liste curée des valeurs : `Scelle_Transactions!AG8:AG23` |
 
-> ⚠️ **À revérifier (session #6)** — cette table (Scelle_Stock) est antérieure aux corrections et présente un décalage. Faits **vérifiés** : `TVA_Vente` est en **AG** sur les onglets scellés (liste autorisée en `Scelle_Stock!AG8:AG23`), et en **AF** sur `Cartes_Stock_&_Transactions`. La ligne de **transaction** écrite par Master a une colonne **A = « x »** en tête, et son ordre exact (différent de cette table : Key/Code Série notamment) est défini par `txRow` dans `applySealedSale` — **le code fait foi**. Les positions A→AF de cette table restent à confirmer contre le sheet live.
+> ⚠️ **À revérifier (session #6)** — cette table (Scelle_Stock) est antérieure aux corrections et présente un décalage. Faits **vérifiés** : `TVA_Vente` est en **AG** sur les onglets scellés (liste autorisée en `Scelle_Transactions!AG8:AG23`), et en **AF** sur `Cartes_Stock_&_Transactions`. La ligne de **transaction** écrite par Master a une colonne **A = « x »** en tête, et son ordre exact (différent de cette table : Key/Code Série notamment) est défini par `txRow` dans `applySealedSale` — **le code fait foi**. Les positions A→AF de cette table restent à confirmer contre le sheet live.
 
 ### Scelle_Transactions (historique, même structure de colonnes)
 - Même colonnes que Scelle_Stock
@@ -143,7 +143,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 ### Vente scellée (Sales)
 - Scanner EAN (`/^\d{8,14}$/`) → lookup `stockCacheSealed`
 - **Verrou** : si l'article a `TVA_Vente = "réservée"` (lu col AG, normalisé accents), le scan est bloqué (pas d'ajout au panier)
-- Sélecteur **TVA_Vente** (liste `Scelle_Stock!AG8:AG23`, « réservée » exclue, défaut "Régime normal") + champ **Acheteur** (lecture seule si Master publie un acheteur par défaut, sinon saisie vendeur obligatoire)
+- Sélecteur **TVA_Vente** (liste `Scelle_Transactions!AG8:AG23`, « réservée » exclue, défaut "Régime normal") + champ **Acheteur** (lecture seule si Master publie un acheteur par défaut, sinon saisie vendeur obligatoire)
 - Ajout au panier → validation → ligne dans `ventes_detail` (A:N) avec `source='scelle'`, `TVA_Vente` (col M) et `Acheteur` (col N)
 
 ### Sync (Master — `applySealedSale`)
@@ -163,7 +163,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 ## 5. État Actuel — Fin Session #6 (29/05/2026)
 
 ### ✅ Terminé en session #6 (apps en v1.6.0)
-- **[Feature] Sélecteur TVA_Vente côté Sales** : liste lue dans `Scelle_Stock!AG8:AG23` (source curée, « réservée » exclue du menu), défaut "Régime normal", valeur jointe à chaque vente via `ventes_detail` col M, écrite par Master en **AG (scellé) / AF (carte)**.
+- **[Feature] Sélecteur TVA_Vente côté Sales** : liste lue dans `Scelle_Transactions!AG8:AG23` (source curée, « réservée » exclue du menu), défaut "Régime normal", valeur jointe à chaque vente via `ventes_detail` col M, écrite par Master en **AG (scellé) / AF (carte)**.
 - **[Feature] Verrou « réservée »** : un article dont `TVA_Vente = "réservée"` est bloqué au scan côté Sales (lecture col AG scellé / AF carte, comparaison normalisée accents).
 - **[Feature] Acheteur côté Sales** : si Master publie un **acheteur par défaut** (`app_state` col D) → affiché en lecture seule à tous les vendeurs ; sinon le vendeur le saisit (obligatoire, validation bloquée si vide). Transite via `ventes_detail` col N. Découplage **session (gate sync, cols U/AD)** vs **acheteur (col Q/R)**.
 - **[Bug corrigé] Scellé : col AG (TVA_Vente) jamais écrite** — `txRow[32]` était calculé mais absent de `staticCols` ⇒ AG restait vide. Ajouté.
@@ -192,7 +192,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 ## 6. Prochaines Étapes (dans l'ordre)
 
 ### ✅ Livré en session #6 (v1.6.0)
-1. ~~**[Sales] Choix du type de vente (TVA_Vente)**~~ — fait. Source = `Scelle_Stock!AG8:AG23`, écrit en AG (scellé) / AF (carte).
+1. ~~**[Sales] Choix du type de vente (TVA_Vente)**~~ — fait. Source = `Scelle_Transactions!AG8:AG23`, écrit en AG (scellé) / AF (carte).
 2. ~~**[Sales] Choix de l'acheteur**~~ — fait via modèle Master-autoritaire (acheteur par défaut publié dans `app_state` col D ; sinon saisie vendeur). La détection Levenshtein d'uniformisation est **descopée** (le modèle Master-autoritaire supprime la divergence à la source) → reléguée au backlog si un jour besoin.
 
 ### 🔥 Priorité haute — à challenger en début de prochaine session
@@ -254,7 +254,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 | #3 | 28/05/2026 | Split Scelle_Stock/Scelle_Transactions, col C Key, applySealedSale, renommage sans accent (onglets), document de contexte |
 | #4 | 28/05/2026 | Migration GitHub Pages, nouveau projet OAuth Google Cloud, fix constantes SHEET_SEALED/_TX, détection dynamique header scellé, cache fonctionnel à 4155 items |
 | #5 | 28/05/2026 | Flow scellé end-to-end validé (master 1.5.10 / sales 1.5.3) ; durcissements 1.5.x (arrondi unitPa, fail explicite sheetId, UNFORMATTED_VALUE, locale parsePrix) |
-| #6 | 29/05/2026 | Challenge + implémentation features TVA_Vente & Acheteur (v1.6.0) ; fix bug AG jamais écrit (scellé) ; verrou « réservée » ; découplage session/acheteur ; correction off-by-one table §3 ; non-bug cartes (TVA_Vente=AF) confirmé |
+| #6 | 29/05/2026 | Challenge + implémentation features TVA_Vente & Acheteur (v1.6.0) ; fix bug AG jamais écrit (scellé) ; verrou « réservée » ; découplage session/acheteur ; correction off-by-one table §3 ; non-bug cartes (TVA_Vente=AF) confirmé. Fix v1.6.1 (Sales) : liste TVA_Vente lue dans `Scelle_Transactions` (et non `Scelle_Stock`). Mapping versions divergent assumé : **Sales 1.6.1 / Master 1.6.0** (patch Sales seul). |
 
 ---
 
@@ -262,7 +262,8 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 
 | Version | Date | App(s) | Changements |
 |---------|------|--------|-------------|
-| 1.6.0 | 29/05/2026 | Sales + Master | Sélecteur TVA_Vente (source `Scelle_Stock!AG8:AG23`, écrit AG scellé / AF carte) · fix bug AG jamais écrit (scellé) · verrou « réservée » au scan · acheteur Sales↔Master (`app_state` col D) avec découplage session/acheteur · `ventes_detail` → A:N (M=TVA_Vente, N=Acheteur) |
+| 1.6.1 | 29/05/2026 | Sales | Fix : liste TVA_Vente lue dans `Scelle_Transactions!AG8:AG23` (pointait par erreur sur `Scelle_Stock`, d'où le menu réduit à « Régime normal ») |
+| 1.6.0 | 29/05/2026 | Sales + Master | Sélecteur TVA_Vente (source `Scelle_Transactions!AG8:AG23`, écrit AG scellé / AF carte) · fix bug AG jamais écrit (scellé) · verrou « réservée » au scan · acheteur Sales↔Master (`app_state` col D) avec découplage session/acheteur · `ventes_detail` → A:N (M=TVA_Vente, N=Acheteur) |
 | 1.5.1 | 28/05/2026 | Sales | Panneau de scan : retrait du prix (affiché uniquement dans le panier) |
 | 1.5.0 | 28/05/2026 | Sales + Master | sealedColIdx entièrement dynamique · iPrix = Côte/u (col M) · txRow 33 cols (col A = "x") · append A1 · retry ×3 avant anomalie · version badge dans UI |
 | 1.4.0 | 28/05/2026 | Sales + Master | Migration GitHub Pages · nouveau projet OAuth · fix constantes SHEET_SEALED/_TX · détection dynamique header scellé |

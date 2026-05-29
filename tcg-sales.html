@@ -1,12 +1,16 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.6.0 (Session #6 — 2026-05-29)
+  Version : 1.6.1 (Session #6 — 2026-05-29)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.6.1  2026-05-29  Session #6
+         - [Fix] Liste TVA_Vente lue dans le bon onglet : Scelle_Transactions!AG8:AG23
+           (était pointé par erreur sur Scelle_Stock, d'où le fallback "Régime normal" seul).
+
   1.6.0  2026-05-29  Session #6
-         - [Feature] Sélecteur TVA_Vente : liste lue dans Scelle_Stock!AG8:AG23
+         - [Feature] Sélecteur TVA_Vente : liste lue dans Scelle_Transactions!AG8:AG23
            (source curée), défaut "Régime normal", valeur jointe à chaque ligne
            de vente (nouvelle col M de ventes_detail). "réservée" exclu du menu.
          - [Feature] Verrou "réservée" : un article dont la col TVA_Vente vaut
@@ -511,7 +515,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.6.0';
+const APP_VERSION      = '1.6.1';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -521,6 +525,7 @@ const GSHEET_SCOPES      = 'https://www.googleapis.com/auth/spreadsheets';
 // Tabs (Central GSheet)
 const SHEET_CARDS  = 'Cartes_Stock_&_Transactions';
 const SHEET_SEALED = 'Scelle_Stock';
+const SHEET_SEALED_TX = 'Scelle_Transactions';
 
 // Tabs (Events GSheet)
 const SHEET_SALES     = 'ventes_detail';
@@ -554,7 +559,7 @@ let gUserName    = '';
 
 // Master status (lu via app_state)
 let masterStatus = { state: 'unknown', message: '—', ts: null, eventName: '', device: '', defaultBuyer: '', lastReadAt: 0 };
-// Liste des régimes TVA_Vente proposables au vendeur (lue dans Scelle_Stock!AG8:AG23, "réservée" exclu)
+// Liste des régimes TVA_Vente proposables au vendeur (lue dans Scelle_Transactions!AG8:AG23, "réservée" exclu)
 let tvaVenteOptions = [];
 
 // Cart : { uid, key, name, type, category, licence, qty, prixUnit, prixOriginal, source, rowRef?, currentQty?, sheetRow?, qtyColLetter?, etat?, dupStatus?, priceModified? }
@@ -1124,9 +1129,9 @@ async function loadStockCache() {
       }
     }
 
-    // 4. Charger la liste des régimes TVA_Vente proposables (zone curée Scelle_Stock!AG8:AG23)
+    // 4. Charger la liste des régimes TVA_Vente proposables (zone curée Scelle_Transactions!AG8:AG23)
     try {
-      const tvaData = await sheetsGet(`'${SHEET_SEALED}'!AG8:AG23`, CENTRAL_GSHEET_ID);
+      const tvaData = await sheetsGet(`'${SHEET_SEALED_TX}'!AG8:AG23`, CENTRAL_GSHEET_ID);
       const raw = (tvaData.values || []).map(r => (r[0] || '').toString().trim());
       const seen = new Set();
       tvaVenteOptions = raw.filter(v => {
