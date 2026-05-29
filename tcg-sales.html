@@ -5,6 +5,26 @@
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.8.1  2026-05-29  Session #9
+         - [Fix] moveToAnomalies écrit dans le vrai schéma de l'onglet anomalies (A:K) :
+           une ligne par article (Timestamp, TX_ID, Vendeur, Clé/Barcode, Nom article,
+           Source, Type anomalie = "SALES_NOT_SYNCED", Détails, Synced_From_Row, Resolved,
+           Notes = payload JSON sur la 1ère ligne pour rejeu manuel).
+
+  1.8.0  2026-05-29  Session #9
+         - [Feature] Outbox idempotent : toute vente est mise en file d'abord (état
+           'pending'), puis envoyée. L'entrée n'est retirée que sur confirmation.
+         - [Feature] Idempotence par relecture : avant de renvoyer une entrée dont
+           l'issue est inconnue ('sent'), on relit ventes_detail!D (txId) pour savoir
+           si l'envoi a abouti → plus de doublon si la réponse réseau s'est perdue,
+           plus de perte si l'envoi a échoué (sémantique "exactement une fois").
+         - [Feature] Échec définitif (4xx) ou après MAX_SALE_RETRIES → bascule dans
+           l'onglet "anomalies" (marqueur TCG_SALES_DEADLETTER, payload complet joint).
+         - [Feature] Dead-letter local : si même l'écriture anomalies échoue, la vente
+           est conservée en localStorage + bandeau rouge "Réessayer" → ZÉRO perte silencieuse.
+         - [Feature] Journalisation du cycle de vie : mise en file → envoi → confirmée
+           / réessai / anomalies (logEvent, récupérable via exportLog()).
+
   1.7.0  2026-05-29  Session #8
          - [UI] Zoom réactivé (retrait de maximum-scale) + passe d'optimisation
            smartphone (media query <=560px : cibles tactiles agrandies, tailles lisibles).
@@ -347,6 +367,12 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
       ⏳ <span id="offlineQueueCount">0</span> vente(s) en attente de synchronisation
     </div>
 
+    <!-- Dead-letter : ventes en échec définitif, conservées localement -->
+    <div id="deadLetterBar" class="master-status-bar err hidden" style="display:flex;align-items:center;gap:10px;justify-content:center;">
+      <span>⛔ <span id="deadLetterCount">0</span> vente(s) en échec — conservée(s) localement</span>
+      <button class="btn btn-secondary btn-sm" onclick="retryDeadLetter()">↻ Réessayer</button>
+    </div>
+
     <!-- Scan zone -->
     <div class="scan-zone" id="scanZone" onclick="focusScan()">
       <span class="scan-icon">📷</span>
@@ -506,7 +532,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.7.0';
+const APP_VERSION      = '1.8.1';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -540,6 +566,8 @@ const LS_LAST_CART     = 'tcg_sales_last_cart_v2';
 const LS_TOKEN         = 'tcg_sales_token_v2';
 const LS_LOG           = 'tcg_sales_log_v1';   // journal d'événements (anneau)
 const LOG_MAX          = 300;                  // nombre max d'entrées conservées
+const LS_DEADLETTER    = 'tcg_sales_deadletter_v1'; // ventes en échec définitif (jamais perdues)
+const MAX_SALE_RETRIES = 5;                    // au-delà → bascule en anomalies
 
 // ═══════════════════════════════════════════════════════════════
 // STATE
@@ -572,8 +600,9 @@ let cacheLoading     = false;
 let eventLog = [];
 
 // Offline queue
-let offlineQueue = []; // [{ payload, timestamp, retries }]
+let offlineQueue = []; // [{ payload, queuedAt, retries, state:'pending'|'sent' }]
 let flushingQueue = false;
+let deadLetter = [];   // ventes en échec définitif (anomalies inaccessibles) — jamais perdues
 
 // Last cleared cart (for restore)
 let lastClearedCart = null;
@@ -1738,15 +1767,15 @@ async function validateSale() {
 
   const btn = document.getElementById('btnValidate');
   btn.disabled = true;
-  btn.textContent = '⏳ Enregistrement…';
 
   const now = new Date();
   const ts  = now.toISOString();
-  // txId unique : horodatage + suffixe aléatoire (sert de clé d'idempotence côté Master)
+  // txId unique : horodatage + suffixe aléatoire. Sert de CLÉ D'IDEMPOTENCE :
+  // c'est lui qu'on relit dans ventes_detail!D pour savoir si l'envoi a abouti.
   const txId = now.getTime().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
   // Build rows : 1 ligne par item du panier (quantité = c.qty)
-  // Schéma ventes_detail : A:N — M=TVA_Vente, N=Acheteur (Synced/SyncedAt = O/P, gérés par Master)
+  // Schéma ventes_detail : A:N — D=txId, M=TVA_Vente, N=Acheteur (Synced/SyncedAt = O/P, Master)
   const rows = cart.map(c => [
     ts,
     safeForSheets(gUserName),
@@ -1764,65 +1793,158 @@ async function validateSale() {
     safeForSheets(acheteur)
   ]);
 
-  const payload = { range: a1(SHEET_SALES, 'A:N'), values: rows, ts, txId, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
+  const total = getCartTotal(); // capturer AVANT de vider
+  const payload = { range: a1(SHEET_SALES, 'A:N'), values: rows, ts, txId, total, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
 
-  // Online → append direct ; offline → queue
-  if (!navigator.onLine) {
-    queueOfflineSale(payload);
-    showToast(`✓ Vente mise en file (${rows.length} art.) · ${formatPrice(getCartTotal())}`);
-    clearCartSilent();
-    btn.textContent = '✓ Valider la vente';
-    updateValidateButton();
-    return;
-  }
-
-  try {
-    await sheetsAppend(payload.range, payload.values, 'USER_ENTERED', EVENTS_GSHEET_ID);
-    showToast(`✓ Vente enregistrée · ${formatPrice(getCartTotal())}`);
-    clearCartSilent();
-  } catch (e) {
-    // Échec online → mettre en queue
-    console.warn('Append failed, queuing:', e);
-    queueOfflineSale(payload);
-    showToast(`⚠ Erreur API · vente mise en file`, true);
-    clearCartSilent();
-  }
-
+  // OUTBOX : on met TOUJOURS en file d'abord (état 'pending'), puis on tente l'envoi.
+  // Rien n'est jamais perdu : tant que l'envoi n'est pas confirmé, l'entrée reste en file.
+  queueOfflineSale(payload);
+  logEvent('info', 'vente mise en file', { txId, n: rows.length, total, online: navigator.onLine });
+  clearCartSilent();
   btn.textContent = '✓ Valider la vente';
   updateValidateButton();
+
+  if (navigator.onLine && isAuth()) {
+    showToast(`✓ Vente validée · envoi… (${rows.length} art.) · ${formatPrice(total)}`);
+    flushOfflineQueue(); // confirme / bascule en anomalies en arrière-plan
+  } else {
+    showToast(`✓ Vente mise en file (${rows.length} art.) · ${formatPrice(total)}`);
+  }
 }
 
 function queueOfflineSale(payload) {
-  offlineQueue.push({ payload, queuedAt: Date.now(), retries: 0 });
+  // state : 'pending' (jamais tentée) → 'sent' (tentée, issue à confirmer par relecture)
+  offlineQueue.push({ payload, queuedAt: Date.now(), retries: 0, state: 'pending' });
   persistOfflineQueue();
+}
+
+// Relit ventes_detail!D (colonne txId) pour savoir si une vente a bien atterri.
+// → true (présente) / false (absente) / null (relecture impossible = inconnu)
+async function saleAlreadyRecorded(txId) {
+  try {
+    const r = await sheetsGet(a1(SHEET_SALES, 'D:D'), EVENTS_GSHEET_ID);
+    const col = (r.values || []).map(row => (row[0] || '').toString().trim());
+    return col.includes(txId);
+  } catch (e) {
+    logEvent('warn', 'relecture txId impossible', { txId, err: e.message });
+    return null;
+  }
+}
+
+// Échec définitif : on bascule la vente dans l'onglet anomalies (visible côté Master).
+// Schéma anomalies (A:K) : Timestamp · TX_ID · Vendeur · Clé/Barcode · Nom article ·
+//   Source · Type anomalie · Détails · Synced_From_Row · Resolved · Notes
+// → une ligne par article de la vente (aligné sur la convention par-ligne du Master).
+// Si même cette écriture échoue → dead-letter local persistant : JAMAIS de perte silencieuse.
+async function moveToAnomalies(entry, reason) {
+  const p = entry.payload;
+  const vals = p.values || [];
+  // vals[i] = [ts, vendeur, email, txId, clé, nom, type, cat, licence, qty, total, source, tva, acheteur]
+  let rows = vals.map((r, idx) => [
+    p.ts,                                       // A Timestamp
+    p.txId,                                     // B TX_ID
+    safeForSheets(gUserName || (r[1] || '')),   // C Vendeur
+    safeForSheets(r[4] || ''),                  // D Clé/Barcode
+    safeForSheets(r[5] || ''),                  // E Nom article
+    safeForSheets(r[11] || ''),                 // F Source
+    'SALES_NOT_SYNCED',                         // G Type anomalie
+    safeForSheets(reason),                      // H Détails
+    '',                                         // I Synced_From_Row (n'a jamais atteint ventes_detail)
+    '',                                         // J Resolved
+    idx === 0 ? safeForSheets(JSON.stringify(vals)) : '' // K Notes : payload complet (1ère ligne) pour rejeu manuel
+  ]);
+  if (rows.length === 0) {
+    rows = [[ p.ts, p.txId, safeForSheets(gUserName || ''), '', '', '', 'SALES_NOT_SYNCED', safeForSheets(reason), '', '', '' ]];
+  }
+  try {
+    await sheetsAppend(a1(SHEET_ANOMALIES, 'A:K'), rows, 'RAW', EVENTS_GSHEET_ID);
+    logEvent('error', 'vente déplacée en anomalies', { txId: p.txId, reason, n: rows.length });
+    showToast('⚠ Vente en échec déplacée en anomalies (à vérifier)', true);
+  } catch (e) {
+    deadLetter.push({ payload: p, reason, at: Date.now(), anomalyErr: e.message });
+    persistDeadLetter();
+    logEvent('error', 'écriture anomalies échouée → dead-letter local', { txId: p.txId, err: e.message });
+    showToast('⛔ Vente NON synchronisée — conservée localement (voir bandeau rouge)', true);
+  }
 }
 
 async function flushOfflineQueue() {
   if (flushingQueue || offlineQueue.length === 0 || !isAuth() || !navigator.onLine) return;
   flushingQueue = true;
-  const failed = [];
+  const stillQueued = [];
   for (const entry of offlineQueue) {
+    const txId = entry.payload.txId;
     try {
+      // Entrée déjà tentée (issue inconnue) → on vérifie d'abord par relecture
+      if (entry.state === 'sent') {
+        const rec = await saleAlreadyRecorded(txId);
+        if (rec === true) { logEvent('info', 'vente confirmée (relecture)', { txId }); continue; }
+        if (rec === null) { stillQueued.push(entry); continue; } // vérif impossible → on retentera
+        // rec === false → l'envoi n'a pas abouti : on (re)tente ci-dessous
+      }
+      // Marque 'sent' AVANT l'appel réseau et persiste : si la réponse se perd,
+      // le prochain passage vérifiera par relecture au lieu de renvoyer en aveugle.
+      entry.state = 'sent';
+      persistOfflineQueue();
       await sheetsAppend(entry.payload.range, entry.payload.values, 'USER_ENTERED', EVENTS_GSHEET_ID);
+      logEvent('info', 'vente enregistrée', { txId, n: entry.payload.values.length });
+      // succès → confirmée, on ne la remet pas en file
     } catch (e) {
-      entry.retries++;
-      if (entry.retries < 5) failed.push(entry);
-      else console.error('Drop entry after 5 retries:', entry, e);
+      // 4xx (hors 429) = rejet définitif → anomalies, pas de réessai
+      if (e instanceof HttpError && e.status >= 400 && e.status < 500 && e.status !== 429) {
+        await moveToAnomalies(entry, 'HTTP_' + e.status + ': ' + e.message);
+        continue;
+      }
+      entry.retries = (entry.retries || 0) + 1;
+      logEvent('warn', 'échec envoi vente', { txId, retries: entry.retries, err: e.message });
+      if (entry.retries >= MAX_SALE_RETRIES) {
+        await moveToAnomalies(entry, 'MAX_RETRIES (' + entry.retries + ') · dernier: ' + e.message);
+      } else {
+        stillQueued.push(entry); // reste 'sent' → vérif au prochain passage
+      }
     }
   }
-  offlineQueue = failed;
+  const before = offlineQueue.length;
+  offlineQueue = stillQueued;
   persistOfflineQueue();
   flushingQueue = false;
-  if (failed.length === 0) showToast('✓ File offline vidée');
-  else showToast(`⚠ ${failed.length} vente(s) en attente`, true);
+  if (before > 0 && stillQueued.length === 0 && deadLetter.length === 0) {
+    showToast('✓ Toutes les ventes sont synchronisées');
+  }
 }
 
 function renderOfflineQueueBar() {
   const bar = document.getElementById('offlineQueueBar');
   const countEl = document.getElementById('offlineQueueCount');
-  if (offlineQueue.length === 0) { bar.classList.add('hidden'); return; }
+  if (offlineQueue.length === 0) { bar.classList.add('hidden'); }
+  else { bar.classList.remove('hidden'); countEl.textContent = offlineQueue.length; }
+  renderDeadLetterBar();
+}
+
+function persistDeadLetter() {
+  lsSave(LS_DEADLETTER, deadLetter);
+  renderDeadLetterBar();
+}
+
+function renderDeadLetterBar() {
+  const bar = document.getElementById('deadLetterBar');
+  if (!bar) return;
+  if (deadLetter.length === 0) { bar.classList.add('hidden'); return; }
   bar.classList.remove('hidden');
-  countEl.textContent = offlineQueue.length;
+  const c = document.getElementById('deadLetterCount');
+  if (c) c.textContent = deadLetter.length;
+}
+
+// Réessayer les ventes en dead-letter : on les remet en file et on flush.
+function retryDeadLetter() {
+  if (deadLetter.length === 0) return;
+  deadLetter.forEach(d => offlineQueue.push({ payload: d.payload, queuedAt: Date.now(), retries: 0, state: 'pending' }));
+  deadLetter = [];
+  persistDeadLetter();
+  persistOfflineQueue();
+  logEvent('info', 'dead-letter remis en file');
+  showToast('↻ Ré-essai des ventes en échec…');
+  flushOfflineQueue();
 }
 
 
@@ -1848,6 +1970,7 @@ async function init() {
   logEvent('info', 'Démarrage app v' + APP_VERSION);
   // Restore offline queue
   offlineQueue = lsLoad(LS_OFFLINE_QUEUE, []);
+  deadLetter   = lsLoad(LS_DEADLETTER, []);
   renderOfflineQueueBar();
 
   // Restore cart from previous session
