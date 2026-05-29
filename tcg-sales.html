@@ -1,10 +1,34 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.9.2 (Session #10 — 2026-05-29)
+  Version : 1.9.3 (Session #10 — 2026-05-29)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.9.3  2026-05-29  Session #10 (peaufinage UI vendeur — patch Sales seul)
+         ⚠️ 1.10.0 reste RÉSERVÉ au jalon Auth GIS (Sales + Master ensemble).
+         - [UI] Saisie au CLAVIER partout (rouleaux supprimés) : quantité d'un article,
+           prix unitaire d'un article et total du panier passent par des champs numériques
+           (inputmode numeric/decimal) → clavier natif du téléphone.
+         - [UI] Prix UNITAIRE éditable par ligne : toucher le prix ouvre la correction de
+           la côte de CET article uniquement (utile si la valeur GSheet est périmée),
+           sans répartir sur tout le panier. Prix corrigé affiché en couleur "modifié".
+           Le total reste éditable séparément (répartition proportionnelle au centime).
+         - [UI] 🗑 de suppression à gauche de chaque ligne remplie (plus direct que de
+           forcer la quantité à 0 — qui reste possible via le champ quantité).
+         - [UI] Le prix affiché par ligne est désormais le prix UNITAIRE (cohérent avec
+           l'édition à l'unité) ; le grand total en bas fait foi.
+         - [UI] Numéro de version rendu lisible sur mobile (taille/contraste, le titre
+           rétrécit au besoin sans masquer la version).
+         - [UI] Police du nom d'acheteur / type de vente réduite.
+         - [UI] Bouton "Valider la vente" agrandi : même police et taille que la valeur
+           du total (Syne 800, jusqu'à 2.5rem) ; passe en mode compact pour les messages
+           d'alerte (doublon bloquant / acheteur manquant).
+         - [Confirme] Le scan caméra de secours décode codes-barres (EAN/UPC/Code128/
+           Code39) ET QR codes via BarcodeDetector natif (invite mise à jour).
+         - Aucune modification du protocole de vente, des schémas GSheet, de l'outbox ni
+           de la sécurité. Master & Integrator NON touchés.
+
   1.9.2  2026-05-29  Session #10 (refonte UI vendeur — patch Sales seul, UX/cosmétique)
          ⚠️ 1.10.0 reste RÉSERVÉ au jalon Auth GIS (Sales + Master ensemble).
          - [UI] Refonte complète en 3 zones tenant dans un écran de smartphone SANS
@@ -200,12 +224,12 @@ body::before{content:'';position:fixed;inset:0;
 .brand-logo{height:76px;width:76px;flex:0 0 auto;border-radius:15px;object-fit:cover;
   background:#b81e1e;border:1px solid var(--border);}
 .brand-right{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:6px;}
-.brand-titlerow{display:flex;align-items:baseline;gap:6px;overflow:hidden;}
+.brand-titlerow{display:flex;align-items:baseline;gap:7px;flex-wrap:nowrap;}
 .brand-titlerow h1{font-size:clamp(1.7rem,8.4vw,2.15rem);font-weight:800;letter-spacing:-.05em;
-  line-height:.9;white-space:nowrap;flex:0 1 auto;}
+  line-height:.9;white-space:nowrap;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
 .brand-titlerow h1 span{color:var(--accent);}
-.version-tag{font-family:'Space Mono',monospace;font-size:.52rem;color:var(--muted);
-  letter-spacing:.04em;white-space:nowrap;flex:0 0 auto;}
+.version-tag{font-family:'Space Mono',monospace;font-size:.62rem;font-weight:700;color:var(--dim);
+  letter-spacing:.03em;white-space:nowrap;flex:0 0 auto;}
 .brand-conns{display:flex;align-items:center;gap:6px;}
 .net-dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:var(--success);}
 .net-dot.off{background:var(--accent3);}
@@ -280,16 +304,20 @@ body::before{content:'';position:fixed;inset:0;
 
 /* ── Cart (lignes d'articles ; total déplacé en zone bas) ── */
 .cart-item{background:var(--bg);border:1px solid var(--border);border-radius:9px;
-  padding:8px 11px;display:flex;align-items:center;gap:9px;flex:0 0 auto;}
+  padding:8px 11px;display:flex;align-items:center;gap:8px;flex:0 0 auto;}
 .cart-item.dup-orange{border:2px solid #fb923c;background:rgba(251,146,60,.06);}
 .cart-item.dup-red{border:2px solid var(--accent3);background:rgba(255,107,107,.07);}
+.ci-del{flex:0 0 auto;align-self:center;background:transparent;border:none;cursor:pointer;
+  font-size:1.05rem;line-height:1;padding:2px;opacity:.85;}
+.ci-del:active{opacity:1;transform:scale(.92);}
 .ci-qty{flex:0 0 auto;align-self:center;font-family:'Space Mono',monospace;font-size:.85rem;
   font-weight:700;color:var(--text);border:1px dashed var(--border);border-bottom-color:var(--accent2);
   border-radius:6px;padding:4px 7px;cursor:pointer;user-select:none;}
 .ci-name{flex:1;min-width:0;font-size:.92rem;font-weight:700;line-height:1.2;color:var(--text);}
 .ci-price{float:right;margin-left:10px;font-family:'Space Mono',monospace;font-size:.9rem;
-  font-weight:700;color:var(--accent);}
-.ci-name.modified .ci-price{color:var(--warning);}
+  font-weight:700;color:var(--accent);cursor:pointer;border-bottom:1px dashed transparent;}
+.ci-price:active{border-bottom-color:var(--accent);}
+.ci-price.modified{color:var(--warning);border-bottom-color:rgba(251,191,36,.5);}
 
 .cart-empty{text-align:center;padding:14px;font-family:'Space Mono',monospace;
   font-size:.6rem;color:var(--muted);}
@@ -414,10 +442,10 @@ body::before{content:'';position:fixed;inset:0;
 .bot-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
 .bot-field{min-width:0;}
 .bot-field input,.bot-select{width:100%;background:var(--bg);border:1px solid var(--border);
-  border-radius:9px;padding:11px;color:var(--text);font-family:'Syne',sans-serif;font-size:.92rem;outline:none;}
+  border-radius:9px;padding:11px;color:var(--text);font-family:'Syne',sans-serif;font-size:.8rem;outline:none;}
 .bot-field input::placeholder{color:var(--muted);}
 .bot-field input:focus,.bot-select:focus{border-color:var(--accent);}
-.buyer-locked{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:11px;font-size:.92rem;
+.buyer-locked{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:11px;font-size:.8rem;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .buyer-locked #buyerLockedName{font-weight:700;}
 
@@ -439,12 +467,16 @@ body::before{content:'';position:fixed;inset:0;
   font-size:.8rem;display:none;align-items:center;justify-content:center;}
 .total-display.modified .total-reset{display:flex;}
 
-/* ── Gros bouton Valider (même hauteur que le total) ── */
+/* ── Gros bouton Valider : même police/taille que la valeur du total ── */
 .btn-validate{height:60px;width:100%;background:var(--accent);color:#0a0c10;border:none;
-  border-radius:12px;font-family:'Space Mono',monospace;font-size:.82rem;font-weight:700;
-  text-transform:uppercase;letter-spacing:.06em;cursor:pointer;transition:background .15s;}
+  border-radius:12px;font-family:'Syne',sans-serif;font-weight:800;letter-spacing:-.01em;
+  font-size:clamp(1.55rem,7vw,2.5rem);line-height:1;cursor:pointer;transition:background .15s;
+  white-space:nowrap;overflow:hidden;padding:0 8px;}
 .btn-validate:not(:disabled):active{background:#f5ff7a;}
 .btn-validate:disabled{opacity:.45;cursor:not-allowed;}
+/* Messages d'alerte (doublon, acheteur manquant) : compact et lisible */
+.btn-validate.warn{font-family:'Space Mono',monospace;font-weight:700;font-size:.78rem;
+  text-transform:uppercase;letter-spacing:.05em;white-space:normal;}
 
 /* ── Rouleaux (picker de total) — bottom sheet ── */
 .reels-backdrop{align-items:flex-end;padding:0;}
@@ -578,7 +610,7 @@ body::before{content:'';position:fixed;inset:0;
             <video id="camVideo" playsinline muted></video>
             <div class="cam-overlay">
               <div class="cam-frame"><i></i><i></i><i></i><i></i><span class="cam-line"></span></div>
-              <div class="cam-text" id="camText">Caméra · visez le code-barres</div>
+              <div class="cam-text" id="camText">Visez un code-barres ou un QR code</div>
             </div>
             <div class="cam-start" id="camStart">
               <button class="btn btn-secondary" onclick="startCamera()">📷 Activer la caméra</button>
@@ -612,7 +644,7 @@ body::before{content:'';position:fixed;inset:0;
       </div>
 
       <!-- Total : tap → rouleaux. Bicolore quand modifié (origine barré | nouveau) -->
-      <div class="total-display" id="totalDisplay" onclick="openReels()">
+      <div class="total-display" id="totalDisplay" onclick="openAdjustTotal()">
         <button class="total-reset" onclick="event.stopPropagation();resetTotal()" title="Rétablir le prix d'origine">↺</button>
         <div class="total-half"><span class="total-original" id="totalOriginal">0,00 €</span></div>
         <div class="total-half"><span class="total-current" id="cartTotal">0,00 €</span></div>
@@ -668,15 +700,15 @@ body::before{content:'';position:fixed;inset:0;
 <!-- Modal: Ajuster le total -->
 <div class="modal-backdrop hidden" id="adjustTotalModal" onclick="if(event.target===this)closeAdjustTotal()">
   <div class="modal-panel">
-    <div class="modal-title">± Ajuster le total</div>
-    <div class="modal-subtitle">Négociation client</div>
+    <div class="modal-title">Modifier le total</div>
+    <div class="modal-subtitle">Remise / négociation client</div>
     <div class="modal-info">
       Total actuel : <strong id="adjustCurrentTotal">0,00 €</strong><br>
-      La différence est répartie proportionnellement (en euros entiers) sur les articles, en commençant par les plus chers.
+      La différence est répartie proportionnellement sur les articles (au centime), en commençant par les plus chers. Pour corriger une seule côte, modifiez plutôt le prix de la ligne concernée.
     </div>
     <div class="modal-field">
-      <label>Nouveau total (€ — entier)</label>
-      <input id="adjustNewTotal" type="number" step="1" min="0" inputmode="numeric">
+      <label>Nouveau total (€)</label>
+      <input id="adjustNewTotal" type="number" step="0.01" min="0" inputmode="decimal">
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeAdjustTotal()">Annuler</button>
@@ -717,40 +749,18 @@ body::before{content:'';position:fixed;inset:0;
   </div>
 </div>
 
-<!-- Bottom sheet : rouleaux d'ajustement du total -->
-<div class="modal-backdrop reels-backdrop hidden" id="reelsSheet" onclick="if(event.target===this)closeReels()">
-  <div class="reels-sheet">
-    <div class="reels-title">Ajuster le total · remise / articles non scannés</div>
-    <div class="reels-preview" id="reelsPreview">0,00 €</div>
-    <div class="reels-row" id="reelsRow">
-      <div class="reel-grp"><span class="reel-name">milliers</span><div class="reel" id="reelM" data-pad="1" data-count="10"></div></div>
-      <div class="reel-grp"><span class="reel-name">cent.</span><div class="reel" id="reelC" data-pad="1" data-count="10"></div></div>
-      <div class="reel-grp"><span class="reel-name">diz.</span><div class="reel" id="reelD" data-pad="1" data-count="10"></div></div>
-      <div class="reel-grp"><span class="reel-name">unités</span><div class="reel" id="reelU" data-pad="1" data-count="10"></div></div>
-      <span class="reel-sep">,</span>
-      <div class="reel-grp"><span class="reel-name">décim.</span><div class="reel" id="reelDec" data-pad="2" data-count="100"></div></div>
-      <div class="reels-window"></div>
+<!-- Modal: Quantité d'un article (clavier numérique ; 0 = supprimer) -->
+<div class="modal-backdrop hidden" id="qtyEditModal" onclick="if(event.target===this)closeQtyEdit()">
+  <div class="modal-panel">
+    <div class="modal-title">Quantité</div>
+    <div class="modal-subtitle" id="qtyEditItemName">—</div>
+    <div class="modal-field">
+      <label>Nombre d'exemplaires (0 = retirer)</label>
+      <input id="qtyEditInput" type="number" step="1" min="0" inputmode="numeric">
     </div>
-    <div class="reels-actions">
-      <button class="btn btn-secondary" onclick="closeReels()">Annuler</button>
-      <button class="btn btn-primary" onclick="applyReels()">Appliquer</button>
-    </div>
-  </div>
-</div>
-
-<!-- Bottom sheet : rouleau de quantité d'un article (0 = supprimer) -->
-<div class="modal-backdrop reels-backdrop hidden" id="qtySheet" onclick="if(event.target===this)closeQtyReel()">
-  <div class="reels-sheet">
-    <div class="reels-title" id="qtyTitle">Quantité</div>
-    <div class="reels-preview" id="qtyPreview">×1</div>
-    <div class="reels-row">
-      <div class="reel-grp"><div class="reel" id="qtyReel" data-pad="1" data-count="100"></div></div>
-      <div class="reels-window"></div>
-    </div>
-    <div style="text-align:center;font-family:'Space Mono',monospace;font-size:.6rem;color:var(--accent3);margin-top:8px;">0 = supprimer l'article</div>
-    <div class="reels-actions">
-      <button class="btn btn-secondary" onclick="closeQtyReel()">Annuler</button>
-      <button class="btn btn-primary" onclick="applyQtyReel()">Appliquer</button>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeQtyEdit()">Annuler</button>
+      <button class="btn btn-primary" onclick="confirmQtyEdit()">Valider</button>
     </div>
   </div>
 </div>
@@ -763,7 +773,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.9.2';
+const APP_VERSION      = '1.9.3';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1023,6 +1033,8 @@ function updateValidateButton() {
   const adjBtn = document.getElementById('btnAdjustTotal');
   if (cart.length === 0 || !isAuth()) {
     btn.disabled = true;
+    btn.classList.remove('warn');
+    btn.textContent = '✓ Valider la vente';
     if (adjBtn) adjBtn.disabled = true;
     return;
   }
@@ -1033,12 +1045,15 @@ function updateValidateButton() {
   const buyerMissing = !getResolvedBuyer();
   if (hasBlockingDup) {
     btn.disabled = true;
+    btn.classList.add('warn');
     btn.textContent = '⚠ Doublon impossible — retirez-le';
   } else if (buyerMissing) {
     btn.disabled = true;
+    btn.classList.add('warn');
     btn.textContent = '⚠ Renseignez l\'acheteur';
   } else {
     btn.disabled = false;
+    btn.classList.remove('warn');
     btn.textContent = '✓ Valider la vente';
   }
 }
@@ -1672,13 +1687,14 @@ function getCartTotal() {
 }
 
 // #12 — Construit l'INTÉRIEUR d'une ligne panier (hors <div.cart-item> englobant).
-// Quantité tappable à gauche (→ rouleau), nom pleine largeur, prix flotté qui suit le texte.
+// 🗑 suppression à gauche · quantité tappable (→ clavier) · nom pleine largeur ·
+// prix UNITAIRE flotté qui suit le texte (tappable → clavier, pour corriger une côte).
 function cartItemInnerHTML(c) {
-  const lineTotal = c.prixUnit * c.qty;
   const modClass = c.priceModified ? ' modified' : '';
   return `
-      <span class="ci-qty" data-action="qty" data-uid="${esc(c.uid)}">×${c.qty}</span>
-      <div class="ci-name${modClass}">${esc(c.name)}<span class="ci-price">${formatPrice(lineTotal)}</span></div>
+      <button class="ci-del" data-action="del" data-uid="${esc(c.uid)}" title="Retirer l'article">🗑</button>
+      <span class="ci-qty" data-action="qty" data-uid="${esc(c.uid)}" title="Modifier la quantité">×${c.qty}</span>
+      <div class="ci-name">${esc(c.name)}<span class="ci-price${modClass}" data-action="price" data-uid="${esc(c.uid)}" title="Corriger le prix unitaire">${formatPrice(c.prixUnit)}</span></div>
     `;
 }
 
@@ -1784,7 +1800,9 @@ document.getElementById('cartItems').addEventListener('click', e => {
   if (!t) return;
   const action = t.getAttribute('data-action');
   const uid = t.getAttribute('data-uid');
-  if (action === 'qty') openQtyReel(uid);
+  if (action === 'del')        removeFromCart(uid);
+  else if (action === 'qty')   openQtyEdit(uid);
+  else if (action === 'price') openEditPrice(uid);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1887,10 +1905,10 @@ function applyTargetTotalCents(targetCents) {
 }
 
 function openAdjustTotal() {
-  if (cart.length === 0) return;
+  if (cart.length === 0) { showToast('⚠ Panier vide — rien à modifier', true); return; }
   const cur = getCartTotal();
   document.getElementById('adjustCurrentTotal').textContent = formatPrice(cur);
-  document.getElementById('adjustNewTotal').value = Math.round(cur); // euros entiers
+  document.getElementById('adjustNewTotal').value = cur.toFixed(2);
   document.getElementById('adjustTotalModal').classList.remove('hidden');
   setTimeout(() => {
     const i = document.getElementById('adjustNewTotal');
@@ -1907,15 +1925,15 @@ function confirmAdjustTotal() {
   if (isNaN(raw) || raw < 0) { showToast('⚠ Total invalide', true); return; }
   if (cart.length === 0) { closeAdjustTotal(); return; }
 
-  const target = Math.round(raw);            // euros entiers (ce modal)
-  if (target === Math.round(cur) && target === raw) { closeAdjustTotal(); return; }
+  const targetCents = Math.round(raw * 100);                 // au centime
+  if (targetCents === Math.round(cur * 100)) { closeAdjustTotal(); return; }  // inchangé
 
-  if (!applyTargetTotalCents(target * 100)) return;
+  if (!applyTargetTotalCents(targetCents)) return;
 
   closeAdjustTotal();
   renderCart();
-  showToast('✓ Total ajusté à ' + formatPrice(target));
-  logEvent('info', 'Total ajusté (négociation)', { de: cur, vers: target });
+  showToast('✓ Total ajusté à ' + formatPrice(targetCents / 100));
+  logEvent('info', 'Total ajusté (négociation)', { de: cur, vers: targetCents / 100 });
 }
 
 document.getElementById('adjustNewTotal').addEventListener('keydown', e => {
@@ -1926,164 +1944,38 @@ document.getElementById('manualPrice').addEventListener('keydown', e => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ROULEAUX — picker du total (remise / articles non scannés)
-// 5 rouleaux : milliers · centaines · dizaines · unités · décimales (centimes 00–99)
+// QUANTITÉ d'un article — saisie au clavier (0 = supprimer)
 // ═══════════════════════════════════════════════════════════════
-const REEL_ITEM_H = 46; // doit matcher .reel-item height en CSS
-const REEL_IDS = ['reelM', 'reelC', 'reelD', 'reelU', 'reelDec'];
-let reelsBuilt = false;
-let reelsScrollSettle = null;
-
-function buildReels() {
-  if (reelsBuilt) return;
-  REEL_IDS.forEach(id => {
-    const reel = document.getElementById(id);
-    if (!reel) return;
-    const count = parseInt(reel.dataset.count, 10) || 10;
-    const pad = parseInt(reel.dataset.pad, 10) || 1;
-    let html = '<div class="reel-pad"></div>';
-    for (let i = 0; i < count; i++) html += `<div class="reel-item" data-v="${i}">${String(i).padStart(pad, '0')}</div>`;
-    html += '<div class="reel-pad"></div>';
-    reel.innerHTML = html;
-    // Mise à jour live de l'aperçu + surbrillance pendant le défilement
-    reel.addEventListener('scroll', () => {
-      clearTimeout(reelsScrollSettle);
-      reelsScrollSettle = setTimeout(() => { highlightReels(); updateReelsPreview(); }, 60);
-    }, { passive: true });
-  });
-  reelsBuilt = true;
+let qtyTargetUid = null;
+function openQtyEdit(uidToEdit) {
+  const c = cart.find(x => x.uid === uidToEdit);
+  if (!c) return;
+  qtyTargetUid = uidToEdit;
+  document.getElementById('qtyEditItemName').textContent = c.name;
+  document.getElementById('qtyEditInput').value = c.qty;
+  document.getElementById('qtyEditModal').classList.remove('hidden');
+  setTimeout(() => {
+    const i = document.getElementById('qtyEditInput');
+    i.focus(); i.select();
+  }, 50);
 }
-
-function reelIndex(reel) {
-  return Math.max(0, Math.round(reel.scrollTop / REEL_ITEM_H));
-}
-
-function setReelsFromCents(cents) {
-  cents = Math.max(0, Math.min(999999, Math.round(cents)));
-  const euros = Math.floor(cents / 100);
-  const cc = cents % 100;
-  const digits = {
-    reelM: Math.floor(euros / 1000) % 10,
-    reelC: Math.floor(euros / 100) % 10,
-    reelD: Math.floor(euros / 10) % 10,
-    reelU: euros % 10,
-    reelDec: cc
-  };
-  REEL_IDS.forEach(id => {
-    const reel = document.getElementById(id);
-    if (reel) reel.scrollTop = digits[id] * REEL_ITEM_H;
-  });
-  highlightReels();
-}
-
-function readReelsCents() {
-  const m   = reelIndex(document.getElementById('reelM'));
-  const c   = reelIndex(document.getElementById('reelC'));
-  const d   = reelIndex(document.getElementById('reelD'));
-  const u   = reelIndex(document.getElementById('reelU'));
-  const dec = reelIndex(document.getElementById('reelDec'));
-  const euros = m * 1000 + c * 100 + d * 10 + u;
-  return euros * 100 + dec;
-}
-
-function highlightReels() {
-  REEL_IDS.forEach(id => {
-    const reel = document.getElementById(id);
-    if (!reel) return;
-    const sel = reelIndex(reel);
-    reel.querySelectorAll('.reel-item').forEach(it => {
-      it.style.color = (parseInt(it.dataset.v, 10) === sel) ? 'var(--accent)' : 'var(--dim)';
-    });
-  });
-}
-
-function updateReelsPreview() {
-  const el = document.getElementById('reelsPreview');
-  if (el) el.textContent = formatPrice(readReelsCents() / 100);
-}
-
-function openReels() {
-  if (cart.length === 0) { showToast('⚠ Panier vide — rien à ajuster', true); return; }
-  buildReels();
-  document.getElementById('reelsSheet').classList.remove('hidden');
-  // Init sur le total courant (après layout pour que scrollTop prenne)
-  requestAnimationFrame(() => {
-    setReelsFromCents(Math.round(getCartTotal() * 100));
-    updateReelsPreview();
-  });
-}
-
-function closeReels() {
-  document.getElementById('reelsSheet').classList.add('hidden');
+function closeQtyEdit() {
+  document.getElementById('qtyEditModal').classList.add('hidden');
+  qtyTargetUid = null;
   focusScan();
 }
-
-function applyReels() {
-  const cents = readReelsCents();
-  const cur = getCartTotal();
-  if (cart.length === 0) { closeReels(); return; }
-  if (cents === Math.round(cur * 100)) { closeReels(); return; }   // inchangé
-  if (!applyTargetTotalCents(cents)) return;
-  closeReels();
-  renderCart();
-  showToast('✓ Total ajusté à ' + formatPrice(cents / 100));
-  logEvent('info', 'Total ajusté (rouleaux)', { de: cur, vers: cents / 100 });
-}
-
-// ═══════════════════════════════════════════════════════════════
-// ROULEAU DE QUANTITÉ (toucher la quantité d'un article ; 0 = supprimer)
-// ═══════════════════════════════════════════════════════════════
-let qtyReelBuilt = false, qtyTargetUid = null, qtyScrollSettle = null;
-function buildQtyReel() {
-  if (qtyReelBuilt) return;
-  const reel = document.getElementById('qtyReel');
-  if (!reel) return;
-  const count = parseInt(reel.dataset.count, 10) || 100;
-  let html = '<div class="reel-pad"></div>';
-  for (let i = 0; i < count; i++) html += `<div class="reel-item" data-v="${i}">${i}</div>`;
-  html += '<div class="reel-pad"></div>';
-  reel.innerHTML = html;
-  reel.addEventListener('scroll', () => {
-    clearTimeout(qtyScrollSettle);
-    qtyScrollSettle = setTimeout(() => { highlightQtyReel(); updateQtyPreview(); }, 60);
-  }, { passive: true });
-  qtyReelBuilt = true;
-}
-function highlightQtyReel() {
-  const reel = document.getElementById('qtyReel'); if (!reel) return;
-  const sel = reelIndex(reel);
-  reel.querySelectorAll('.reel-item').forEach(it => {
-    const v = parseInt(it.dataset.v, 10);
-    it.style.color = (v === sel) ? (v === 0 ? 'var(--accent3)' : 'var(--accent)') : 'var(--dim)';
-  });
-}
-function readQtyReel() { return reelIndex(document.getElementById('qtyReel')); }
-function updateQtyPreview() {
-  const v = readQtyReel();
-  const el = document.getElementById('qtyPreview');
-  if (el) { el.textContent = v === 0 ? 'Supprimer' : ('×' + v); el.style.color = v === 0 ? 'var(--accent3)' : 'var(--accent)'; }
-}
-function openQtyReel(uid) {
-  const c = cart.find(x => x.uid === uid); if (!c) return;
-  qtyTargetUid = uid;
-  buildQtyReel();
-  const t = document.getElementById('qtyTitle'); if (t) t.textContent = c.name;
-  document.getElementById('qtySheet').classList.remove('hidden');
-  requestAnimationFrame(() => {
-    const reel = document.getElementById('qtyReel');
-    if (reel) reel.scrollTop = Math.min(99, c.qty) * REEL_ITEM_H;
-    highlightQtyReel(); updateQtyPreview();
-  });
-}
-function closeQtyReel() { document.getElementById('qtySheet').classList.add('hidden'); qtyTargetUid = null; focusScan(); }
-function applyQtyReel() {
-  if (!qtyTargetUid) { closeQtyReel(); return; }
-  const n = readQtyReel();
+function confirmQtyEdit() {
+  if (!qtyTargetUid) { closeQtyEdit(); return; }
+  const n = parseInt(document.getElementById('qtyEditInput').value, 10);
+  if (isNaN(n) || n < 0) { showToast('\u26a0 Quantit\u00e9 invalide', true); return; }
   const uid = qtyTargetUid;
-  closeQtyReel();
+  closeQtyEdit();
   setQty(uid, n);
-  showToast(n === 0 ? '✓ Article retiré' : ('✓ Quantité : ×' + n));
+  showToast(n === 0 ? '\u2713 Article retir\u00e9' : ('\u2713 Quantit\u00e9 : \u00d7' + n));
 }
+document.getElementById('qtyEditInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmQtyEdit(); }
+});
 
 // ═══════════════════════════════════════════════════════════════
 // CARROUSEL panier ⇄ caméra + scan via l'appareil photo
@@ -2143,7 +2035,7 @@ async function startCamera() {
       try {
         camDetector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code'] });
         camScanning = true; scanCameraLoop();
-        if (txt) txt.textContent = 'Caméra · visez le code-barres';
+        if (txt) txt.textContent = 'Visez un code-barres ou un QR code';
       } catch (_) { if (txt) txt.textContent = 'Détection non supportée — utilisez la douchette'; }
     } else {
       if (txt) txt.textContent = 'Détection non supportée — utilisez la douchette';
