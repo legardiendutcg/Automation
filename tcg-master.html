@@ -1,8 +1,17 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.6.0 (Session #6 — 2026-05-29)
+  Version : 1.6.2 (Session #7 — 2026-05-29)
 =============================================================
+  1.6.2  2026-05-29  Session #7 (correctifs de la revue de code)
+         - [Fix 🔴] applyCardSale : suppression du bloc copyPaste parasite (copié depuis
+           applySealedSale) qui référençait nextTxRow hors scope → ReferenceError à CHAQUE
+           vente carte (ligne non marquée Synced → fausse anomalie CARD_NOT_FOUND au tick
+           suivant + ~8s de retard). Les cartes n'appendent rien dans Scelle_Transactions.
+         - [Fix 🟠] Index colonne Synced : renderSalesLog & loadCloseSummary lisaient r[12]
+           (col M = TVA_Vente depuis 1.6.0) au lieu de r[14] (col O = Synced) → icône de sync
+           toujours ⏳ et résumé de clôture affichant "✓ Toutes synchronisées" à tort.
+         - [Cosmétique] Commentaires "A:AF (32 cols)" alignés sur la lecture réelle A:AG (33 cols).
   1.6.0  2026-05-29  Session #6
          - [Feature] TVA_Vente piloté par Sales : la valeur choisie (ventes_detail col M)
            est écrite en col AG (scellé) / col AF (carte) au lieu du "Régime normal" hardcodé.
@@ -473,7 +482,7 @@ header{display:flex;justify-content:space-between;align-items:center;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.6.0';
+const APP_VERSION      = '1.6.2';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1205,25 +1214,14 @@ async function applyCardSale(rowIdx, salesRow) {
   );
   // Retire du cache (vendue)
   stockCacheCards.delete(key);
-  // Copier le format de la ligne précédente
-  if (sealedTxSheetNumId !== null && nextTxRow > 1) {
-    try {
-      await sheetsBatch([{
-        copyPaste: {
-          source:      { sheetId: sealedTxSheetNumId, startRowIndex: nextTxRow - 2, endRowIndex: nextTxRow - 1, startColumnIndex: 0, endColumnIndex: 33 },
-          destination: { sheetId: sealedTxSheetNumId, startRowIndex: nextTxRow - 1, endRowIndex: nextTxRow,     startColumnIndex: 0, endColumnIndex: 33 },
-          pasteType: 'PASTE_FORMAT',
-          pasteOrientation: 'NORMAL'
-        }
-      }], CENTRAL_GSHEET_ID);
-    } catch(e) { console.warn('Format copy failed (non-bloquant):', e); }
-  }
+  // NB : une vente de carte n'appende RIEN dans Scelle_Transactions — pas de copie de format ici.
+  // (l'ancien bloc copyPaste copié depuis applySealedSale référençait nextTxRow hors scope → ReferenceError à chaque vente carte)
 
   return { status: 'OK' };
 }
 
 // Applique la vente d'un scellé :
-//  1. Lit la ligne complète du lot (A:AF) pour récupérer qty + infos comptables
+//  1. Lit la ligne complète du lot (A:AG) pour récupérer qty + infos comptables
 //  2. Vérifie l'overdraw
 //  3. Décrément qty dans Scelle_Stock
 //  4. Appende une ligne de transaction dans Scelle_Transactions
@@ -1250,7 +1248,7 @@ async function applySealedSale(rowIdx, salesRow) {
     return { status: 'ANOMALY_SEALED_NOT_FOUND' };
   }
   sealedRetryCount.delete(rowIdx);
-  // Lecture de la ligne complète du lot (A:AF = 32 colonnes)
+  // Lecture de la ligne complète du lot (A:AG = 33 colonnes, AG = TVA_Vente)
   const fullRowRes = await sheetsGet(`'${SHEET_SEALED}'!A${sealed.sheetRow}:AG${sealed.sheetRow}`, CENTRAL_GSHEET_ID, 'UNFORMATTED_VALUE');
   const sr = (fullRowRes.values && fullRowRes.values[0]) || [];
 
@@ -1568,7 +1566,7 @@ function renderSalesLog(rows) {
     const vendor = (r[1] || '').split(' ')[0];
     const name = r[5] || '—';
     const prix = parseFloat(r[10] || 0);
-    const synced = (r[12] || '').toString();
+    const synced = (r[14] || '').toString();   // col O = Synced (schéma 1.6.0)
     let icon = '';
     if (synced.startsWith('ANOMALY_'))      icon = ' ⚠';
     else if (synced === 'OK' || synced === 'OK_MANUAL') icon = ' ✓';
@@ -1642,7 +1640,7 @@ async function loadCloseSummary() {
     ]);
     const sales = (salesR.values || []).slice(1);
     const anoms = (anomR.values || []).slice(1);
-    const pending = sales.filter(r => !(r[12] || '').toString().trim()).length;
+    const pending = sales.filter(r => !(r[14] || '').toString().trim()).length;  // col O = Synced (schéma 1.6.0)
     const totalCA = sales.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
     const txs = new Set(sales.map(r => r[3])).size;
     document.getElementById('closeModalSummary').innerHTML = `

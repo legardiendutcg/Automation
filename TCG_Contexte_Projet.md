@@ -1,6 +1,6 @@
 # Contexte Projet — Le Gardien du TCG
 > Document à coller en premier message dans chaque nouvelle session Claude.
-> Dernière mise à jour : Session #6 — 29/05/2026
+> Dernière mise à jour : Session #7 — 29/05/2026
 
 ---
 
@@ -9,10 +9,11 @@
 - **Tout au long de la discussion** : mettre à jour ce document en arrière-plan au fil des avancées — ajouter les nouveaux milestones complétés, les nouvelles idées de développement à garder pour plus tard, et retirer du backlog les améliorations sur lesquelles on a travaillé et validées.
 - **Quand il est opportun d'ouvrir une nouvelle discussion** (contexte trop long, session de travail cohérente terminée) : prévenir, mettre à jour ce document une dernière fois, puis proposer de basculer.
 - **En début de chaque session**, lorsqu'une étape du développement est identifiée : indiquer quel modèle Claude est le plus adapté pour cette étape (Haiku / Sonnet / Opus) avec une justification courte.
+- **Au début de chaque nouvelle discussion** : lire les 3 fichiers HTML (`tcg-sales.html`, `tcg-master.html`, `tcg-converter.html`) pour assimiler l'intégralité du code, puis faire une passe de revue systématique — triple-check à la recherche de bugs, repérage des incohérences et du code/variables devenus inutiles (code mort), et analyse des opportunités d'amélioration de **performance** (en convention/événement, la **réactivité** est critique). Remonter les trouvailles avant de coder.
 - **À chaque livraison de fichier** : bumper systématiquement la version (patch/minor/major selon le changement) avant de présenter le fichier. Ne jamais livrer deux fichiers successifs avec le même numéro de version. Quand les deux apps sont modifiées ensemble, elles partagent le même numéro de version pour garder un mapping cohérent entre Sales et Master.
-- **Au début de la prochaine session** : les deux features prioritaires de la session #5 (TVA_Vente + acheteur côté Sales) ont été livrées en v1.6.0. Prochaine priorité à challenger avant de coder : **tester la clôture d'événement 🏁** (archive + reset des buffers `ventes_detail` / `anomalies`) puis **les autres configurations cartes** (gradées, articles manuels). Questionner les choix de design, signaler les risques, obtenir une validation explicite avant implémentation.
+- **Au début de la prochaine session (#8)** : la session #7 a fait la **revue de code** des 3 apps puis, après validation, **livré les correctifs** (Master **1.6.2** : 🔴 `applyCardSale` + 🟠 index `Synced` ; Integrator **1.0.0** : CRLF, en-tête cartes dynamique, `parsePrix` locale). Versions à jour : **Sales 1.6.1 / Master 1.6.2 / Integrator 1.0.0**. **Priorité #8** : refaire un **test E2E avec les nouvelles versions, incluant des ventes de cartes ET de scellé** (valider que le 🔴 est levé et que le flow cartes passe proprement à travers Master), puis **tester la clôture d'événement 🏁** (archive + reset buffers) en vérifiant le résumé de clôture désormais corrigé (🟠). Ensuite : autres configs cartes (gradées, articles manuels). Questionner les choix de design, signaler les risques, obtenir une validation explicite avant implémentation.
 - **Vigilance sur les caracteres speciaux** lors du traitement de donnees provenant des Google Sheets (locale belge) : les virgules (separateur decimal vs separateur de milliers), les apostrophes (droite ' U+0027 vs courbe ' U+2019 que Google Sheets insere souvent automatiquement), et les accents (e/E vs e/E, etc.) sont des sources frequentes de bugs silencieux (find() qui renvoie -1, parseFloat qui interprete mal le format, etc.). Toujours considerer ces cas lors des comparaisons de strings ou du parsing de nombres.
-- Ces cinq instructions s'appliquent automatiquement dans chaque session — inutile de les rappeler.
+- Ces instructions permanentes s'appliquent automatiquement dans chaque session — inutile de les rappeler.
 
 ---
 
@@ -178,9 +179,35 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 - Split `Scelle_Stock` / `Scelle_Transactions`, formules compta OK, cache indexé par Key, détection dynamique du header (col C = "Key"), 4155 items chargés
 - Migration GitHub Pages, projet OAuth « TCG Integrator »
 
-### 🔧 À tester en session #7
-- **v1.6.0 end-to-end** : sélecteur TVA_Vente (scellé + carte), verrou « réservée », acheteur Sales (mode Master-fournit vs mode saisie vendeur), écriture effective de AG
-- Clôture événement avec bouton 🏁 (créer tab archive, vider les buffers)
+### 🔍 Revue de code + correctifs (session #7)
+
+Triple-check des 3 apps, puis correctifs livrés après validation. Versions résultantes : **Sales 1.6.1 (inchangé) / Master 1.6.2 / Integrator 1.0.0**. Les bugs ci-dessous sont **corrigés** (✅) sauf mention contraire.
+
+**✅ 🔴 Bloquant — Master `applyCardSale` : `nextTxRow` non défini (TOUTES les ventes cartes).**
+Un bloc `copyPaste` avait été copié par erreur depuis `applySealedSale` ; il référençait `nextTxRow`, variable hors scope (déclarée seulement dans `applySealedSale`). En `'use strict'` → `ReferenceError`, attrapée par le try/catch par-ligne de `masterSyncTick` ⇒ `errors++`, ligne **non marquée Synced**. Les écritures stock (P:T + AF) réussissaient *avant* l'erreur (stock correct), mais : erreur console + **fausse anomalie `CARD_NOT_FOUND`** au tick suivant + ~8 s de retard par ligne. **C'est ce qui empêchait de valider proprement le flow cartes à travers Master 1.6.0.** → **Corrigé (Master 1.6.2)** : bloc supprimé (les cartes n'appendent pas dans `Scelle_Transactions`).
+
+**✅ 🟠 Régression schéma 1.6.0 — Master lisait `Synced` au mauvais index (col M au lieu de col O).**
+`Synced` est à l'index **14** (col O) depuis l'extension `ventes_detail` 1.6.0, mais `renderSalesLog` et `loadCloseSummary` lisaient encore l'index **12** (col M = `TVA_Vente`) ⇒ icône toujours ⏳ et résumé de clôture « ✓ Toutes synchronisées » à tort (**risque de clôturer un event avec des ventes non synchronisées**). Données réelles saines (le drain `ensureSyncDrain` utilise `lastSyncStats.pending`). → **Corrigé (Master 1.6.2)** : `r[14]` aux deux endroits.
+
+**✅ 🟡 Integrator — CRLF non normalisé.** `parseCSV` faisait `text.trim().split('\n')` sans retirer `\r`. → **Corrigé (1.0.0)** : `text.replace(/\r\n?/g,'\n')` avant le split.
+
+**✅ 🟡 Integrator — `CARD_HEADER_ROW = 143` en dur** (vs détection dynamique dans Sales/Master) ⇒ si l'en-tête bouge, la vérif anti-doublon et les offsets D/F/Q ratent les clés (**risque d'intégrité**). → **Corrigé (1.0.0)** : `findCardsHeaderRow` / `ensureCardHeaderRow` (mirroir de Master), résolus en tête de `injectIntoGSheet` et `loadLaterCards`.
+
+**Mineurs :** ✅ Integrator `parsePrix` locale belge (virgule décimale) au lieu de `parseFloat` ; ✅ commentaires Master « A:AF » alignés sur la lecture réelle `A:AG`. **Non-corrigé (volontaire)** : `SAFETY_GSHEET_ID` reste un placeholder **à renseigner par l'utilisateur** — le garde-fou `getSafetySpreadsheetId()` lève déjà une erreur explicite tant qu'il n'est pas configuré (comportement voulu).
+
+**Incohérences / code mort relevés (NON traités — backlog #16) :**
+- *Sales* : `switchTab()` + tout le CSS associé morts (classes `.tabs`, `.tab-btn*`, `.tab-content`, `.stats-grid`, `.stat-*`, `.lb-*`, `.split-*`, `.sales-log`, `.sale-*`, `.sync-*`). Constantes inutilisées `SHEET_ANOMALIES`, `SYNC_POLL_MS`, `HEARTBEAT_POLL_MS` (polling = littéral `20000`). Fonctions `sheetsUpdate` / `sheetsBatch` jamais appelées. Champs `sealedColIdx` calculés non lus (`iCode, iOrigine, iCodeSerie, iEtat, iCoteU, iCoteTot`, + `statutColLetter`).
+- *Master* : `CARD_DEFAULT_REGIME_FISC` mort (AF prend `saleTva`), `sealedColIdx.iCoteTot` non lu.
+- *Asymétrie (non-bug)* : Sales lit `Scelle_Stock!A:AG`, Master `A:AF` (Master relit la ligne complète `A:AG` à la vente).
+
+**Performance / réactivité (NON traité — backlog #12/perf, la réactivité prime en event) :**
+- *Sales* : `renderCart()` reconstruit tout l'`innerHTML` à chaque changement → maj incrémentale (DOM diff par ligne).
+- *Master* : `applySealedSale` lit toute la colonne `Scelle_Transactions!B:B` à chaque vente (O(n)) → suivre `nextTxRow` de façon incrémentale.
+- *Sales* : câbler la constante `HEARTBEAT_POLL_MS` au lieu du littéral `20000`.
+
+### 🔧 À tester en session #8 (sur les nouvelles versions)
+- **E2E avec ventes cartes ET scellé** sur Master **1.6.2** : confirmer que le 🔴 est levé (plus de `CARD_NOT_FOUND` fantôme, ligne carte marquée Synced), sélecteur TVA_Vente (scellé + carte), verrou « réservée », acheteur Sales (Master-fournit vs saisie vendeur), écriture effective de AG
+- Clôture événement 🏁 (archive + reset buffers) — le résumé de clôture est désormais fiable (fix 🟠)
 - Autres configurations cartes : cartes gradées, articles manuels
 
 ### 🔑 Douchettes en attente
@@ -195,12 +222,19 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 1. ~~**[Sales] Choix du type de vente (TVA_Vente)**~~ — fait. Source = `Scelle_Transactions!AG8:AG23`, écrit en AG (scellé) / AF (carte).
 2. ~~**[Sales] Choix de l'acheteur**~~ — fait via modèle Master-autoritaire (acheteur par défaut publié dans `app_state` col D ; sinon saisie vendeur). La détection Levenshtein d'uniformisation est **descopée** (le modèle Master-autoritaire supprime la divergence à la source) → reléguée au backlog si un jour besoin.
 
-### 🔥 Priorité haute — à challenger en début de prochaine session
-3. **Tester clôture événement** 🏁 : archive (création tab dédié) + reset des buffers `ventes_detail` / `anomalies`. Vérifier au passage la précaution de migration v1.6.0 (vider `ventes_detail` avant upgrade).
-4. **Autres configurations cartes** : cartes gradées, articles manuels.
+### ✅ Correctifs livrés en session #7 (revue de code)
+3. ~~**🔴 Master `applyCardSale`**~~ — fait (1.6.2). Bloc `copyPaste` parasite supprimé. Débloque le flow cartes.
+4. ~~**🟠 Master index `Synced`**~~ — fait (1.6.2). `r[14]` (col O) dans `renderSalesLog` et `loadCloseSummary`.
+5. ~~**🟡 Integrator**~~ — fait (1.0.0). CRLF normalisé, en-tête cartes dynamique, `parsePrix` locale belge.
+
+### 🔥 Priorité haute — session #8, à challenger en début de session
+6. **Test E2E sur les nouvelles versions** (Sales 1.6.1 / Master 1.6.2) **avec ventes cartes ET scellé** : confirmer la levée du 🔴, vérifier TVA_Vente / verrou « réservée » / acheteur / écriture AG.
+7. **Tester clôture événement** 🏁 : archive (création tab dédié) + reset des buffers `ventes_detail` / `anomalies`. Résumé de clôture désormais fiable (fix 🟠). Vérifier au passage la précaution de migration v1.6.0 (vider `ventes_detail` avant upgrade).
+8. **Autres configurations cartes** : cartes gradées, articles manuels.
 
 ### Reste du backlog ordonné
-5. **Workflow boutique / vente comptoir** (après convention)
+9. **Workflow boutique / vente comptoir** (après convention)
+10. **Nettoyage code mort + perfs réactivité** (backlog #12-16) — purge CSS/constantes mortes, rendu panier incrémental, lecture O(n) `Scelle_Transactions!B:B`.
 
 ---
 
@@ -219,6 +253,11 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 | 10 | **[Sales] Boutons +/- quantité panier** | Déplacer les boutons +/- vers la gauche de la ligne article pour que leur position reste fixe quand le prix total change de largeur (variation du nb de chiffres/décimales) |
 | 9 | Pill `📦 N` reste affiché sur état erreur | Le timer de refresh recalcule le total et écrase "✗ Cache HS" — petit artefact UX |
 | 11 | Uniformisation acheteurs (Levenshtein) | Descopé en #6 (modèle Master-autoritaire suffit). À ressortir seulement si on autorise un jour la saisie acheteur libre multi-vendeurs en convention |
+| 12 | **[GUI/Sales] Rendu incrémental du panier** | `renderCart()` reconstruit tout l'`innerHTML` à chaque changement (perf + perte de focus/scroll). Passer à une maj DOM par ligne. *(perf, vu en revue #7)* |
+| 13 | **[GUI/Sales] Consolider les barres d'état empilées** | Bandeaux empilés (statut master / fichier offline / restauration) prennent trop de hauteur sur mobile en convention — fusionner en une zone de statut compacte |
+| 14 | **[GUI/Sales] Feedback de scan plus visuel** | Confirmation d'ajout au panier trop discrète — ajouter un flash/✓ net pour le scan rapide en event |
+| 15 | **[GUI/Master] Sections repliables + bandeau sync sticky** | Replier les sections (complète le log pliable #7) et garder le bandeau sync/heartbeat visible (sticky) pendant le scroll |
+| 16 | **[Cleanup] Purge du code mort** | Retirer `switchTab()` + CSS d'onglets/stats/leaderboard morts (Sales), constantes/fonctions inutilisées (`SHEET_ANOMALIES`, `sheetsUpdate/Batch`, `CARD_DEFAULT_REGIME_FISC`…), champs `sealedColIdx` non lus. *(inventaire complet en §5 revue #7)* |
 
 ### ✅ Sorti du backlog en session #4
 - ~~Migration Netlify → GitHub Pages~~ (fait)
@@ -255,6 +294,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 | #4 | 28/05/2026 | Migration GitHub Pages, nouveau projet OAuth Google Cloud, fix constantes SHEET_SEALED/_TX, détection dynamique header scellé, cache fonctionnel à 4155 items |
 | #5 | 28/05/2026 | Flow scellé end-to-end validé (master 1.5.10 / sales 1.5.3) ; durcissements 1.5.x (arrondi unitPa, fail explicite sheetId, UNFORMATTED_VALUE, locale parsePrix) |
 | #6 | 29/05/2026 | Challenge + implémentation features TVA_Vente & Acheteur (v1.6.0) ; fix bug AG jamais écrit (scellé) ; verrou « réservée » ; découplage session/acheteur ; correction off-by-one table §3 ; non-bug cartes (TVA_Vente=AF) confirmé. Fix v1.6.1 (Sales) : liste TVA_Vente lue dans `Scelle_Transactions` (et non `Scelle_Stock`). Mapping versions divergent assumé : **Sales 1.6.1 / Master 1.6.0** (patch Sales seul). |
+| #7 | 29/05/2026 | **Revue de code des 3 apps, PUIS correctifs livrés après validation.** Bugs corrigés : 🔴 bloquant Master `applyCardSale` (bloc `copyPaste` parasite réf. `nextTxRow` hors scope → `ReferenceError` à chaque vente carte, fausse anomalie `CARD_NOT_FOUND`) ; 🟠 régression index `Synced` (col M lu au lieu de col O dans `renderSalesLog`/`loadCloseSummary` → résumé de clôture faussé) ; 🟡 Integrator (CRLF non normalisé, en-tête cartes dynamique, `parsePrix` locale). Livrés : **Master 1.6.2**, **Integrator 1.0.0** (1ʳᵉ mise sous versioning). Non traités → backlog : code mort (Sales `switchTab`+CSS, constantes/fonctions inutilisées, #16) et perfs réactivité (#12). `SAFETY_GSHEET_ID` laissé en placeholder (garde-fou explicite déjà présent). Ajout instruction §0 : revue de code systématique en début de chaque discussion. Détail complet en §5. |
 
 ---
 
@@ -262,6 +302,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 
 | Version | Date | App(s) | Changements |
 |---------|------|--------|-------------|
+| 1.6.2 | 29/05/2026 | Master | Correctifs revue #7 : 🔴 `applyCardSale` (bloc `copyPaste` parasite réf. `nextTxRow` hors scope → `ReferenceError` à chaque vente carte) supprimé · 🟠 index `Synced` `r[12]`→`r[14]` (col O) dans `renderSalesLog` + `loadCloseSummary` · commentaires A:AF→A:AG |
 | 1.6.1 | 29/05/2026 | Sales | Fix : liste TVA_Vente lue dans `Scelle_Transactions!AG8:AG23` (pointait par erreur sur `Scelle_Stock`, d'où le menu réduit à « Régime normal ») |
 | 1.6.0 | 29/05/2026 | Sales + Master | Sélecteur TVA_Vente (source `Scelle_Transactions!AG8:AG23`, écrit AG scellé / AF carte) · fix bug AG jamais écrit (scellé) · verrou « réservée » au scan · acheteur Sales↔Master (`app_state` col D) avec découplage session/acheteur · `ventes_detail` → A:N (M=TVA_Vente, N=Acheteur) |
 | 1.5.1 | 28/05/2026 | Sales | Panneau de scan : retrait du prix (affiché uniquement dans le panier) |
@@ -275,3 +316,10 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 - **Patch (x.x.+1)** : fix mineur, UX, cosmétique
 - **Minor (x.+1.0)** : nouvelle feature ou fix fonctionnel significatif
 - **Major (+1.0.0)** : refonte architecture ou breaking change
+
+### Versioning de l'Integrator (piste distincte, back-office)
+L'outil `tcg-converter.html` (TCG Integrator) est désormais versionné séparément de la paire Sales/Master.
+
+| Version | Date | Changements |
+|---------|------|-------------|
+| 1.0.0 | 29/05/2026 | Premier stamp formel. Correctifs revue #7 : 🟡 `parseCSV` normalise CRLF/CR → LF · 🟡 détection dynamique de l'en-tête cartes (`findCardsHeaderRow`/`ensureCardHeaderRow`) au lieu de `143` codé en dur · `parsePrix` locale belge. `SAFETY_GSHEET_ID` reste un placeholder à renseigner (garde-fou explicite déjà en place). |

@@ -1,4 +1,25 @@
 <!DOCTYPE html>
+<!--
+=============================================================
+  TCG INTEGRATOR — Le Gardien du TCG (outil back-office)
+  Version : 1.0.0 (Session #7 — 2026-05-29)
+  (premier stamp formel de versioning pour l'Integrator —
+   suivi désormais sur sa propre piste, distincte de Sales/Master)
+=============================================================
+  1.0.0  2026-05-29  Session #7 (correctifs de la revue de code)
+         - [Fix 🟡] parseCSV : normalisation des fins de ligne CRLF/CR → LF
+           (évite un \r résiduel collé en fin de dernière colonne).
+         - [Fix 🟡] Détection dynamique de la ligne d'en-tête cartes
+           (findCardsHeaderRow / ensureCardHeaderRow) au lieu du 143 codé en dur ;
+           résolue en tête de injectIntoGSheet et loadLaterCards. Évite que la vérif
+           anti-doublon et les offsets D/F/Q ratent les clés si l'en-tête bouge.
+         - [Fix] Prix : parsePrix tolérant à la locale belge (virgule décimale)
+           au lieu de parseFloat (alignement avec Sales/Master).
+         - [NB] SAFETY_GSHEET_ID reste un placeholder à renseigner ; le garde-fou
+           getSafetySpreadsheetId() lève déjà une erreur explicite tant qu'il n'est pas
+           configuré (comportement voulu, pas un bug).
+=============================================================
+-->
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
@@ -761,7 +782,9 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'Cartes_Stock_&_Transactions';
-const CARD_HEADER_ROW = 143;
+const CARD_HEADER_ROW_FALLBACK = 143;   // valeur de repli si la détection échoue
+let cardHeaderRow = CARD_HEADER_ROW_FALLBACK;  // résolu dynamiquement via ensureCardHeaderRow()
+let cardHeaderResolved = false;
 
 // Fichier Google Sheets dédié à la sécurité : logs + backup.
 // Crée un nouveau Google Sheet dans ton Drive, puis colle son ID ici.
@@ -992,7 +1015,9 @@ const MAPPING = {
 // CSV PARSING
 // ============================================================
 function parseCSV(text) {
-  const lines = text.trim().split('\n');
+  // Normalise les fins de ligne (CRLF Windows / CR Mac) → LF, sinon un \r résiduel
+  // peut se coller en fin de dernière colonne (locale/exports variés — cf. vigilance caractères spéciaux).
+  const lines = text.replace(/\r\n?/g, '\n').trim().split('\n');
   const headers = lines[0].split(',').map(h => h.trim());
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
@@ -1015,6 +1040,21 @@ function parseCSVLine(line) {
   }
   result.push(current);
   return result;
+}
+
+// Parse prix tolérant à la locale belge (point = milliers, virgule = décimale).
+// Aligné sur parsePrix de tcg-sales.html / tcg-master.html.
+function parsePrix(str) {
+  if (str === null || str === undefined || str === '') return 0;
+  let s = String(str).replace(/€/g, '').replace(/\u00a0/g, '').replace(/ /g, '').trim();
+  if (s.includes('.') && s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (/\.\d{3}$/.test(s)) {
+    s = s.replace(/\./g, '');
+  } else {
+    s = s.replace(',', '.');
+  }
+  return parseFloat(s) || 0;
 }
 
 // ============================================================
@@ -1089,7 +1129,7 @@ function transformRow(row) {
   const nomFR = (row.nameFR || '').trim() + ' ' + cardNumber;
   const nomUS = (row.name || '').trim() + ' ' + cardNumber;
 
-  const prixNum = parseFloat(row.price || '0');
+  const prixNum = parsePrix(row.price);
   const prixStr = prixNum ? '€' + prixNum.toFixed(2) : '';
   const origine = (row.comment || row.location || '').trim();
   const rank = parseInt(cn.replace(/\D.*/, '')) || 0;
@@ -1748,6 +1788,35 @@ async function getNextLotNumber() {
   } catch(e) { return 136; }
 }
 
+// Détecte dynamiquement la ligne d'en-tête des cartes (col D = clé/key, ou col AF = statut/régime).
+// Repli sur CARD_HEADER_ROW_FALLBACK. Aligné sur findCardsHeaderRow de tcg-master.html.
+async function findCardsHeaderRow() {
+  try {
+    const r = await sheetsGet(`${SHEET_NAME}!A1:AF300`);
+    const rows = r.values || [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const colD  = (row[3]  || '').toString().trim().toLowerCase();
+      const colAF = (row[31] || '').toString().trim().toLowerCase();
+      if (colD === 'clé' || colD === 'cle' || colD === 'key' ||
+          colAF === 'statut' || colAF === 'status' || colAF.includes('régime')) {
+        return i + 1;   // 1-indexé
+      }
+    }
+  } catch (e) { /* repli ci-dessous */ }
+  return CARD_HEADER_ROW_FALLBACK;
+}
+
+// Résout cardHeaderRow une fois par session (idempotent). À appeler en tête de chaque
+// flux qui lit/écrit les cartes par offset (injection, chargement, anti-doublon).
+async function ensureCardHeaderRow() {
+  if (cardHeaderResolved) return cardHeaderRow;
+  cardHeaderRow = await findCardsHeaderRow();
+  cardHeaderResolved = true;
+  console.log('[Cards] cardHeaderRow détecté :', cardHeaderRow);
+  return cardHeaderRow;
+}
+
 async function getFirstEmptyLotRow() {
   try {
     const data = await sheetsGet(`${SHEET_NAME}!F2:F300`);
@@ -1761,22 +1830,22 @@ async function getFirstEmptyLotRow() {
 
 async function getLastCardRow() {
   try {
-    const data = await sheetsGet(`${SHEET_NAME}!D${CARD_HEADER_ROW+1}:D99999`);
+    const data = await sheetsGet(`${SHEET_NAME}!D${cardHeaderRow+1}:D99999`);
     const rows = data.values || [];
-    let lastRow = CARD_HEADER_ROW;
+    let lastRow = cardHeaderRow;
     for (let i = rows.length-1; i >= 0; i--) {
       if (rows[i] && rows[i][0] && rows[i][0].toString().trim() !== '') {
-        lastRow = CARD_HEADER_ROW + i + 1; break;
+        lastRow = cardHeaderRow + i + 1; break;
       }
     }
     return lastRow;
-  } catch(e) { return CARD_HEADER_ROW; }
+  } catch(e) { return cardHeaderRow; }
 }
 
 async function getLastStockSeq() {
   try {
     const today = getTodayStr();
-    const data = await sheetsGet(`${SHEET_NAME}!D${CARD_HEADER_ROW+1}:D99999`);
+    const data = await sheetsGet(`${SHEET_NAME}!D${cardHeaderRow+1}:D99999`);
     const rows = data.values || [];
     let maxSeq = 0;
     rows.forEach(r => {
@@ -1822,8 +1891,8 @@ function adaptFormula(formula, fromRow, toRow) {
 function buildLotRow(lotName, cardCount, prixAchat, cardsInLot, targetRow) {
   const totalCM = cardsInLot.reduce((s,r) => s+r.prixNum, 0);
   const origineRef = `"${lotName}"`;
-  const dataRange = `${SHEET_NAME}!$F$${CARD_HEADER_ROW+1}:$F$99999`;
-  const prixRange = `${SHEET_NAME}!$Q$${CARD_HEADER_ROW+1}:$Q$99999`;
+  const dataRange = `${SHEET_NAME}!$F$${cardHeaderRow+1}:$F$99999`;
+  const prixRange = `${SHEET_NAME}!$Q$${cardHeaderRow+1}:$Q$99999`;
   const R = targetRow;
   return [
     '','','','','',
@@ -1956,7 +2025,7 @@ async function assertNoDuplicateKeys(plannedRows) {
     throw new Error(`${localDupes.length} clé(s) doublon dans le fichier à injecter. Injection interrompue.`);
   }
 
-  const existing = await sheetsGet(`${SHEET_NAME}!D${CARD_HEADER_ROW+1}:D99999`);
+  const existing = await sheetsGet(`${SHEET_NAME}!D${cardHeaderRow+1}:D99999`);
   const existingKeys = new Set((existing.values || []).map(r => String(r[0] || '').trim()).filter(Boolean));
   const stockDupes = plannedRows.map(r => r.key).filter(k => existingKeys.has(k));
   if (stockDupes.length) {
@@ -2000,6 +2069,7 @@ async function injectIntoGSheet(preview = false) {
   });
 
   try {
+    await ensureCardHeaderRow();   // détecte la ligne d'en-tête cartes (sinon offsets D/F/Q faux)
     if (!preview) {
       await ensureSafetySheets();
       logInject('ok', '✓ Fichier sécurité disponible');
@@ -2055,7 +2125,7 @@ async function injectIntoGSheet(preview = false) {
       injLog.cardCount += cardCount;
 
       // Read formula templates from last existing card row
-      const formulaTemplates = lastCardRow > CARD_HEADER_ROW
+      const formulaTemplates = lastCardRow > cardHeaderRow
         ? await getFormulaTemplates(lastCardRow)
         : [];
 
@@ -2249,7 +2319,8 @@ async function loadLaterCards() {
   document.getElementById('labelLaterCount').textContent = '...';
   document.getElementById('btnLoadLater').disabled = true;
   try {
-    const data = await sheetsGet(`${SHEET_NAME}!C${CARD_HEADER_ROW+1}:Q99999`);
+    await ensureCardHeaderRow();   // détecte la ligne d'en-tête cartes (sinon offset C/Q faux)
+    const data = await sheetsGet(`${SHEET_NAME}!C${cardHeaderRow+1}:Q99999`);
     const rows = data.values || [];
     laterCards = [];
     rows.forEach(row => {
