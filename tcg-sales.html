@@ -1,10 +1,15 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.6.1 (Session #6 — 2026-05-29)
+  Version : 1.6.3 (Session #7 — 2026-05-29)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.6.3  2026-05-29  Session #7
+         - [Fix] Menu déroulant "Type de vente" (TVA_Vente) : la valeur "pas vendu"
+           est désormais exclue de la liste proposée au vendeur (statut, pas un régime TVA).
+           Filtre via isNotForSaleStatus(), à côté de l'exclusion existante "réservée".
+
   1.6.1  2026-05-29  Session #6
          - [Fix] Liste TVA_Vente lue dans le bon onglet : Scelle_Transactions!AG8:AG23
            (était pointé par erreur sur Scelle_Stock, d'où le fallback "Régime normal" seul).
@@ -515,7 +520,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.6.1';
+const APP_VERSION      = '1.6.3';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -619,6 +624,11 @@ function normAccent(s) {
 // Une cellule TVA_Vente vaut "réservée" (toutes variantes accent/genre/nombre) ?
 function isReservedValue(s) {
   return normAccent(s).startsWith('reserv');
+}
+// "pas vendu" est un statut, pas un régime TVA → jamais proposé au vendeur dans le menu déroulant.
+// Tolérant aux variantes d'espace/casse/accent/tiret ("Pas Vendu", "pas-vendu", …).
+function isNotForSaleStatus(s) {
+  return normAccent(s).replace(/[^a-z]/g, '').startsWith('pasvendu');
 }
 
 function parsePrix(str) {
@@ -1137,6 +1147,7 @@ async function loadStockCache() {
       tvaVenteOptions = raw.filter(v => {
         if (!v) return false;
         if (isReservedValue(v)) return false;          // "réservée" = verrou, jamais un choix de vente
+        if (isNotForSaleStatus(v)) return false;       // "pas vendu" = statut, pas un régime TVA
         const k = normAccent(v);
         if (seen.has(k)) return false;
         seen.add(k);
