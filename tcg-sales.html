@@ -5,6 +5,28 @@
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.7.0  2026-05-29  Session #8
+         - [UI] Zoom réactivé (retrait de maximum-scale) + passe d'optimisation
+           smartphone (media query <=560px : cibles tactiles agrandies, tailles lisibles).
+         - [Clean] Suppression du CSS mort (onglets/stats/leaderboard/split/sales-log/
+           sync) — la partie stats migre vers tcg-master. switchTab() retiré.
+         - [Fix] Onglet central renommé "cartes_stock_et_transactions" (plus de "&").
+           Nouveau helper a1() qui encadre TOUJOURS le nom d'onglet de quotes simples.
+         - [Feature] Détection dynamique des colonnes cartes (find par nom d'en-tête,
+           repli sur les offsets connus si l'en-tête ne matche pas) — aligné sur le scellé.
+         - [Feature] Remise "± Total" : répartition proportionnelle par valeur, en EUROS
+           ENTIERS, méthode du plus grand reste, sur TOUS les articles (le total tombe
+           juste au centime près = exact). Les unités restantes vont aux lignes les plus
+           grosses (= articles de plus grande valeur).
+         - [Feature] Formateur monétaire unique via Intl fr-BE : toujours "12,50 €".
+         - [Feature] Journal d'événements (logEvent) : toasts + diagnostics persistés
+           (localStorage, anneau 300 entrées) + console. exportLog() pour récupérer.
+         - [Fix] clearCartSilent vide l'acheteur après vente quand le Master n'en impose
+           pas (le type de vente reste "Régime normal").
+         - [Fix] HEARTBEAT_POLL_MS réellement utilisé ; SYNC_POLL_MS retiré (inutilisé).
+         - [Fix] Classe HttpError explicite (fin du tri d'erreurs par texte de message).
+         - [Fix] parseInt base 10 ; init().catch ; txId rendu unique (suffixe aléatoire).
+
   1.6.3  2026-05-29  Session #7
          - [Fix] Menu déroulant "Type de vente" (TVA_Vente) : la valeur "pas vendu"
            est désormais exclue de la liste proposée au vendeur (statut, pas un régime TVA).
@@ -65,7 +87,7 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TCG Sales</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -95,17 +117,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .auth-pill.connected{border-color:var(--success);color:var(--success);}
 .auth-pill:hover{border-color:var(--accent2);color:var(--accent2);}
 
-/* ── Tabs ── */
-.tabs{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:10px;
-  overflow:hidden;margin-bottom:24px;}
-.tab-btn{flex:1;padding:14px 12px;display:flex;align-items:center;justify-content:center;
-  gap:8px;cursor:pointer;transition:all .2s;font-family:'Space Mono',monospace;
-  font-size:.62rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);
-  border-right:1px solid var(--border);user-select:none;}
-.tab-btn:last-child{border-right:none;}
-.tab-btn.active{background:rgba(232,255,71,.06);color:var(--text);}
-.tab-btn.hidden-tab{display:none;}
-.tab-btn:not(.active):hover{background:rgba(255,255,255,.02);}
+/* ── Tab content (un seul onglet actif côté vendeur) ── */
 .tab-content{display:none;}
 .tab-content.active{display:block;}
 
@@ -175,47 +187,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .btn-lg{padding:16px 28px;font-size:.75rem;width:100%;justify-content:center;display:flex;gap:8px;}
 .btn-sm{padding:7px 12px;font-size:.6rem;}
 .flex-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
-
-/* ── Stats tab ── */
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px;}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;}
-.stat-label{font-family:'Space Mono',monospace;font-size:.55rem;text-transform:uppercase;
-  letter-spacing:.12em;color:var(--muted);margin-bottom:5px;}
-.stat-val{font-size:1.6rem;font-weight:800;color:var(--accent);line-height:1;}
-.stat-val.blue{color:var(--accent2);}
-.stat-val.green{color:var(--success);}
-.stat-sub{font-size:.68rem;color:var(--muted);margin-top:3px;}
-
-/* ── Leaderboard ── */
-.lb-item{display:flex;align-items:center;gap:12px;padding:10px 0;
-  border-bottom:1px solid rgba(34,39,54,.6);}
-.lb-rank{font-family:'Space Mono',monospace;font-size:.75rem;font-weight:700;
-  color:var(--muted);width:24px;text-align:center;flex-shrink:0;}
-.lb-rank.gold{color:#fbbf24;}
-.lb-rank.silver{color:#9ca3af;}
-.lb-rank.bronze{color:#c97c4a;}
-.lb-name{flex:1;font-weight:700;}
-.lb-stats{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--muted);text-align:right;}
-.lb-ca{font-family:'Space Mono',monospace;font-size:.8rem;font-weight:700;color:var(--accent);}
-
-/* ── Split table ── */
-.split-row{display:flex;justify-content:space-between;padding:8px 0;
-  border-bottom:1px solid rgba(34,39,54,.6);font-size:.78rem;}
-.split-row:last-child{border-bottom:none;}
-.split-label{color:var(--dim);}
-.split-val{font-family:'Space Mono',monospace;font-weight:700;color:var(--accent2);}
-.split-pct{font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);margin-left:8px;}
-
-/* ── Sales log ── */
-.sales-log{max-height:300px;overflow-y:auto;}
-.sale-row{display:flex;align-items:center;gap:10px;padding:8px 0;
-  border-bottom:1px solid rgba(34,39,54,.4);font-size:.72rem;}
-.sale-row:last-child{border-bottom:none;}
-.sale-time{font-family:'Space Mono',monospace;font-size:.58rem;color:var(--muted);flex-shrink:0;width:46px;}
-.sale-vendor{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--accent2);flex-shrink:0;width:70px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.sale-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);}
-.sale-price{font-family:'Space Mono',monospace;color:var(--accent);flex-shrink:0;}
 
 /* ── Toast ── */
 .toast{position:fixed;bottom:24px;right:24px;background:var(--accent);color:#0a0c10;
@@ -304,12 +275,6 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.78rem;
   color:var(--warning);font-family:'Space Mono',monospace;text-align:center;}
 
-/* ── Sync status (master) ── */
-.sync-card{border-color:rgba(71,200,255,.2);}
-.sync-status-text{font-size:.85rem;color:var(--dim);margin-bottom:10px;line-height:1.4;}
-.sync-pending-count{color:var(--warning);font-weight:700;}
-.sync-ok-count{color:var(--success);font-weight:700;}
-
 /* ── Cache status pill ── */
 .cache-pill{font-family:'Space Mono',monospace;font-size:.55rem;padding:4px 10px;border-radius:20px;
   border:1px solid var(--border);color:var(--muted);white-space:nowrap;}
@@ -323,6 +288,27 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .btn-icon:hover{border-color:var(--accent2);color:var(--accent2);}
 .btn-icon.spinning{animation:spin 1s linear infinite;color:var(--accent2);border-color:var(--accent2);}
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+
+/* ── Optimisation smartphone (cibles tactiles + lisibilité) ── */
+@media (max-width:560px){
+  .app{padding:14px 10px;}
+  header{margin-bottom:16px;}
+  .logo h1{font-size:1.4rem;}
+  .cart-total{font-size:1.7rem;}
+  .btn{padding:12px 16px;}
+  .btn-sm{padding:10px 12px;font-size:.62rem;}
+  .btn-lg{padding:18px 24px;}
+  .qty-btn{width:32px;height:32px;font-size:1rem;}
+  .cart-item-remove{width:34px;height:34px;}
+  .cart-item{padding:14px;gap:10px;}
+  .cart-item-name{font-size:.9rem;}
+  .scan-zone{padding:26px 16px;}
+  .scan-icon{font-size:2.4rem;}
+  .modal-panel{padding:18px;}
+  .modal-field input,.modal-field select{font-size:1rem;padding:12px;}
+  #tvaVenteSelect,#buyerInput{font-size:1rem!important;padding:12px!important;}
+}
+
 </style>
 </head>
 <body>
@@ -374,7 +360,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     <div class="cart-header">
       <div>
         <div class="section-title">Panier en cours</div>
-        <div class="cart-total" id="cartTotal">0.00€</div>
+        <div class="cart-total" id="cartTotal">0,00 €</div>
         <div class="cart-count" id="cartCount">0 article</div>
       </div>
       <div class="flex-row">
@@ -466,12 +452,12 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     <div class="modal-title">± Ajuster le total</div>
     <div class="modal-subtitle">Négociation client</div>
     <div class="modal-info">
-      Total actuel : <strong id="adjustCurrentTotal">0.00€</strong><br>
-      La différence sera appliquée proportionnellement sur les articles les plus chers.
+      Total actuel : <strong id="adjustCurrentTotal">0,00 €</strong><br>
+      La différence est répartie proportionnellement (en euros entiers) sur les articles, en commençant par les plus chers.
     </div>
     <div class="modal-field">
-      <label>Nouveau total (€)</label>
-      <input id="adjustNewTotal" type="number" step="0.01" min="0" inputmode="decimal">
+      <label>Nouveau total (€ — entier)</label>
+      <input id="adjustNewTotal" type="number" step="1" min="0" inputmode="numeric">
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeAdjustTotal()">Annuler</button>
@@ -486,7 +472,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     <div class="modal-title">⚠ Vider le panier ?</div>
     <div class="modal-subtitle">Action réversible pendant 60 secondes</div>
     <div class="modal-info">
-      <strong id="confirmClearCount">0</strong> article(s) pour un total de <strong id="confirmClearTotal">0.00€</strong> seront retirés.<br>
+      <strong id="confirmClearCount">0</strong> article(s) pour un total de <strong id="confirmClearTotal">0,00 €</strong> seront retirés.<br>
       Un bouton "Restaurer" apparaîtra pendant 60 secondes au cas où.
     </div>
     <div class="modal-actions">
@@ -520,7 +506,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.6.3';
+const APP_VERSION      = '1.7.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -528,7 +514,7 @@ const EVENTS_GSHEET_ID   = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
 const GSHEET_SCOPES      = 'https://www.googleapis.com/auth/spreadsheets';
 
 // Tabs (Central GSheet)
-const SHEET_CARDS  = 'Cartes_Stock_&_Transactions';
+const SHEET_CARDS  = 'cartes_stock_et_transactions';
 const SHEET_SEALED = 'Scelle_Stock';
 const SHEET_SEALED_TX = 'Scelle_Transactions';
 
@@ -541,7 +527,6 @@ const SHEET_STATE     = 'app_state';
 // (la détection master n'est plus utilisée dans l'app vendeur)
 
 // Timings
-const SYNC_POLL_MS         = 8000;          // (non utilisé côté vendeur)
 const CACHE_AUTO_REFRESH_MS = 5 * 60 * 1000; // Refresh stock toutes les 5 min en arrière-plan
 const CACHE_STALE_AFTER_MS  = 2 * 60 * 1000; // Cache considéré "stale" après 2 min
 const RESTORE_WINDOW_MS    = 60 * 1000;     // "Restaurer panier" dispo pendant 60s
@@ -553,6 +538,8 @@ const LS_CART          = 'tcg_sales_cart_v2';
 const LS_OFFLINE_QUEUE = 'tcg_sales_offline_queue_v2';
 const LS_LAST_CART     = 'tcg_sales_last_cart_v2';
 const LS_TOKEN         = 'tcg_sales_token_v2';
+const LS_LOG           = 'tcg_sales_log_v1';   // journal d'événements (anneau)
+const LOG_MAX          = 300;                  // nombre max d'entrées conservées
 
 // ═══════════════════════════════════════════════════════════════
 // STATE
@@ -576,9 +563,13 @@ let scanTimer    = null;
 let stockCacheCards  = new Map();   // key (col D) → cardData
 let stockCacheSealed = new Map();   // barcode (Code Technique) → sealedData
 let cardHeaderRow    = null;         // détecté dynamiquement
+let cardColIdx       = null;         // {iKey, iName, iType, ...} détecté dynamiquement (repli offsets)
 let sealedColIdx     = null;         // {iCode, iNom, iType, ...}
 let lastCacheRefresh = 0;
 let cacheLoading     = false;
+
+// Journal d'événements (anneau persistant — voir logEvent / exportLog)
+let eventLog = [];
 
 // Offline queue
 let offlineQueue = []; // [{ payload, timestamp, retries }]
@@ -644,10 +635,25 @@ function parsePrix(str) {
   return parseFloat(s) || 0;
 }
 
+// ── Journal d'événements ──────────────────────────────────────
+// Garde une trace persistée des toasts et diagnostics (anneau LOG_MAX).
+// exportLog() (console) renvoie tout le journal pour copier/analyser.
+function logEvent(level, msg, data) {
+  const e = { t: new Date().toISOString(), level, msg, data: data ?? null };
+  eventLog.push(e);
+  if (eventLog.length > LOG_MAX) eventLog = eventLog.slice(-LOG_MAX);
+  try { localStorage.setItem(LS_LOG, JSON.stringify(eventLog)); } catch (_) {}
+  const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  fn('[log:' + level + '] ' + msg, data ?? '');
+}
+function exportLog() { return JSON.stringify(eventLog, null, 2); }
+window.exportLog = exportLog; // accessible depuis la console F12
+
+// Formateur monétaire unique — toujours "12,50 €" (virgule, 2 décimales, locale belge)
+const MONEY_FMT = new Intl.NumberFormat('fr-BE', { style: 'currency', currency: 'EUR' });
 function formatPrice(p) {
   const n = parseFloat(p);
-  if (isNaN(n)) return '0€';
-  return parseFloat(n.toFixed(2)) + '€';
+  return MONEY_FMT.format(isNaN(n) ? 0 : n);
 }
 
 function colIdx2letter(n) {
@@ -724,15 +730,6 @@ function updateNet() {
 }
 window.addEventListener('online', updateNet);
 window.addEventListener('offline', updateNet);
-
-// ═══════════════════════════════════════════════════════════════
-// TABS
-// ═══════════════════════════════════════════════════════════════
-function switchTab(n) {
-  document.querySelectorAll('.tab-content').forEach((t, i) => t.classList.toggle('active', i + 1 === n));
-  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', i + 1 === n));
-  if (n === 1) setTimeout(focusScan, 50);
-}
 
 // ═══════════════════════════════════════════════════════════════
 // OAUTH
@@ -858,6 +855,22 @@ function logout() {
 // ═══════════════════════════════════════════════════════════════
 // SHEETS API (avec retry sur 5xx/429)
 // ═══════════════════════════════════════════════════════════════
+// Encadre TOUJOURS le nom d'onglet de quotes simples → robuste aux caractères
+// spéciaux (&, espace, etc.). Les quotes internes sont doublées (échappement A1).
+function a1(sheet, rng) {
+  return "'" + String(sheet).replace(/'/g, "''") + "'!" + rng;
+}
+
+// Erreur HTTP explicite (status connu) — distincte d'une erreur réseau (status inconnu).
+class HttpError extends Error {
+  constructor(method, status, body) {
+    super(method + ' ' + status + (body ? ': ' + String(body).substring(0, 200) : ''));
+    this.name = 'HttpError';
+    this.method = method;
+    this.status = status;
+  }
+}
+
 async function sheetsRequest(method, url, body) {
   let lastErr = null;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
@@ -869,22 +882,23 @@ async function sheetsRequest(method, url, body) {
         body: body ? JSON.stringify(body) : undefined
       });
       if (res.ok) return res.json();
-      // Retry sur 429 (rate limit) ou 5xx
+      // 429 (rate limit) ou 5xx → réessai
       if (res.status === 429 || res.status >= 500) {
-        lastErr = new Error(method + ' ' + res.status);
+        lastErr = new HttpError(method, res.status);
         continue;
       }
-      // 4xx non retry-able
+      // 4xx → erreur définitive, pas de réessai
       const txt = await res.text();
-      throw new Error(method + ' ' + res.status + ': ' + txt.substring(0, 200));
+      throw new HttpError(method, res.status, txt);
     } catch (e) {
       lastErr = e;
-      // Network error → retry
-      if (!e.message.includes(method + ' ')) continue;
-      throw e;
+      // Erreur HTTP définitive (4xx) → on remonte sans réessayer.
+      // Tout le reste (erreur réseau, fetch rejeté) → réessai.
+      if (e instanceof HttpError && e.status >= 400 && e.status < 500 &&
+          e.status !== 429) throw e;
     }
   }
-  throw lastErr || new Error(method + ' failed after retries');
+  throw lastErr || new Error(method + ' : échec après retries');
 }
 
 async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID) {
@@ -917,7 +931,7 @@ async function readMasterHeartbeat() {
     return;
   }
   try {
-    const r = await sheetsGet(`${SHEET_STATE}!A2:D2`, EVENTS_GSHEET_ID);
+    const r = await sheetsGet(a1(SHEET_STATE, 'A2:D2'), EVENTS_GSHEET_ID);
     const row = (r.values && r.values[0]) || [];
     const tsRaw = (row[0] || '').toString().trim();
     const eventName = (row[1] || '').toString().trim();
@@ -964,10 +978,10 @@ function updateMasterStatusBar() {
   bar.innerHTML = icon + ' ' + esc(masterStatus.message);
 }
 
-// Polling régulier (toutes les 20 secondes)
+// Polling régulier (HEARTBEAT_POLL_MS)
 setInterval(() => {
   if (isAuth()) readMasterHeartbeat();
-}, 20000);
+}, HEARTBEAT_POLL_MS);
 
 // ═══════════════════════════════════════════════════════════════
 // TYPE DE VENTE (TVA_Vente) + ACHETEUR
@@ -1026,20 +1040,29 @@ function getResolvedBuyer() {
 // STOCK CACHE — load on login, refresh manual
 // ═══════════════════════════════════════════════════════════════
 async function findCardsHeaderRow() {
-  // Cherche dans la colonne D (clés) ou A (lots) une ligne dont le contenu ressemble à un header
-  // Heuristique : on cherche la ligne contenant "Clé" dans D, ou "Statut" dans AF
-  const r = await sheetsGet(`${SHEET_CARDS}!A1:AF300`, CENTRAL_GSHEET_ID);
+  // Cherche la ligne d'en-tête (col D contient "Clé"/"Key" ou col AF "Statut").
+  // Renvoie { row: <1-indexed>, headers: <tableau A:AF de la ligne d'en-tête> }.
+  const r = await sheetsGet(a1(SHEET_CARDS, 'A1:AF300'), CENTRAL_GSHEET_ID);
   const rows = r.values || [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const colD = (row[3] || '').toString().trim().toLowerCase();
     const colAF = (row[31] || '').toString().trim().toLowerCase();
     if (colD === 'clé' || colD === 'cle' || colD === 'key' || colAF === 'statut' || colAF === 'status') {
-      return i + 1; // 1-indexed
+      return { row: i + 1, headers: row };
     }
   }
-  // Fallback
-  return 143;
+  // Fallback : ligne 143, en-têtes inconnus (→ repli sur offsets connus)
+  return { row: 143, headers: rows[142] || [] };
+}
+
+// Cherche une colonne par nom (variantes), repli sur un index connu si introuvable.
+function findColByName(headers, names, fallbackIdx) {
+  const norm = z => String(z ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[‘’‚‛]/g, "'").trim().toLowerCase();
+  const wanted = names.map(norm);
+  const idx = (headers || []).findIndex(h => wanted.includes(norm(h)));
+  return idx >= 0 ? idx : fallbackIdx;
 }
 
 async function loadStockCache() {
@@ -1050,35 +1073,51 @@ async function loadStockCache() {
   updateCachePill('loading');
 
   try {
-    // 1. Détecter dynamiquement la ligne d'en-tête
-    cardHeaderRow = await findCardsHeaderRow();
+    // 1. Détecter dynamiquement la ligne d'en-tête + ses libellés
+    const hdr = await findCardsHeaderRow();
+    cardHeaderRow = hdr.row;
+    // 2. Index des colonnes par NOM (repli sur offsets connus en notation A:AF absolue :
+    //    D=3, G=6, H=7, I=8, J=9, K=10, P=15, Q=16, AF=31). Si tes libellés diffèrent,
+    //    ajuste les listes de noms ci-dessous — le repli garantit le comportement actuel.
+    cardColIdx = {
+      iKey:       findColByName(hdr.headers, ['clé', 'cle', 'key'], 3),
+      iCodeSerie: findColByName(hdr.headers, ['code série', 'code serie', 'code_serie'], 6),
+      iNomSerie:  findColByName(hdr.headers, ['nom série', 'nom serie', 'nom_serie'], 7),
+      iName:      findColByName(hdr.headers, ['nom_item', 'nom item', 'nom', 'name'], 8),
+      iType:      findColByName(hdr.headers, ['type_item', 'type item', 'type'], 9),
+      iEtat:      findColByName(hdr.headers, ['etat', 'état', 'state'], 10),
+      iStatut:    findColByName(hdr.headers, ['statut', 'status'], 15),
+      iPrix:      findColByName(hdr.headers, ['côte/u', 'cote/u', 'prix', 'price'], 16),
+      iTvaVente:  findColByName(hdr.headers, ['tva_vente', 'tva vente'], 31)
+    };
+    logEvent('info', 'CardColIdx détecté', cardColIdx);
 
-    // 2. Charger toutes les cartes en un seul GET (col C à AF, à partir de la première ligne sous le header)
-    const cardData = await sheetsGet(`${SHEET_CARDS}!C${cardHeaderRow + 1}:AF`, CENTRAL_GSHEET_ID);
+    // 3. Charger toutes les cartes (A:AF, indices absolus alignés sur l'en-tête)
+    const cardData = await sheetsGet(a1(SHEET_CARDS, 'A' + (cardHeaderRow + 1) + ':AF'), CENTRAL_GSHEET_ID);
     const rows = cardData.values || [];
     stockCacheCards.clear();
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const key = (row[1] || '').toString().trim();      // col D
+      const key = (row[cardColIdx.iKey] || '').toString().trim();
       if (!key) continue;
-      // Filtre statut : col P (idx 13 dans range C:AF) = sale status. Toute valeur non-vide = indisponible.
-      const saleStatus = (row[13] || '').toString().trim();
+      // Statut non-vide = indisponible (vendu/réservé/etc.)
+      const saleStatus = (row[cardColIdx.iStatut] || '').toString().trim();
       if (saleStatus) continue;
       stockCacheCards.set(key, {
         key,
-        codeSerie: (row[4] || '').toString().trim(),  // G
-        nomSerie:  (row[5] || '').toString().trim(),  // H
-        name:      (row[6] || '').toString().trim(),  // I
-        type:      (row[7] || '').toString().trim(),  // J
-        etat:      (row[8] || '').toString().trim(),  // K
-        prix:      parsePrix(row[14]),                 // Q (déjà rempli par TCG Integrator)
-        reserved:  isReservedValue(row[29]),           // AF = TVA_Vente (cartes) — "réservée" = verrou
+        codeSerie: (row[cardColIdx.iCodeSerie] || '').toString().trim(),
+        nomSerie:  (row[cardColIdx.iNomSerie]  || '').toString().trim(),
+        name:      (row[cardColIdx.iName]      || '').toString().trim(),
+        type:      (row[cardColIdx.iType]      || '').toString().trim(),
+        etat:      (row[cardColIdx.iEtat]      || '').toString().trim(),
+        prix:      parsePrix(row[cardColIdx.iPrix]),
+        reserved:  isReservedValue(row[cardColIdx.iTvaVente]),
         sheetRow:  cardHeaderRow + 1 + i
       });
     }
 
-    // 3. Charger Scelle_Stock (A:AG — TVA_Vente est en col AG sur l'onglet scellé)
-    const sealedData = await sheetsGet(`'${SHEET_SEALED}'!A:AG`, CENTRAL_GSHEET_ID);
+    // 4. Charger Scelle_Stock (A:AG — TVA_Vente est en col AG sur l'onglet scellé)
+    const sealedData = await sheetsGet(a1(SHEET_SEALED, 'A:AG'), CENTRAL_GSHEET_ID);
     const sRows = sealedData.values || [];
     if (sRows.length > 0) {
       // Détection dynamique de la ligne d'en-tête (le header n'est pas forcément en ligne 1)
@@ -1122,7 +1161,7 @@ async function loadStockCache() {
         if (!itemKey) continue;
         const statut = (row[sealedColIdx.iStatut] || '').toString().trim().toLowerCase();
         if (statut === 'vendu' || statut === 'x') continue;
-        const qty = parseInt(row[sealedColIdx.iQty]) || 0;
+        const qty = parseInt(row[sealedColIdx.iQty], 10) || 0;
         if (qty <= 0) continue;
         stockCacheSealed.set(itemKey, {
           key: itemKey,
@@ -1139,9 +1178,9 @@ async function loadStockCache() {
       }
     }
 
-    // 4. Charger la liste des régimes TVA_Vente proposables (zone curée Scelle_Transactions!AG8:AG23)
+    // 5. Charger la liste des régimes TVA_Vente proposables (zone curée Scelle_Transactions!AG8:AG23)
     try {
-      const tvaData = await sheetsGet(`'${SHEET_SEALED_TX}'!AG8:AG23`, CENTRAL_GSHEET_ID);
+      const tvaData = await sheetsGet(a1(SHEET_SEALED_TX, 'AG8:AG23'), CENTRAL_GSHEET_ID);
       const raw = (tvaData.values || []).map(r => (r[0] || '').toString().trim());
       const seen = new Set();
       tvaVenteOptions = raw.filter(v => {
@@ -1411,6 +1450,11 @@ function clearCartSilent() {
   cart = [];
   renderCart();
   resetTvaSelect(); // le type de vente revient à "Régime normal" pour la vente suivante
+  // Hors convention (le Master n'impose pas d'acheteur) : on repart d'un champ vide
+  if (!masterProvidesBuyer()) {
+    const bi = document.getElementById('buyerInput');
+    if (bi) bi.value = '';
+  }
   document.getElementById('scanStatus').textContent = 'En attente de scan…';
 }
 
@@ -1615,7 +1659,7 @@ function openAdjustTotal() {
   if (cart.length === 0) return;
   const cur = getCartTotal();
   document.getElementById('adjustCurrentTotal').textContent = formatPrice(cur);
-  document.getElementById('adjustNewTotal').value = parseFloat(cur.toFixed(2));
+  document.getElementById('adjustNewTotal').value = Math.round(cur); // euros entiers
   document.getElementById('adjustTotalModal').classList.remove('hidden');
   setTimeout(() => {
     const i = document.getElementById('adjustNewTotal');
@@ -1627,34 +1671,39 @@ function closeAdjustTotal() {
   focusScan();
 }
 function confirmAdjustTotal() {
-  const newTotal = parseFloat(document.getElementById('adjustNewTotal').value);
+  const raw = parseFloat(document.getElementById('adjustNewTotal').value);
   const cur = getCartTotal();
-  if (isNaN(newTotal) || newTotal < 0) { showToast('⚠ Total invalide', true); return; }
-  const diff = newTotal - cur;
-  if (Math.abs(diff) < 0.01) { closeAdjustTotal(); return; }
+  if (isNaN(raw) || raw < 0) { showToast('⚠ Total invalide', true); return; }
+  if (cart.length === 0) { closeAdjustTotal(); return; }
 
-  // Répartir la diff sur les articles les plus chers (par prix unit * qty)
-  // On modifie le prix unitaire des lignes les plus chères proportionnellement
-  const sorted = [...cart].sort((a, b) => (b.prixUnit * b.qty) - (a.prixUnit * a.qty));
-  // Top 3 lignes ou toutes si moins
-  const topN = Math.min(3, sorted.length);
-  const top = sorted.slice(0, topN);
-  const topTotal = top.reduce((s, c) => s + c.prixUnit * c.qty, 0);
-  if (topTotal <= 0) { showToast('⚠ Impossible de répartir', true); return; }
+  const target = Math.round(raw);            // euros entiers
+  if (target === Math.round(cur) && target === raw) { closeAdjustTotal(); return; }
 
-  top.forEach(c => {
-    const lineTotal = c.prixUnit * c.qty;
-    const lineShare = lineTotal / topTotal;
-    const lineDelta = diff * lineShare;
-    const newLineTotal = lineTotal + lineDelta;
-    const newUnit = Math.max(0, newLineTotal / c.qty);
-    c.prixUnit = parseFloat(newUnit.toFixed(2));
-    c.priceModified = (c.prixUnit !== c.prixOriginal);
+  // Poids = valeur de ligne actuelle → la remise pèse surtout sur les articles les plus chers
+  const weights = cart.map(c => c.prixUnit * c.qty);
+  const wTotal = weights.reduce((s, w) => s + w, 0);
+  if (wTotal <= 0) { showToast('⚠ Impossible de répartir', true); return; }
+
+  // Part idéale (réelle) puis méthode du plus grand reste → total EXACT en euros entiers
+  const ideal  = weights.map(w => target * (w / wTotal));
+  const lineE  = ideal.map(x => Math.floor(x));          // euros attribués (plancher)
+  let leftover = target - lineE.reduce((s, x) => s + x, 0); // unités entières restantes (0..n-1)
+  // Les euros restants vont aux plus grosses fractions, puis aux lignes de plus grande valeur
+  const order = ideal
+    .map((x, i) => ({ i, frac: x - Math.floor(x), w: weights[i] }))
+    .sort((a, b) => (b.frac - a.frac) || (b.w - a.w));
+  for (let k = 0; k < leftover; k++) lineE[order[k].i]++;
+
+  // Application : prix unitaire = total de ligne (euros entiers) / quantité
+  cart.forEach((c, i) => {
+    c.prixUnit = c.qty > 0 ? lineE[i] / c.qty : lineE[i];
+    c.priceModified = Math.abs(c.prixUnit - c.prixOriginal) > 0.005;
   });
 
   closeAdjustTotal();
   renderCart();
-  showToast('✓ Total ajusté à ' + formatPrice(newTotal));
+  showToast('✓ Total ajusté à ' + formatPrice(target));
+  logEvent('info', 'Total ajusté (négociation)', { de: cur, vers: target });
 }
 
 document.getElementById('adjustNewTotal').addEventListener('keydown', e => {
@@ -1693,7 +1742,8 @@ async function validateSale() {
 
   const now = new Date();
   const ts  = now.toISOString();
-  const txId = now.getTime().toString();
+  // txId unique : horodatage + suffixe aléatoire (sert de clé d'idempotence côté Master)
+  const txId = now.getTime().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
   // Build rows : 1 ligne par item du panier (quantité = c.qty)
   // Schéma ventes_detail : A:N — M=TVA_Vente, N=Acheteur (Synced/SyncedAt = O/P, gérés par Master)
@@ -1714,7 +1764,7 @@ async function validateSale() {
     safeForSheets(acheteur)
   ]);
 
-  const payload = { range: `${SHEET_SALES}!A:N`, values: rows, ts, txId, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
+  const payload = { range: a1(SHEET_SALES, 'A:N'), values: rows, ts, txId, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
 
   // Online → append direct ; offline → queue
   if (!navigator.onLine) {
@@ -1784,6 +1834,7 @@ function showToast(msg, isErr = false) {
   t.textContent = msg;
   t.className = 'toast' + (isErr ? ' err' : '') + ' show';
   setTimeout(() => t.classList.remove('show'), 2800);
+  logEvent(isErr ? 'error' : 'info', 'toast: ' + msg);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1792,6 +1843,9 @@ function showToast(msg, isErr = false) {
 async function init() {
   const vb = document.getElementById('versionBadge'); if(vb) vb.textContent = 'v' + APP_VERSION;
   const av = document.getElementById('appVersion'); if(av) av.textContent = 'v' + APP_VERSION;
+  // Restore journal d'événements
+  eventLog = lsLoad(LS_LOG, []);
+  logEvent('info', 'Démarrage app v' + APP_VERSION);
   // Restore offline queue
   offlineQueue = lsLoad(LS_OFFLINE_QUEUE, []);
   renderOfflineQueueBar();
@@ -1827,7 +1881,11 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-init();
+init().catch(e => {
+  console.error('init failed', e);
+  logEvent('error', 'init a échoué', { message: e && e.message });
+  try { showToast('✗ Erreur au démarrage', true); } catch (_) {}
+});
 </script>
 </body>
 </html>
