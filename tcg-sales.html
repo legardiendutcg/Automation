@@ -1,10 +1,25 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.9.5 (Session #10 — 2026-05-29)
+  Version : 1.10.0 (Session #11 — 2026-05-30)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.10.0 2026-05-30  Session #11 (sémantique acheteur + statut master — PALIER COORDONNÉ avec Master)
+         Numéro partagé avec Master 1.10.0. (Auth GIS reportée à une prochaine session.)
+         - [Feature] Acheteur : le défaut vient désormais du NOM D'EVENT publié par le Master
+           (app_state col B), PLUS de "acheteur par défaut" (col D supprimée côté Master ;
+           col D = libellé du verrou master, ignorée par Sales). Le champ acheteur est
+           TOUJOURS éditable : pré-rempli avec le nom d'event (modifiable), sinon vide et
+           obligatoire à la validation. Fin du mode lecture seule imposé.
+         - [Feature] Statut master par DÉTECTION DE CHANGEMENT de l'horodatage (immunisé au
+           décalage d'horloge), seuil 30s, poll 10s. Bannière = simple WARNING non bloquant
+           (rappel d'ouvrir une session master) — n'apparaît que si master absent ; 'idle'
+           (master en ligne sans event) ne déclenche plus d'alerte. Les ventes partent
+           TOUJOURS (outbox inchangé), que le master soit en ligne ou non.
+         - Aucune modification du protocole de vente, des schémas ventes_detail/STOCK_PUBLIC,
+           de l'outbox ni de la sécurité. Icônes = emojis.
+
   1.9.5  2026-05-29  Session #10 (finitions en-tête + bouton — patch Sales seul)
          ⚠️ 1.10.0 reste RÉSERVÉ au jalon Auth GIS (Sales + Master ensemble).
          - [UI] Version collée sous le titre "TCG SALES", alignée à droite (bord droit
@@ -812,7 +827,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.9.5';
+const APP_VERSION      = '1.10.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -839,7 +854,8 @@ const CACHE_AUTO_REFRESH_MS = 5 * 60 * 1000; // Refresh stock toutes les 5 min e
 const CACHE_STALE_AFTER_MS  = 2 * 60 * 1000; // Cache considéré "stale" après 2 min
 const RESTORE_WINDOW_MS    = 60 * 1000;     // "Restaurer panier" dispo pendant 60s
 const RETRY_DELAYS_MS      = [500, 1500, 3500]; // Backoff progressif
-const HEARTBEAT_POLL_MS    = 20000;         // Lecture du heartbeat master toutes les 20s
+const HEARTBEAT_POLL_MS    = 10000;         // Lecture du heartbeat master toutes les 10s
+const MASTER_STALE_MS      = 30000;         // Master "hors ligne" si l'horodatage est figé depuis +30s
 
 // localStorage keys
 const LS_CART          = 'tcg_sales_cart_v2';
@@ -859,8 +875,10 @@ let gTokenExpiry = 0;
 let gUserEmail   = '';
 let gUserName    = '';
 
-// Master status (lu via app_state)
-let masterStatus = { state: 'unknown', message: '—', ts: null, eventName: '', device: '', defaultBuyer: '', lastReadAt: 0 };
+// Master status (lu via app_state ; détection de changement d'horodatage, immunisée au décalage d'horloge)
+let masterStatus = { state: 'unknown', message: '—', eventName: '', lastReadAt: 0 };
+let masterPrevTs = null;        // dernier horodatage master observé
+let masterLastChangeAt = 0;     // instant local (Date.now) du dernier changement observé
 // Liste des régimes TVA_Vente proposables au vendeur (lue dans Scelle_Transactions!AG8:AG23, "réservée" exclu)
 let tvaVenteOptions = [];
 
@@ -1233,8 +1251,9 @@ async function sheetsAppend(range, values, inputOption = 'USER_ENTERED', gsheetI
 // ═══════════════════════════════════════════════════════════════
 async function readMasterHeartbeat() {
   if (!isAuth() || !navigator.onLine) {
-    masterStatus = { state: 'unknown', message: '—' };
+    masterStatus = { state: 'unknown', message: '—', eventName: '' };
     updateMasterStatusBar();
+    updateBuyerField();
     return;
   }
   try {
@@ -1242,22 +1261,17 @@ async function readMasterHeartbeat() {
     const row = (r.values && r.values[0]) || [];
     const tsRaw = (row[0] || '').toString().trim();
     const eventName = (row[1] || '').toString().trim();
-    const device = (row[2] || '').toString().trim();
-    const defaultBuyer = (row[3] || '').toString().trim();
-    let ts = null;
-    if (tsRaw) {
-      const d = new Date(tsRaw);
-      if (!isNaN(d.getTime())) ts = d.getTime();
-    }
-    const ageMs = ts ? (Date.now() - ts) : Infinity;
-    masterStatus = { ts, ageMs, eventName, device, defaultBuyer, lastReadAt: Date.now() };
-    // Détermine l'état affiché
-    if (!ts || ageMs > 60000) {
+    // col C/D = uuid/label du verrou master (depuis 1.10.0) — non utilisés par Sales.
+    // Détection de CHANGEMENT de l'horodatage (immunisée au décalage d'horloge entre appareils) :
+    if (tsRaw !== masterPrevTs) { masterPrevTs = tsRaw; masterLastChangeAt = Date.now(); }
+    const staleFor = Date.now() - masterLastChangeAt;
+    masterStatus = { eventName, lastReadAt: Date.now() };
+    if (!tsRaw || staleFor > MASTER_STALE_MS) {
       masterStatus.state = 'offline';
-      masterStatus.message = 'Master déconnecté · ventes mises en attente';
+      masterStatus.message = 'Master hors ligne · pense à ouvrir une session master (tes ventes restent enregistrées)';
     } else if (!eventName) {
       masterStatus.state = 'idle';
-      masterStatus.message = 'Master en attente · pas d\'event configuré';
+      masterStatus.message = 'Master en ligne · sans nom d\'event';
     } else {
       masterStatus.state = 'ok';
       masterStatus.message = 'Event actif : ' + eventName;
@@ -1266,7 +1280,7 @@ async function readMasterHeartbeat() {
     updateBuyerField();
   } catch (e) {
     // Tab app_state n'existe pas encore = master jamais lancé
-    masterStatus = { state: 'never', message: 'Master jamais initialisé · ouvre l\'app master une fois', defaultBuyer: '' };
+    masterStatus = { state: 'never', message: 'Master jamais initialisé · ouvre l\'app master une fois', eventName: '' };
     updateMasterStatusBar();
     updateBuyerField();
   }
@@ -1277,12 +1291,12 @@ function updateMasterStatusBar() {
   if (!bar) return;
   if (!isAuth()) { bar.classList.add('hidden'); return; }
   const s = masterStatus.state;
-  if (s === 'ok') { bar.classList.add('hidden'); return; }
+  // Warning NON bloquant : la barre ne s'affiche que si le master est absent.
+  // 'ok' (event actif) et 'idle' (master en ligne sans event) = master présent → barre masquée.
+  if (s === 'ok' || s === 'idle' || s === 'unknown') { bar.classList.add('hidden'); return; }
   bar.classList.remove('hidden');
-  let icon = '🟡', cls = 'warn';
-  if (s === 'offline' || s === 'never') { icon = '🔴'; cls = 'err'; }
-  bar.className = 'master-status-bar ' + cls;
-  bar.innerHTML = icon + ' ' + esc(masterStatus.message);
+  bar.className = 'master-status-bar err';
+  bar.innerHTML = '🔴 ' + esc(masterStatus.message);
 }
 
 // Polling régulier (HEARTBEAT_POLL_MS)
@@ -1315,30 +1329,32 @@ function resetTvaSelect() {
   if (def) sel.value = def;
 }
 
-// Master fournit un acheteur par défaut → affichage lecture seule ; sinon saisie libre par le vendeur
-function masterProvidesBuyer() {
-  return !!(masterStatus && masterStatus.defaultBuyer && masterStatus.defaultBuyer.trim());
+// Le nom d'event publié par le Master sert de DÉFAUT d'acheteur (écrasable par le vendeur).
+// S'il est vide, le vendeur doit saisir l'acheteur (obligatoire à la validation).
+function eventBuyerDefault() {
+  return (masterStatus && masterStatus.eventName) ? masterStatus.eventName.trim() : '';
 }
+function masterProvidesBuyer() { return !!eventBuyerDefault(); }
 
 function updateBuyerField() {
   const input  = document.getElementById('buyerInput');
   const locked = document.getElementById('buyerLocked');
-  const lockedName = document.getElementById('buyerLockedName');
-  if (!input || !locked) return;
-  if (masterProvidesBuyer()) {
-    locked.classList.remove('hidden');
-    input.classList.add('hidden');
-    if (lockedName) lockedName.textContent = masterStatus.defaultBuyer.trim();
-  } else {
-    locked.classList.add('hidden');
-    input.classList.remove('hidden');
+  if (!input) return;
+  // Plus de mode "lecture seule" : le champ est toujours éditable.
+  if (locked) locked.classList.add('hidden');
+  input.classList.remove('hidden');
+  // Pré-remplissage du défaut (nom d'event) tant que le vendeur n'a rien saisi
+  // et que le champ n'a pas le focus (pour ne pas écraser une frappe en cours).
+  const def = eventBuyerDefault();
+  if (def && !input.value.trim() && document.activeElement !== input) {
+    input.value = def;
   }
+  input.placeholder = def ? def : 'Nom du client';
   updateValidateButton();
 }
 
-// Acheteur effectif retenu pour la vente
+// Acheteur effectif retenu pour la vente = ce qui est dans le champ (défaut ou saisie)
 function getResolvedBuyer() {
-  if (masterProvidesBuyer()) return masterStatus.defaultBuyer.trim();
   const input = document.getElementById('buyerInput');
   return input ? input.value.trim() : '';
 }
@@ -1677,11 +1693,10 @@ function clearCartSilent() {
   cart = [];
   renderCart();
   resetTvaSelect(); // le type de vente revient à "Régime normal" pour la vente suivante
-  // Hors convention (le Master n'impose pas d'acheteur) : on repart d'un champ vide
-  if (!masterProvidesBuyer()) {
-    const bi = document.getElementById('buyerInput');
-    if (bi) bi.value = '';
-  }
+  // Réinitialise l'acheteur : on repart du défaut (nom d'event) s'il existe, sinon champ vide
+  const bi = document.getElementById('buyerInput');
+  if (bi) bi.value = '';
+  updateBuyerField(); // re-pré-remplit le défaut d'event si présent
   document.getElementById('scanStatus').textContent = 'Prochain article scanné ici';
 }
 
