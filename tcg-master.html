@@ -1,8 +1,34 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.12.0 (Session #13 — 2026-05-31)
+  Version : 1.14.0 (Session #13 — 2026-05-31)
 =============================================================
+  1.14.0 2026-05-31  Session #13 (roll-back d'une vente — #27, côté Master ; Sales suit en 1.14.0)
+         - [Feature #27] Inversion d'une vente déjà appliquée, par MODIFICATION des lignes
+           existantes dans CENTRAL (jamais de ligne à quantité négative) :
+           · Carte : vide P/R/S/T, remet Q = prix d'origine (porté par Sales en col K de la ligne
+             -RB), AF = "pas vendu" → la carte redevient disponible.
+           · Scellé : supprime la ligne de transaction (retrouvée par le txId estampillé) et
+             ré-incrémente la qty du lot dans Scelle_Stock.
+         - [#27] masterSyncTick reconnaît les lignes ventes_detail dont le txId finit par "-RB" et
+           applique une garde à 4 états (n'inverse QUE si l'originale a réellement été appliquée) :
+           appliquée→inversion · en attente→neutralisation de la PAIRE (CENTRAL pas touché) ·
+           en échec→RB_NOOP · introuvable→anomalie. Trace d'audit ROLLBACK_APPLIED dans `anomalies`.
+         - [#27] applySealedSale ESTAMPILLE désormais le txId en colonne AA de Scelle_Transactions
+           (permet de retrouver la ligne exacte au roll-back, même article vendu plusieurs fois).
+         - Dédup #18 étendue aux -RB (OK_RB/OK_MANUAL_RB indexés). Recharge cache + STOCK_PUBLIC
+           après un roll-back. **NON testé navigateur. Déployer avec Sales 1.14.0** (le bouton ↶
+           arrive côté Sales) — Master 1.14.0 est toutefois sûr seul (estampille inoffensive,
+           gestion -RB dormante tant que Sales n'en envoie pas).
+  1.13.0 2026-05-31  Session #13 (panneau comptoir + durcissement auth ; jalon coordonné Sales+Master)
+         - [Feature] Panneau central « 🏠 Récap comptoir » qui PERMUTE avec « ⭐ Faits marquants »
+           quand il n'y a PAS de nom d'event (ventes maison/RMP) : carrousel SWIPE 2 vues —
+           (A) articles vendus aujourd'hui (heure · nom · qté · prix), (B) clients du jour
+           (acheteur · nb articles · CA), points cliquables. Source ventes_detail, rien stocké.
+           Bascule pilotée par currentEventName (rempli = convention → faits marquants).
+         - [Auth #21] Plus de demande de jeton automatique au boot (popup bloquée = échec
+           silencieux) : connexion au TAP sur le bouton de l'overlay. onAuthError rend visibles
+           la popup bloquée et l'échec de refresh silencieux. (Aligné avec Sales 1.13.0.)
   1.12.0 2026-05-31  Session #13 (auth Google Identity Services — #21, R4 ; jalon coordonné Sales+Master)
          - [Sécu R4] Migration du flux OAuth implicite codé main (redirection pleine page,
            jeton en localStorage, aucun refresh) vers le MODÈLE TOKEN de GIS :
@@ -479,6 +505,22 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 .facts .fl .lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .facts .fl b{color:var(--text);font-weight:700;margin-left:auto;white-space:nowrap;}
 
+/* (#13) Récap comptoir — permute avec Faits marquants quand pas de nom d'event */
+#centerFacts,#centerCounter{display:flex;flex-direction:column;flex:1;min-height:0;}
+.ctr-dots{display:inline-flex;gap:6px;margin-left:8px;vertical-align:middle;}
+.ctr-dots i{width:7px;height:7px;border-radius:50%;background:var(--muted);cursor:pointer;display:inline-block;transition:background .2s,transform .2s;}
+.ctr-dots i.on{background:var(--accent);transform:scale(1.15);}
+.ctr-carousel{display:flex;flex:1;min-height:0;overflow-x:auto;scroll-snap-type:x mandatory;scroll-behavior:smooth;-webkit-overflow-scrolling:touch;}
+.ctr-carousel::-webkit-scrollbar{display:none;}
+.ctr-view{min-width:100%;scroll-snap-align:start;overflow-y:auto;padding-right:2px;}
+.ctr-sub{font-size:.6rem;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:5px;position:sticky;top:0;background:var(--surface);}
+.ctr-row{display:flex;align-items:baseline;gap:8px;padding:4px 1px;border-bottom:1px solid var(--border);font-size:.74rem;color:var(--dim);}
+.ctr-row .ct-time{font-family:'Space Mono',monospace;color:var(--muted);font-size:.62rem;white-space:nowrap;}
+.ctr-row .ct-q{color:var(--muted);font-size:.66rem;white-space:nowrap;}
+.ctr-row .ct-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ctr-row .ct-amt{font-weight:700;color:var(--text);margin-left:auto;white-space:nowrap;}
+.ctr-empty{color:var(--muted);font-size:.72rem;padding:8px 2px;}
+
 .hbars{display:flex;flex-direction:column;gap:10px;flex:1;justify-content:center;}
 .hbar{display:flex;align-items:center;gap:8px;}
 .hbar .hl{width:28px;font-family:'Space Mono',monospace;font-size:.58rem;color:var(--muted);flex-shrink:0;}
@@ -579,10 +621,21 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
           <div class="donut-wrap"><div id="donutLicSvg"></div><div class="legend two" id="donutLicLeg"></div></div>
         </div>
       </div>
-      <!-- Faits marquants -->
+      <!-- Center : ⭐ Faits marquants (convention) ⇄ 🏠 Récap comptoir (pas de nom d'event) -->
       <div class="area-center dpanel">
-        <div class="pt">⭐ Faits marquants</div>
-        <div class="facts" id="factsList"></div>
+        <div id="centerFacts">
+          <div class="pt">⭐ Faits marquants</div>
+          <div class="facts" id="factsList"></div>
+        </div>
+        <div id="centerCounter" class="hidden">
+          <div class="pt">🏠 Ventes du jour
+            <span class="ctr-dots" id="ctrDots"><i class="on" data-v="0" onclick="counterGo(0)"></i><i data-v="1" onclick="counterGo(1)"></i></span>
+          </div>
+          <div class="ctr-carousel" id="ctrCarousel">
+            <div class="ctr-view" id="counterArticles"></div>
+            <div class="ctr-view" id="counterClients"></div>
+          </div>
+        </div>
       </div>
       <!-- CA par heure horizontal (10h→17h réservés) -->
       <div class="area-hours dpanel">
@@ -686,7 +739,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.12.0';
+const APP_VERSION      = '1.14.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -697,6 +750,7 @@ const EVENTS_GSHEET_ID  = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
 const SHEET_CARDS     = 'cartes_stock_et_transactions';
 const SHEET_SEALED    = 'Scelle_Stock';
 const SHEET_SEALED_TX = 'Scelle_Transactions';
+const SEALED_TX_TXID_COL = 'AA'; // (#27) colonne où Master estampille le txId sur la ligne de transaction scellée (pour retrouver la ligne exacte au roll-back)
 const SHEET_SALES     = 'ventes_detail';
 const SHEET_ANOMALIES = 'anomalies';
 const SHEET_STATE     = 'app_state';
@@ -777,6 +831,7 @@ let syncEnabled    = true;
 let syncRunning    = false;
 const sealedRetryCount = new Map();
 let sealedTxSheetNumId = null; // sheetId numérique de Scelle_Transactions
+let stockReloadNeeded  = false; // (#27) un roll-back a modifié CENTRAL → recharger cache + republier en fin de tick
 let lastSyncStats  = { pending: 0, processed: 0, errors: 0, anomalies: 0, lastRunAt: null, lastError: null };
 
 let salesHeaderInfo = null; // { hasSync, syncedCol (1-indexed), syncedAtCol, headerCount }
@@ -978,9 +1033,13 @@ async function onTokenResponse(resp) {
 }
 
 function onAuthError(err) {
-  if (pendingInteractive) {
-    const m = (err && (err.type || err.error || err.message)) || 'inconnue';
+  const m = (err && (err.type || err.error || err.message)) || 'inconnue';
+  if (m === 'popup_failed_to_open') {
+    showToast('⚠ Popup bloquée — autorisez les popups pour ce site, puis reconnectez-vous', true);
+  } else if (pendingInteractive) {
     if (m !== 'popup_closed') showToast('✗ Connexion : ' + m, true);
+  } else {
+    showToast('⚠ Session Google à renouveler · reconnectez-vous', true);
   }
   pendingInteractive = false;
   updateAuthUI();
@@ -1602,6 +1661,7 @@ function renderEventBanner() {
   const icon   = banner ? banner.querySelector('.event-banner-icon') : null;
   const closeBtn = document.getElementById('btnCloseEvent');
   if (!banner || !txt) return;
+  updateCenterPanelMode();  // (#13) facts ⇄ comptoir dès qu'on (dé)fixe un nom d'event
   if (!lockHeld) {
     banner.className = 'event-strip warn';
     if (icon) icon.textContent = '🔒';
@@ -1705,7 +1765,7 @@ async function masterSyncTick(forced = false) {
     rows.forEach((row, i) => {
       const synced = (row[syncedColIdx0] || '').toString().trim();
       if (!synced) { pending.push({ rowIdx: i + 2, row }); return; }
-      if (synced === 'OK' || synced === 'OK_MANUAL') {
+      if (synced === 'OK' || synced === 'OK_MANUAL' || synced === 'OK_RB' || synced === 'OK_MANUAL_RB') {
         const sig = saleSignature(row);
         if (sig) appliedSig.add(sig);
       }
@@ -1723,22 +1783,70 @@ async function masterSyncTick(forced = false) {
     }
 
     updateSyncUI(`Traitement ${pending.length} ligne(s)…`);
+
+    // (#27) Pré-passe roll-back : si une vente (carte/scellé) ET son annulation -RB sont
+    // TOUTES DEUX en attente dans ce snapshot, on neutralise la paire → ni l'une ni l'autre
+    // ne touche CENTRAL (cas de l'undo rapide avant la sync). Décisions prises sur le snapshot
+    // de début de tick (cohérent, pas de course).
+    const rbCancelledRows = new Set();
+    {
+      const pendingOrigBySig = new Map();
+      for (const p of pending) {
+        const tx = (p.row[3] || '').toString().trim();
+        if (tx.endsWith('-RB')) continue;
+        const s = saleSignature(p.row); // {tx}|key|src (cartes/scellé)
+        if (s) pendingOrigBySig.set(s, p.rowIdx);
+      }
+      for (const p of pending) {
+        const tx = (p.row[3] || '').toString().trim();
+        if (!tx.endsWith('-RB')) continue;
+        let src = (p.row[11] || '').toString().trim().toLowerCase(); if (src === 'scellé') src = 'scelle';
+        if (src !== 'cartes' && src !== 'scelle') continue;
+        const key = (p.row[4] || '').toString().trim();
+        const origSig = tx.slice(0, -3) + '|' + key + '|' + src;
+        if (pendingOrigBySig.has(origSig)) {
+          rbCancelledRows.add(p.rowIdx);
+          rbCancelledRows.add(pendingOrigBySig.get(origSig));
+        }
+      }
+    }
+
     let processed = 0, errors = 0, anomalies = 0;
     let lastErr = null;
 
     for (const p of pending) {
       try {
         const row = p.row;
+        // (#27) Paire vente/-RB neutralisée par la pré-passe → marquée annulée, ne touche pas CENTRAL.
+        if (rbCancelledRows.has(p.rowIdx)) {
+          await markSyncedRow(p.rowIdx, 'RB_CANCELLED');
+          continue;
+        }
         const source = (row[11] || '').toString().trim().toLowerCase(); // col L
-        // (#18) Dédup : si cette vente carte/scellé (même txId+clé) a déjà été appliquée —
+        const txIdFull = (row[3] || '').toString().trim();
+        // (#18) Dédup : si cette ligne (vente OU -RB ; même txId+clé+source) a déjà été appliquée —
         // soit dans un tick précédent, soit plus haut dans CE tick — c'est un doublon de ligne
         // (ré-append Sales sur relecture inconnue, ou rejeu manuel). On NE ré-applique PAS.
         const sig = saleSignature(row);
         if (sig && appliedSig.has(sig)) {
           await writeAnomaly(p.rowIdx, row, 'DUPLICATE_TXID',
-            `Doublon ignoré : txId+clé déjà appliqué pour cette vente (${source})`);
+            `Doublon ignoré : txId+clé déjà appliqué (${source})`);
           await markSyncedRow(p.rowIdx, 'DUP_SKIPPED');
           anomalies++;
+          continue;
+        }
+        // (#27) Ligne d'annulation (roll-back) → logique d'inversion dédiée.
+        if (txIdFull.endsWith('-RB')) {
+          const rbResult = await applyRollback(p.rowIdx, row, appliedSig, rows, syncedColIdx0);
+          if (rbResult.status === 'RETRY_PENDING') {
+            // laissé pending — réévalué au prochain tick (l'originale s'applique d'abord)
+          } else {
+            await markSyncedRow(p.rowIdx, rbResult.status);
+            if (rbResult.status === 'OK_RB' || rbResult.status === 'OK_MANUAL_RB') {
+              processed++;
+              if (sig) appliedSig.add(sig); // {tx-RB}|key|src → dédup d'un -RB dupliqué
+            } else { anomalies++; }
+          }
           continue;
         }
         let result;
@@ -1770,6 +1878,10 @@ async function masterSyncTick(forced = false) {
     lastSyncStats.anomalies = anomalies;
     lastSyncStats.lastRunAt = Date.now();
     lastSyncStats.lastError = lastErr;
+
+    // (#27) Un roll-back a remis du stock dans CENTRAL → recharger le cache + republier STOCK_PUBLIC
+    // pour que l'article (carte ou scellé) redevienne vendable côté Sales sans attendre le refresh périodique.
+    if (stockReloadNeeded) { stockReloadNeeded = false; try { await loadStockCache(); } catch (_) {} }
 
     if (errors === 0) {
       const txt = `✓ ${processed} appliquée(s)` + (anomalies > 0 ? ` · ${anomalies} anomalie(s)` : '');
@@ -1989,7 +2101,7 @@ async function applySealedSale(rowIdx, salesRow) {
     {col: 'T', val: txRow[19]},
     {col: 'V', val: txRow[21]},  {col: 'W', val: txRow[22]},
     {col: 'X', val: xFormula},
-    {col: 'AA', val: txRow[26]},
+    {col: 'AA', val: (salesRow[3] || '').toString()},  // (#27) estampille txId → retrouver la ligne exacte au roll-back
     {col: 'AF', val: txRow[31]},
     {col: 'AG', val: txRow[32]}   // TVA_Vente — était omis (jamais écrit) avant 1.6.0
   ];
@@ -2008,6 +2120,134 @@ async function applySealedSale(rowIdx, salesRow) {
 async function applyManualSale(rowIdx, salesRow) {
   // Rien à faire côté stock — article hors stock
   return { status: 'OK_MANUAL' };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ROLL-BACK D'UNE VENTE (#27) — append-only côté Sales (ligne -RB), inversion par
+// MODIFICATION des lignes existantes côté CENTRAL (jamais de ligne à quantité négative).
+// Garde à 4 états : on n'inverse QUE si l'originale a réellement été appliquée.
+// ═══════════════════════════════════════════════════════════════
+async function applyRollback(rowIdx, rbRow, appliedSig, allRows, syncedColIdx0) {
+  const txFull = (rbRow[3] || '').toString().trim();
+  const origTx = txFull.replace(/-RB$/, '');
+  let src = (rbRow[11] || '').toString().trim().toLowerCase(); if (src === 'scellé') src = 'scelle';
+  const key = (rbRow[4] || '').toString().trim();
+
+  if (src === 'manuel') return { status: 'OK_MANUAL_RB' };           // hors stock → rien à inverser
+  if (src !== 'cartes' && src !== 'scelle') return { status: 'WARN_UNKNOWN_SOURCE' };
+
+  const origSig = origTx + '|' + key + '|' + src;
+  if (!appliedSig.has(origSig)) {
+    // Originale PAS appliquée → on ne touche pas CENTRAL. On distingue selon son état au snapshot.
+    const orig = allRows.find(r =>
+      (r[3] || '').toString().trim() === origTx && (r[4] || '').toString().trim() === key);
+    if (!orig) {
+      await writeAnomaly(rowIdx, rbRow, 'RB_ORIG_NOT_FOUND', `Vente d'origine ${origTx} introuvable`);
+      return { status: 'ANOMALY_RB_ORIG_NOT_FOUND' };
+    }
+    const oSynced = (orig[syncedColIdx0] || '').toString().trim();
+    if (!oSynced) return { status: 'RETRY_PENDING' };  // s'appliquera au prochain tick → on réinversera ensuite
+    await writeAnomaly(rowIdx, rbRow, 'RB_NOOP', `Vente d'origine non appliquée (${oSynced}) → rien à inverser`);
+    return { status: 'RB_NOOP' };
+  }
+  // Originale appliquée → inversion réelle dans CENTRAL
+  if (src === 'cartes') return await reverseCardSale(rowIdx, rbRow, key);
+  return await reverseSealedSale(rowIdx, rbRow, key, origTx);
+}
+
+// Annule une vente de carte : vide P/R/S/T, remet Q au prix d'origine (porté par Sales en col K
+// de la ligne -RB) et AF = "pas vendu". La carte redevient disponible.
+async function reverseCardSale(rowIdx, rbRow, key) {
+  const restorePrice = parseFloat(rbRow[10]); // col K = prix listé d'origine (prixOriginal envoyé par Sales)
+  if (cardHeaderRow == null) { try { cardHeaderRow = await findCardsHeaderRow(); } catch (_) {} }
+  const colD = await sheetsGet(a1(SHEET_CARDS, `D${(cardHeaderRow || 0) + 1}:D`), CENTRAL_GSHEET_ID);
+  const dvals = colD.values || [];
+  let foundRow = -1;
+  for (let i = 0; i < dvals.length; i++) {
+    if ((dvals[i][0] || '').toString().trim() === key) { foundRow = (cardHeaderRow || 0) + 1 + i; break; }
+  }
+  if (foundRow < 0) {
+    await writeAnomaly(rowIdx, rbRow, 'RB_CARD_NOT_FOUND', `Carte clé "${key}" introuvable`);
+    return { status: 'ANOMALY_RB_CARD_NOT_FOUND' };
+  }
+  const pRes = await sheetsGet(a1(SHEET_CARDS, `P${foundRow}`), CENTRAL_GSHEET_ID);
+  const pVal = ((pRes.values && pRes.values[0] && pRes.values[0][0]) || '').toString().trim();
+  if (!pVal) return { status: 'RB_NOOP_CARD_NOT_SOLD' }; // déjà disponible / déjà annulée → rien à faire
+  const qOut = isNaN(restorePrice) ? '' : restorePrice;
+  await sheetsUpdate(a1(SHEET_CARDS, `P${foundRow}:T${foundRow}`),
+    [['', qOut, '', '', '']], 'USER_ENTERED', CENTRAL_GSHEET_ID);
+  await sheetsUpdate(a1(SHEET_CARDS, `AF${foundRow}`), [['pas vendu']], 'RAW', CENTRAL_GSHEET_ID);
+  stockReloadNeeded = true;
+  await writeAnomaly(rowIdx, rbRow, 'ROLLBACK_APPLIED', `Carte "${key}" remise en stock (prix ${qOut}) · row ${foundRow}`);
+  return { status: 'OK_RB' };
+}
+
+// Annule une vente scellée : supprime la ligne de transaction (retrouvée par txId estampillé) et
+// ré-incrémente la qty du lot dans Scelle_Stock. Ordre : delete transaction PUIS +stock (un crash
+// entre les deux laisse une anomalie VISIBLE plutôt qu'une double-restauration silencieuse).
+async function reverseSealedSale(rowIdx, rbRow, key, origTx) {
+  const qtyToRestore = Math.abs(parseInt(rbRow[9], 10) || 0); // col J (négatif côté -RB)
+  if (qtyToRestore <= 0) {
+    await writeAnomaly(rowIdx, rbRow, 'RB_BAD_QTY', `Quantité de roll-back invalide`);
+    return { status: 'ANOMALY_RB_BAD_QTY' };
+  }
+  if (sealedTxSheetNumId == null) {
+    await writeAnomaly(rowIdx, rbRow, 'RB_TX_SHEETID_MISSING', `sheetId ${SHEET_SEALED_TX} absent — relancer le master`);
+    return { status: 'ANOMALY_RB_TX_SHEETID_MISSING' };
+  }
+  // 1. Retrouver la transaction par le txId estampillé (col AA)
+  const aaCol = await sheetsGet(a1(SHEET_SEALED_TX, `${SEALED_TX_TXID_COL}:${SEALED_TX_TXID_COL}`), CENTRAL_GSHEET_ID);
+  const aaVals = aaCol.values || [];
+  let txRowNum = -1;
+  for (let i = 0; i < aaVals.length; i++) {
+    if ((aaVals[i][0] || '').toString().trim() === origTx) { txRowNum = i + 1; break; }
+  }
+  if (txRowNum < 0) {
+    await writeAnomaly(rowIdx, rbRow, 'RB_TX_NOT_FOUND',
+      `Transaction scellée txId ${origTx} introuvable (déjà annulée ?) — vérification manuelle, stock NON re-crédité`);
+    return { status: 'ANOMALY_RB_TX_NOT_FOUND' };
+  }
+  // Contrôle de cohérence : qty de la ligne == qty à annuler (cas normal : 1 ligne par vente)
+  const hRes = await sheetsGet(a1(SHEET_SEALED_TX, `H${txRowNum}`), CENTRAL_GSHEET_ID, 'UNFORMATTED_VALUE');
+  const txQty = parseInt((hRes.values && hRes.values[0] && hRes.values[0][0]), 10) || 0;
+  if (txQty !== qtyToRestore) {
+    await writeAnomaly(rowIdx, rbRow, 'RB_TX_QTY_MISMATCH',
+      `Qty transaction (${txQty}) ≠ qty roll-back (${qtyToRestore}) row ${txRowNum} — vérification manuelle`);
+    return { status: 'ANOMALY_RB_TX_QTY_MISMATCH' };
+  }
+  // 2. Supprimer la ligne de transaction
+  await sheetsBatch([{ deleteDimension: { range: {
+    sheetId: sealedTxSheetNumId, dimension: 'ROWS', startIndex: txRowNum - 1, endIndex: txRowNum } } }],
+    CENTRAL_GSHEET_ID);
+  // 3. Ré-incrémenter la qty du lot dans Scelle_Stock (peut throw si le lot est introuvable →
+  //    la ligne -RB reste pending, l'anomalie RB_TX_NOT_FOUND apparaîtra au retry : visible)
+  const restored = await restoreSealedStock(key, qtyToRestore);
+  stockReloadNeeded = true;
+  await writeAnomaly(rowIdx, rbRow, 'ROLLBACK_APPLIED',
+    `Scellé "${key}" : transaction row ${txRowNum} supprimée + stock +${qtyToRestore} (lot row ${restored.row} → ${restored.newQty})`);
+  return { status: 'OK_RB' };
+}
+
+// Ré-incrémente la qty disponible du lot scellé (retrouvé par clé dans Scelle_Stock).
+async function restoreSealedStock(key, addQty) {
+  const data = await sheetsGet(a1(SHEET_SEALED, `A:AG`), CENTRAL_GSHEET_ID, 'UNFORMATTED_VALUE');
+  const sRows = data.values || [];
+  let hdr = -1;
+  for (let i = 0; i < sRows.length; i++) {
+    if ((sRows[i][2] || '').toString().trim().toLowerCase() === 'key') { hdr = i; break; }
+  }
+  if (hdr < 0 || !sealedColIdx) throw new Error('Scelle_Stock : en-tête / sealedColIdx absent');
+  for (let i = hdr + 1; i < sRows.length; i++) {
+    if ((sRows[i][sealedColIdx.iKey] || '').toString().trim() === key) {
+      const cur = parseInt(sRows[i][sealedColIdx.iQty], 10) || 0;
+      const newQty = cur + addQty;
+      const rowNum = i + 1;
+      const qtyLetter = colIdx2letter(sealedColIdx.iQty + 1);
+      await sheetsUpdate(a1(SHEET_SEALED, `${qtyLetter}${rowNum}`), [[newQty]], 'RAW', CENTRAL_GSHEET_ID);
+      return { row: rowNum, newQty };
+    }
+  }
+  throw new Error('Lot scellé clé "' + key + '" introuvable dans Scelle_Stock');
 }
 
 async function writeAnomaly(salesRowIdx, salesRow, type, details) {
@@ -2077,9 +2317,12 @@ async function loadStats() {
     const data = await sheetsGet(a1(SHEET_SALES, `A:${lastCol}`), EVENTS_GSHEET_ID);
     const rows = data.values || [];
     const allData = rows.slice(1);  // skip header
+    updateCenterPanelMode();        // (#13) facts ⇄ comptoir selon le nom d'event
+    setupCounterCarousel();
     // Tout l'event est dans le buffer (puisqu'on vide à la clôture)
     if (allData.length === 0) {
       renderStatsEmpty();
+      renderCounter([]);
       await loadAnomaliesList([]);
       return;
     }
@@ -2101,7 +2344,8 @@ async function loadStats() {
     allData.forEach(r => { const k = (String(r[8] || '').trim()) || 'Autre'; byLic[k] = (byLic[k] || 0) + (parseFloat(r[10]) || 0); });
     renderDonut('donutLicSvg', 'donutLicLeg', byLic, LIC_COLORS, true);
 
-    renderFacts(computeFacts(allData));
+    if (currentEventName) renderFacts(computeFacts(allData));
+    else                  renderCounter(allData);
     renderHours(computeHours(allData));
 
     const last50 = allData.slice(-50).reverse();
@@ -2217,6 +2461,85 @@ function renderFacts(facts) {
   const el = document.getElementById('factsList'); if (!el) return;
   if (!facts.length) { el.innerHTML = '<div style="color:var(--muted);font-size:.72rem;">—</div>'; return; }
   el.innerHTML = facts.map(f => `<div class="fl"><span class="ic">${f.ic}</span><span class="lbl">${esc(f.lbl)}</span><b>${esc(f.val)}</b></div>`).join('');
+}
+
+// ── (#13) Récap comptoir — affiché quand il n'y a PAS de nom d'event (ventes maison/RMP) ──
+// Vue A (swipe) : articles vendus aujourd'hui · Vue B : clients du jour. Source : ventes_detail
+// (ts=A, nom=F r[5], qty=J r[9], prix=K r[10], acheteur=N r[13]).
+function renderCounter(allData) {
+  const artEl = document.getElementById('counterArticles');
+  const cliEl = document.getElementById('counterClients');
+  if (!artEl || !cliEl) return;
+  // Borné à AUJOURD'HUI (date locale) — en comptoir le buffer peut couvrir plusieurs jours.
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const startTs = start.getTime();
+  const todays = (allData || []).filter(r => { const t = Date.parse(r[0]); return !isNaN(t) && t >= startTs; });
+
+  // Vue A — articles (plus récent d'abord)
+  const arts = todays.slice().sort((a, b) => (Date.parse(b[0]) || 0) - (Date.parse(a[0]) || 0));
+  if (arts.length === 0) {
+    artEl.innerHTML = '<div class="ctr-empty">Aucune vente aujourd\'hui.</div>';
+  } else {
+    const dayCA = arts.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
+    artEl.innerHTML = `<div class="ctr-sub">${arts.length} article(s) · ${formatPrice(dayCA)}</div>` +
+      arts.map(r => {
+        const time = r[0] ? new Date(r[0]).toLocaleTimeString('fr-BE', { hour: '2-digit', minute: '2-digit' }) : '—';
+        const name = r[5] || '—';
+        const qty  = parseInt(r[9], 10) || 1;
+        const prix = parseFloat(r[10]) || 0;
+        return `<div class="ctr-row"><span class="ct-time">${esc(time)}</span>`
+          + (qty > 1 ? `<span class="ct-q">×${qty}</span>` : '')
+          + `<span class="ct-name">${esc(name)}</span><span class="ct-amt">${formatPrice(prix)}</span></div>`;
+      }).join('');
+  }
+
+  // Vue B — clients (par CA décroissant)
+  const byClient = {};
+  todays.forEach(r => {
+    const c  = (r[13] || '').toString().trim() || '(non précisé)';
+    const ca = parseFloat(r[10]) || 0;
+    const q  = parseInt(r[9], 10) || 1;
+    if (!byClient[c]) byClient[c] = { ca: 0, nb: 0 };
+    byClient[c].ca += ca; byClient[c].nb += q;
+  });
+  const clients = Object.entries(byClient).sort((a, b) => b[1].ca - a[1].ca);
+  if (clients.length === 0) {
+    cliEl.innerHTML = '<div class="ctr-empty">Aucun client aujourd\'hui.</div>';
+  } else {
+    cliEl.innerHTML = `<div class="ctr-sub">${clients.length} client(s)</div>` +
+      clients.map(([name, st]) =>
+        `<div class="ctr-row"><span class="ct-name">${esc(name)}</span>`
+        + `<span class="ct-q">${st.nb} art.</span><span class="ct-amt">${formatPrice(st.ca)}</span></div>`
+      ).join('');
+  }
+}
+
+function counterGo(i) {
+  const car = document.getElementById('ctrCarousel');
+  if (!car) return;
+  car.scrollTo({ left: i * car.clientWidth, behavior: 'smooth' });
+  setCounterDot(i);
+}
+function setCounterDot(i) {
+  document.querySelectorAll('#ctrDots i').forEach(d => d.classList.toggle('on', (+d.dataset.v) === i));
+}
+function setupCounterCarousel() {
+  const car = document.getElementById('ctrCarousel');
+  if (!car || car.dataset.wired) return;
+  car.dataset.wired = '1';
+  let to = null;
+  car.addEventListener('scroll', () => {
+    if (to) clearTimeout(to);
+    to = setTimeout(() => { if (car.clientWidth) setCounterDot(Math.round(car.scrollLeft / car.clientWidth)); }, 80);
+  });
+}
+// Permute le panneau central selon la présence d'un nom d'event (rempli = convention).
+function updateCenterPanelMode() {
+  const counterMode = !currentEventName;
+  const f = document.getElementById('centerFacts');
+  const c = document.getElementById('centerCounter');
+  if (f) f.classList.toggle('hidden', counterMode);
+  if (c) c.classList.toggle('hidden', !counterMode);
 }
 
 function computeHours(rows) {
@@ -2560,9 +2883,10 @@ async function init() {
   updateNet();
   // (#21 v1.12.0) Migration : purge de tout ancien jeton resté en clair sur le disque.
   lsClear(LS_TOKEN);
-  // GIS : init du token client puis tentative de connexion SILENCIEUSE (transparente si la
-  // session Google est active et le consentement déjà donné ; sinon l'overlay de connexion reste).
-  try { await initGisClient(); requestToken(false); }
+  // GIS : on initialise le client mais on NE déclenche PAS de demande automatique au boot
+  // (#13) — une demande sans geste peut escalader en popup bloquée (échec silencieux). La
+  // connexion se fait au TAP sur le bouton de l'overlay. Le refresh silencieux reste via iframe.
+  try { await initGisClient(); }
   catch (e) { logEvent('warn', 'GIS init échec', { message: e && e.message }); }
   updateAuthUI();
 }

@@ -1,10 +1,32 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.12.0 (Session #13 — 2026-05-31)
+  Version : 1.14.0 (Session #13 — 2026-05-31)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.14.0 2026-05-31  Session #13 (roll-back d'une vente — #27, côté Sales ; avec Master 1.14.0)
+         - [Feature #27] Bouton ↶ Annuler après chaque validation, pendant 90 s (barre verte
+           « ✓ Vente validée »). Remplacé à la vente suivante ; auto-masqué après la fenêtre.
+         - [#27] Annulation directe si la vente est encore dans l'outbox et JAMAIS envoyée (ou
+           envoyée sans atterrir) → on la retire, rien chez Master. Sinon → ligne compensatoire
+           -RB (txId suffixé « -RB », qty négative ; col K = prixOriginal pour les cartes, à
+           restaurer dans Q par Master) poussée via le MÊME outbox idempotent.
+         - [#27] Garde anti-course : on ne manipule la file que hors flush ; sinon compensation
+           (sûre — Master neutralise la paire si l'originale est encore en attente).
+         - Nécessite Master ≥ 1.14.0 (gestion des -RB + estampille txId). Déployer ensemble.
+  1.13.0 2026-05-31  Session #13 (vidage panier + durcissement auth ; jalon coordonné Sales+Master)
+         - [Fix panier] Le panier persistant n'est plus rechargé aveuglément au boot. Il est
+           ESTAMPILLÉ {items, savedAt, version, eventName} et JETÉ au démarrage si : âge > 30 min,
+           OU version ≠ app, OU (à la 1ère confirmation du Master) event différent de celui sous
+           lequel il a été bâti. Vidé aussi au LOGOUT et à la CLÔTURE/changement d'event détecté
+           via le heartbeat (lecture confirmée seulement → immunisé aux blips réseau). Tout vidage
+           automatique garde un snapshot restaurable 60 s (anti-perte).
+         - [Auth #21] Plus de demande de jeton AUTOMATIQUE au boot : elle pouvait escalader en
+           popup bloquée par le navigateur (échec silencieux). La connexion se fait au TAP sur la
+           pastille G (geste → popup autorisée). onAuthError rend désormais visibles la popup
+           bloquée ('popup_failed_to_open' → message actionnable) ET l'échec d'un refresh
+           silencieux (→ « touchez G ») : plus aucun échec silencieux.
   1.12.0 2026-05-31  Session #13 (auth Google Identity Services — #21, R4 ; jalon coordonné Sales+Master)
          - [Sécu R4] Migration du flux OAuth implicite codé main (redirection pleine page,
            jeton en localStorage, aucun refresh) vers le MODÈLE TOKEN de GIS :
@@ -497,6 +519,10 @@ body::before{content:'';position:fixed;inset:0;
   border-radius:8px;padding:10px 14px;margin-bottom:12px;
   display:flex;align-items:center;gap:10px;font-size:.78rem;}
 .restore-bar .restore-text{flex:1;color:var(--accent2);}
+.rollback-bar{background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.3);
+  border-radius:8px;padding:8px 12px;display:flex;align-items:center;gap:10px;font-size:.74rem;font-weight:600;}
+.rollback-bar .rollback-text{flex:1;color:var(--success);}
+.rollback-bar button{padding:5px 10px;font-size:.6rem;}
 .restore-bar button{padding:5px 10px;font-size:.6rem;}
 
 /* ── Offline queue bar ── */
@@ -660,6 +686,11 @@ body::before{content:'';position:fixed;inset:0;
           <span class="restore-text">↺ Panier précédent restaurable (<span id="restoreCount">0</span> articles)</span>
           <button class="btn btn-primary btn-sm" onclick="restoreLastCart()">Restaurer</button>
           <button class="btn btn-secondary btn-sm" onclick="dismissRestore()">✕</button>
+        </div>
+        <div id="rollbackBar" class="rollback-bar hidden">
+          <span class="rollback-text">✓ Vente validée · <span id="rollbackInfo">—</span></span>
+          <button class="btn btn-secondary btn-sm" onclick="rollbackLastSale()" title="Annuler cette vente">↶ Annuler</button>
+          <button class="btn btn-secondary btn-sm" onclick="hideRollbackBar()" title="Fermer">✕</button>
         </div>
         <div id="offlineQueueBar" class="offline-bar hidden">
           ⏳ <span id="offlineQueueCount">0</span> vente(s) en attente de synchronisation
@@ -862,7 +893,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.12.0';
+const APP_VERSION      = '1.14.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -888,6 +919,8 @@ const SHEET_STOCK_PUBLIC = 'STOCK_PUBLIC';
 const CACHE_AUTO_REFRESH_MS = 5 * 60 * 1000; // Refresh stock toutes les 5 min en arrière-plan
 const CACHE_STALE_AFTER_MS  = 2 * 60 * 1000; // Cache considéré "stale" après 2 min
 const RESTORE_WINDOW_MS    = 60 * 1000;     // "Restaurer panier" dispo pendant 60s
+const CART_MAX_AGE_MS      = 30 * 60 * 1000; // (#13) panier persistant jeté au boot au-delà de 30 min
+const ROLLBACK_WINDOW_MS   = 90 * 1000;      // (#27) fenêtre pour annuler la dernière vente (↶)
 const RETRY_DELAYS_MS      = [500, 1500, 3500]; // Backoff progressif
 const HEARTBEAT_POLL_MS    = 10000;         // Lecture du heartbeat master toutes les 10s
 const MASTER_STALE_MS      = 30000;         // Master "hors ligne" si l'horodatage est figé depuis +30s
@@ -920,6 +953,11 @@ let authBootstrapped  = false;  // bootstrap post-connexion déjà fait (évite 
 let masterStatus = { state: 'unknown', message: '—', eventName: '', lastReadAt: 0 };
 let masterPrevTs = null;        // dernier horodatage master observé
 let masterLastChangeAt = 0;     // instant local (Date.now) du dernier changement observé
+// (#13) Réconciliation panier ↔ event (vidage si l'event change/clôture). On n'agit QUE
+// sur une lecture CONFIRMÉE (master qui bat) — jamais sur un échec/blip réseau.
+let lastConfirmedEvent = null;  // dernier nom d'event confirmé ('' = master en ligne sans event)
+let cartStampEvent     = null;  // event sous lequel le panier restauré au boot a été construit (null = inconnu)
+let cartEventReconciled = false;// réconciliation initiale (1ère confirmation post-boot) faite ?
 // Liste des régimes TVA_Vente proposables au vendeur (lue dans Scelle_Transactions!AG8:AG23, "réservée" exclu)
 let tvaVenteOptions = [];
 
@@ -944,6 +982,9 @@ let deadLetter = [];   // ventes en échec définitif (anomalies inaccessibles) 
 
 // Last cleared cart (for restore)
 let lastClearedCart = null;
+// (#27) Roll-back : payload de la DERNIÈRE vente validée (annulable pendant ROLLBACK_WINDOW_MS).
+let lastSalePayload = null;
+let rollbackTimer   = null;
 let restoreExpiryTimer = null;
 
 // Regex
@@ -1071,7 +1112,10 @@ function lsLoad(key, fallback) {
 }
 function lsClear(key) { try { localStorage.removeItem(key); } catch (e) {} }
 
-function persistCart() { lsSave(LS_CART, cart); }
+function persistCart() {
+  // (#13) Panier estampillé → permet de jeter au boot un panier périmé / d'une autre version / d'un autre event.
+  lsSave(LS_CART, { items: cart, savedAt: Date.now(), version: APP_VERSION, eventName: lastConfirmedEvent });
+}
 function persistOfflineQueue() {
   lsSave(LS_OFFLINE_QUEUE, offlineQueue);
   renderOfflineQueueBar();
@@ -1211,11 +1255,16 @@ async function onTokenResponse(resp) {
 }
 
 function onAuthError(err) {
-  // On ne dérange l'utilisateur que si LUI a demandé la connexion. Une tentative
-  // silencieuse (boot/refresh) qui échoue laisse simplement apparaître le bouton.
-  if (pendingInteractive) {
-    const m = (err && (err.type || err.error || err.message)) || 'inconnue';
+  const m = (err && (err.type || err.error || err.message)) || 'inconnue';
+  if (m === 'popup_failed_to_open') {
+    // Popup BLOQUÉE par le navigateur → message actionnable (jamais d'échec silencieux, #13).
+    showToast('⚠ Popup bloquée — autorisez les popups pour ce site, puis retouchez G', true);
+  } else if (pendingInteractive) {
     if (m !== 'popup_closed') showToast('✗ Connexion : ' + m, true);
+  } else {
+    // Échec d'un refresh silencieux (timer, sans geste) : impossible d'ouvrir une popup ici
+    // → on rend l'état VISIBLE pour que le vendeur retouche G (pas de blocage silencieux).
+    showToast('⚠ Session Google à renouveler · touchez G', true);
   }
   pendingInteractive = false;
   updateAuthUI();
@@ -1244,6 +1293,11 @@ function logout() {
   const tok = gAccessToken;
   gAccessToken = null; gTokenExpiry = 0; gUserEmail = ''; gUserName = '';
   authBootstrapped = false;
+  // (#13) Fin de session vendeur → panier vidé (pas de panier fantôme à la reconnexion).
+  cart = []; lsClear(LS_CART);
+  lastConfirmedEvent = null; cartStampEvent = null; cartEventReconciled = false;
+  renderCart();
+  hideRollbackBar(); lastSalePayload = null;  // (#27) plus de ↶ après déconnexion
   // Révoque le jeton côté Google (best-effort)
   try { if (tok && window.google && google.accounts && google.accounts.oauth2) google.accounts.oauth2.revoke(tok); } catch (_) {}
   stockCacheCards.clear();
@@ -1344,6 +1398,7 @@ async function readMasterHeartbeat() {
       masterStatus.state = 'ok';
       masterStatus.message = 'Event actif : ' + eventName;
     }
+    maybeReconcileCartWithEvent(masterStatus.state, eventName);
     updateMasterStatusBar();
     updateBuyerField();
   } catch (e) {
@@ -1762,6 +1817,39 @@ function reallyClearCart() {
   renderCart();
   document.getElementById('scanStatus').textContent = 'Prochain article scanné ici';
   showRestoreBar();
+}
+
+// (#13) Vide le panier en gardant un snapshot restaurable 60 s (anti-perte si vidage automatique).
+function clearCartRecoverable(toastMsg) {
+  if (cart.length === 0) return;
+  lastClearedCart = JSON.parse(JSON.stringify(cart));
+  lsSave(LS_LAST_CART, { cart: lastClearedCart, savedAt: Date.now() });
+  cart = [];
+  persistCart();
+  renderCart();
+  document.getElementById('scanStatus').textContent = 'Prochain article scanné ici';
+  showRestoreBar();
+  if (toastMsg) showToast(toastMsg);
+}
+
+// (#13) Vide le panier si l'event a changé/clôturé. SÉCURITÉ : ne traite que les lectures
+// CONFIRMÉES (state ok = event présent, idle = master en ligne sans event). offline/never/
+// unknown = identité d'event non fiable → on ne touche à rien (immunisé aux blips réseau).
+function maybeReconcileCartWithEvent(state, eventName) {
+  if (state !== 'ok' && state !== 'idle') return;
+  const confirmed = (state === 'ok') ? eventName : '';
+  if (!cartEventReconciled) {
+    // 1ère confirmation post-boot : si le panier restauré a été bâti sous un AUTRE event
+    // connu, on le jette. cartStampEvent null = inconnu (bâti avant confirmation) → on garde.
+    if (cart.length > 0 && cartStampEvent != null && cartStampEvent !== confirmed) {
+      clearCartRecoverable('Panier vidé · event différent');
+    }
+    cartEventReconciled = true;
+  } else if (lastConfirmedEvent != null && confirmed !== lastConfirmedEvent && cart.length > 0) {
+    // Changement EN COURS de session : nouvelle convention, ou clôture (→ '').
+    clearCartRecoverable(confirmed ? 'Panier vidé · changement d\'event' : 'Panier vidé · clôture d\'event');
+  }
+  lastConfirmedEvent = confirmed;
 }
 
 function clearCartSilent() {
@@ -2252,13 +2340,14 @@ async function validateSale() {
   ]);
 
   const total = getCartTotal(); // capturer AVANT de vider
-  const payload = { range: a1(SHEET_SALES, 'A:N'), values: rows, ts, txId, total, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
+  const payload = { range: a1(SHEET_SALES, 'A:N'), values: rows, ts, txId, total, tvaVente, acheteur, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
 
   // OUTBOX : on met TOUJOURS en file d'abord (état 'pending'), puis on tente l'envoi.
   // Rien n'est jamais perdu : tant que l'envoi n'est pas confirmé, l'entrée reste en file.
   queueOfflineSale(payload);
   logEvent('info', 'vente mise en file', { txId, n: rows.length, total, online: navigator.onLine });
   clearCartSilent();
+  armRollback(payload); // (#27) propose ↶ Annuler pendant la fenêtre de rétractation
   btn.textContent = '✓ Valider la vente';
   updateValidateButton();
 
@@ -2287,6 +2376,91 @@ async function saleAlreadyRecorded(txId) {
     logEvent('warn', 'relecture txId impossible', { txId, err: e.message });
     return null;
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ROLL-BACK D'UNE VENTE (#27)
+// ═══════════════════════════════════════════════════════════════
+// Annulation de la DERNIÈRE vente validée, pendant ROLLBACK_WINDOW_MS (bouton ↶).
+//  - encore en file et JAMAIS envoyée → on la retire (rien n'a quitté l'appareil)
+//  - sinon → ligne compensatoire -RB (qty négative ; col K = prix d'origine pour les cartes)
+//    poussée via le même outbox idempotent. Master inverse dans CENTRAL (modif des lignes,
+//    jamais de qty négative dans les onglets transactions).
+function armRollback(payload) {
+  lastSalePayload = payload;
+  const bar  = document.getElementById('rollbackBar');
+  const info = document.getElementById('rollbackInfo');
+  if (info) info.textContent = `${payload.values.length} art. · ${formatPrice(payload.total)}`;
+  if (bar) bar.classList.remove('hidden');
+  if (rollbackTimer) clearTimeout(rollbackTimer);
+  rollbackTimer = setTimeout(() => { hideRollbackBar(); lastSalePayload = null; }, ROLLBACK_WINDOW_MS);
+}
+
+function hideRollbackBar() {
+  const bar = document.getElementById('rollbackBar');
+  if (bar) bar.classList.add('hidden');
+  if (rollbackTimer) { clearTimeout(rollbackTimer); rollbackTimer = null; }
+}
+
+async function rollbackLastSale() {
+  if (!lastSalePayload) { hideRollbackBar(); return; }
+  const payload = lastSalePayload;
+  const txId = payload.txId;
+  hideRollbackBar();
+  lastSalePayload = null;
+
+  // On ne touche à la file que si aucun flush n'est en cours (évite une course où le flush
+  // ré-ajouterait une entrée qu'on vient de retirer). Sinon → compensation (toujours sûre :
+  // Master neutralise la paire si l'originale est encore en attente).
+  let entry = (!flushingQueue) ? offlineQueue.find(e => e.payload && e.payload.txId === txId) : null;
+
+  // 1. Encore en file et jamais envoyée → annulation directe
+  if (entry && entry.state === 'pending') {
+    offlineQueue = offlineQueue.filter(e => e !== entry);
+    persistOfflineQueue();
+    renderOfflineQueueBar();
+    showToast('↶ Vente annulée (jamais envoyée)');
+    return;
+  }
+  // 2. Envoyée mais non confirmée : si la relecture montre qu'elle n'a PAS atterri → on la retire
+  if (entry && entry.state === 'sent') {
+    const rec = await saleAlreadyRecorded(txId);
+    if (rec === false && !flushingQueue) {
+      offlineQueue = offlineQueue.filter(e => e !== entry);
+      persistOfflineQueue();
+      renderOfflineQueueBar();
+      showToast('↶ Vente annulée (envoi non abouti)');
+      return;
+    }
+    // rec === true | null → on suppose qu'elle a (probablement) atterri → compensation
+  }
+  // 3. Déjà dans ventes_detail (ou incertain) → ligne compensatoire -RB
+  sendRollbackCompensation(payload);
+}
+
+function sendRollbackCompensation(payload) {
+  const rbTxId = payload.txId + '-RB';
+  const ts = new Date().toISOString();
+  const tva = payload.tvaVente || 'Régime normal';
+  const buyer = payload.acheteur || '';
+  // Une ligne -RB par article : qty négative ; col K = prix d'origine (cartes, à restaurer dans Q
+  // par Master) ou total négatif (scellé/manuel, informatif — Master utilise |qty| + le txId estampillé).
+  const rows = (payload.cartSnapshot || []).map(c => {
+    const colK = (c.source === 'cartes')
+      ? c.prixOriginal
+      : -(Math.round(c.prixUnit * c.qty * 100) / 100);
+    return [
+      ts, safeForSheets(gUserName), safeForSheets(gUserEmail), rbTxId,
+      safeForSheets(c.key), safeForSheets(c.name), safeForSheets(c.type),
+      safeForSheets(c.category), safeForSheets(c.licence),
+      -c.qty, colK, c.source, safeForSheets(tva), safeForSheets(buyer)
+    ];
+  });
+  const rbPayload = { range: a1(SHEET_SALES, 'A:N'), values: rows, ts, txId: rbTxId, total: -payload.total };
+  queueOfflineSale(rbPayload);
+  logEvent('info', 'roll-back mis en file', { rbTxId, n: rows.length });
+  showToast(`↶ Annulation envoyée (${rows.length} art.)`);
+  if (navigator.onLine && isAuth()) flushOfflineQueue();
 }
 
 // Échec définitif : on bascule la vente dans l'onglet anomalies (visible côté Master).
@@ -2432,10 +2606,18 @@ async function init() {
   renderOfflineQueueBar();
 
   // Restore cart from previous session
-  const savedCart = lsLoad(LS_CART, []);
-  if (Array.isArray(savedCart) && savedCart.length > 0) {
-    cart = savedCart;
+  // (#13) Panier persistant : restauré UNIQUEMENT s'il est frais (< 30 min) et de la même
+  // version. Sinon on démarre vide (plus de panier fantôme d'hier / d'avant déploiement).
+  // L'éventuel décalage d'event est tranché plus tard, à la 1ère confirmation du heartbeat.
+  const savedCart = lsLoad(LS_CART, null);
+  if (savedCart && Array.isArray(savedCart.items) && savedCart.items.length > 0
+      && savedCart.version === APP_VERSION
+      && savedCart.savedAt && (Date.now() - savedCart.savedAt) < CART_MAX_AGE_MS) {
+    cart = savedCart.items;
+    cartStampEvent = (savedCart.eventName === undefined ? null : savedCart.eventName);
     renderCart();
+  } else {
+    lsClear(LS_CART);
   }
 
   // Restore last cleared cart (if within window)
@@ -2450,10 +2632,11 @@ async function init() {
   updateNet();
   // (#21 v1.12.0) Migration : purge de tout ancien jeton resté en clair sur le disque.
   lsClear(LS_TOKEN);
-  // GIS : init du token client puis tentative de connexion SILENCIEUSE (transparente si la
-  // session Google est active et le consentement déjà donné ; sinon le bouton « se connecter »
-  // reste affiché — plus d'auth instantanée depuis localStorage, c'est le gain sécurité R4).
-  try { await initGisClient(); requestToken(false); }
+  // GIS : on initialise le client mais on NE déclenche PAS de demande automatique au boot.
+  // Raison (#13) : une demande non déclenchée par un geste peut escalader en popup… BLOQUÉE par
+  // le navigateur (échec silencieux déroutant). La connexion se fait donc au TAP sur la pastille G
+  // (geste → popup autorisée). Le refresh silencieux pendant la session reste, lui, via iframe.
+  try { await initGisClient(); }
   catch (e) { logEvent('warn', 'GIS init échec', { message: e && e.message }); }
   updateAuthUI();
   focusScan();
