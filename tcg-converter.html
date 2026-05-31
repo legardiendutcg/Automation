@@ -2,10 +2,29 @@
 <!--
 =============================================================
   TCG INTEGRATOR — Le Gardien du TCG (outil back-office)
-  Version : 1.1.0 (Session #8 — 2026-05-29)
+  Version : 1.2.1 (Session #12 — 2026-05-31)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.2.1  2026-05-31  Session #12 (config SAFETY_GSHEET_ID + CSP)
+         - [Config] SAFETY_GSHEET_ID renseigné (feuille dédiée logs/backups d'injection) →
+           getSafetySpreadsheetId() ne lève plus l'erreur ; journal + backups opérationnels.
+         - [Sécu #23] En-tête CSP ajouté (<meta>). default-src 'self' ; inline script/style
+           autorisés (apps mono-fichier) ; connect-src limité à Sheets/OAuth Google + les 5
+           proxies de scraping (allorigins, thingproxy, codetabs, corsproxy, pokepedia).
+           ⚠️ À valider en navigateur (connexion Google + un scraping/injection) avant prod ;
+           retrait = supprimer la balise. SRI : N/A ici (aucun <script src> tiers).
+  1.2.0  2026-05-31  Session #12 (renommage onglet cartes — l'Integrator était CASSÉ — + a1())
+         - [Fix 🔴] SHEET_NAME → 'cartes_stock_et_transactions'. L'onglet cartes de la GSheet
+           CENTRAL avait été renommé (suppression du '&', minuscules) ; l'Integrator pointait
+           encore sur l'ancien 'Cartes_Stock_&_Transactions' → toutes ses lectures/écritures
+           échouaient (400 "Unable to parse range"). Ce renommage (priorité #9.1) avait été
+           documenté comme livré en 1.1.0 mais n'avait en réalité jamais été appliqué au fichier.
+         - [Robustesse] Helper a1(sheet, rng) ajouté (identique à Sales/Master depuis #8) ;
+           TOUTES les plages passent désormais par lui (cartes + onglets LOG/BACKUP), nom
+           d'onglet encadré de quotes simples → robuste à un futur renommage avec caractère
+           spécial. Les références d'onglet dans les formules COUNTIF/SUMIF de buildLotRow sont
+           également quotées (valide en A1). Comportement inchangé pour des données normales.
   1.1.0  2026-05-29  Session #8 (portage des garde-fous de Sales/Master)
          L'Integrator était le fichier d'origine, jamais repassé après la mise en
          place des garde-fous de Sales/Master. Cette session porte les deux
@@ -45,6 +64,9 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<!-- CSP (#23) — durcissement. ⚠️ À TESTER en navigateur avant prod (OAuth + scraping).
+     Retrait = supprimer cette balise. frame-ancestors est ignoré en <meta> (nécessite un en-tête). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://www.pokepedia.fr https://api.allorigins.win https://thingproxy.freeboard.io https://api.codetabs.com https://corsproxy.io; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TCG Integrator</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -803,7 +825,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
-const SHEET_NAME      = 'Cartes_Stock_&_Transactions';
+const SHEET_NAME      = 'cartes_stock_et_transactions';
 const CARD_HEADER_ROW_FALLBACK = 143;   // valeur de repli si la détection échoue
 let cardHeaderRow = CARD_HEADER_ROW_FALLBACK;  // résolu dynamiquement via ensureCardHeaderRow()
 let cardHeaderResolved = false;
@@ -811,7 +833,7 @@ let cardHeaderResolved = false;
 // Fichier Google Sheets dédié à la sécurité : logs + backup.
 // Crée un nouveau Google Sheet dans ton Drive, puis colle son ID ici.
 // L'app créera automatiquement les onglets LOG_INJECTIONS et BACKUP_INJECTIONS si besoin.
-const SAFETY_GSHEET_ID = 'A_REMPLACER_PAR_ID_DE_TA_GSHEET_SECURITE';
+const SAFETY_GSHEET_ID = '1c-HD5zIKOd0zLq6saxT_uxmGAEmV_DtI';
 const LOG_SHEET_NAME   = 'LOG_INJECTIONS';
 const BACKUP_SHEET_NAME = 'BACKUP_INJECTIONS';
 
@@ -1738,6 +1760,12 @@ function logout() {
   showToast('Déconnecté de Google');
 }
 
+// Encadre TOUJOURS le nom d'onglet de quotes simples (échappement A1) → robuste à un
+// renommage avec caractère spécial. Identique au helper a1() de Sales/Master (depuis #8).
+function a1(sheet, rng) {
+  return "'" + String(sheet).replace(/'/g, "''") + "'!" + rng;
+}
+
 async function sheetsGet(range, spreadsheetId = GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
@@ -1786,9 +1814,9 @@ async function ensureSheetExists(spreadsheetId, sheetName, headerRow) {
   if (!exists) {
     await sheetsBatchUpdate([{ addSheet: { properties: { title: sheetName } } }], spreadsheetId);
   }
-  const firstRow = await sheetsGet(`${sheetName}!A1:Z1`, spreadsheetId).catch(() => ({ values: [] }));
+  const firstRow = await sheetsGet(a1(sheetName, `A1:Z1`), spreadsheetId).catch(() => ({ values: [] }));
   if (!firstRow.values || !firstRow.values.length || !firstRow.values[0].length) {
-    await sheetsUpdate(`${sheetName}!A1:${String.fromCharCode(64 + headerRow.length)}1`, [headerRow], spreadsheetId);
+    await sheetsUpdate(a1(sheetName, `A1:${String.fromCharCode(64 + headerRow.length)}1`), [headerRow], spreadsheetId);
   }
 }
 
@@ -1819,7 +1847,7 @@ async function getSheetId() {
 
 async function getNextLotNumber() {
   try {
-    const data = await sheetsGet(`${SHEET_NAME}!F2:F300`);
+    const data = await sheetsGet(a1(SHEET_NAME, `F2:F300`));
     const rows = data.values || [];
     let lastNum = 0;
     for (let i = rows.length-1; i >= 0; i--) {
@@ -1836,7 +1864,7 @@ async function getNextLotNumber() {
 // Repli sur CARD_HEADER_ROW_FALLBACK. Aligné sur findCardsHeaderRow de tcg-master.html.
 async function findCardsHeaderRow() {
   try {
-    const r = await sheetsGet(`${SHEET_NAME}!A1:AF300`);
+    const r = await sheetsGet(a1(SHEET_NAME, `A1:AF300`));
     const rows = r.values || [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i] || [];
@@ -1863,7 +1891,7 @@ async function ensureCardHeaderRow() {
 
 async function getFirstEmptyLotRow() {
   try {
-    const data = await sheetsGet(`${SHEET_NAME}!F2:F300`);
+    const data = await sheetsGet(a1(SHEET_NAME, `F2:F300`));
     const rows = data.values || [];
     for (let i = 0; i < rows.length; i++) {
       if (!rows[i] || !rows[i][0] || rows[i][0].toString().trim() === '') return i + 2;
@@ -1874,7 +1902,7 @@ async function getFirstEmptyLotRow() {
 
 async function getLastCardRow() {
   try {
-    const data = await sheetsGet(`${SHEET_NAME}!D${cardHeaderRow+1}:D99999`);
+    const data = await sheetsGet(a1(SHEET_NAME, `D${cardHeaderRow+1}:D99999`));
     const rows = data.values || [];
     let lastRow = cardHeaderRow;
     for (let i = rows.length-1; i >= 0; i--) {
@@ -1889,7 +1917,7 @@ async function getLastCardRow() {
 async function getLastStockSeq() {
   try {
     const today = getTodayStr();
-    const data = await sheetsGet(`${SHEET_NAME}!D${cardHeaderRow+1}:D99999`);
+    const data = await sheetsGet(a1(SHEET_NAME, `D${cardHeaderRow+1}:D99999`));
     const rows = data.values || [];
     let maxSeq = 0;
     rows.forEach(r => {
@@ -1909,7 +1937,7 @@ async function getLastStockSeq() {
 async function getFormulaTemplates(refRow) {
   try {
     // Read formulas for columns V,W,Y,Z,AA,AB,AC,AD,AE,AF,AG
-    const data = await sheetsGetFormulas(`${SHEET_NAME}!V${refRow}:AG${refRow}`);
+    const data = await sheetsGetFormulas(a1(SHEET_NAME, `V${refRow}:AG${refRow}`));
     const row = (data.values || [[]])[0];
     // V=0,W=1,X=2,Y=3,Z=4,AA=5,AB=6,AC=7,AD=8,AE=9,AF=10,AG=11
     return row;
@@ -1935,8 +1963,8 @@ function adaptFormula(formula, fromRow, toRow) {
 function buildLotRow(lotName, cardCount, prixAchat, cardsInLot, targetRow) {
   const totalCM = cardsInLot.reduce((s,r) => s+r.prixNum, 0);
   const origineRef = `"${String(lotName).replace(/"/g, '""')}"`;  // échappe les guillemets pour la chaîne de formule
-  const dataRange = `${SHEET_NAME}!$F$${cardHeaderRow+1}:$F$99999`;
-  const prixRange = `${SHEET_NAME}!$Q$${cardHeaderRow+1}:$Q$99999`;
+  const dataRange = a1(SHEET_NAME, `$F$${cardHeaderRow+1}:$F$99999`);
+  const prixRange = a1(SHEET_NAME, `$Q$${cardHeaderRow+1}:$Q$99999`);
   const R = targetRow;
   return [
     '','','','','',
@@ -2023,7 +2051,7 @@ function clearLog() {
 async function persistInjectionLogs() {
   if (!currentSessionLogs.length) return;
   const safetyId = getSafetySpreadsheetId();
-  await sheetsAppend(`${LOG_SHEET_NAME}!A:D`, currentSessionLogs, safetyId);
+  await sheetsAppend(a1(LOG_SHEET_NAME, `A:D`), currentSessionLogs, safetyId);
 }
 
 function assertNoMissingLanguageOrCondition() {
@@ -2069,7 +2097,7 @@ async function assertNoDuplicateKeys(plannedRows) {
     throw new Error(`${localDupes.length} clé(s) doublon dans le fichier à injecter. Injection interrompue.`);
   }
 
-  const existing = await sheetsGet(`${SHEET_NAME}!D${cardHeaderRow+1}:D99999`);
+  const existing = await sheetsGet(a1(SHEET_NAME, `D${cardHeaderRow+1}:D99999`));
   const existingKeys = new Set((existing.values || []).map(r => String(r[0] || '').trim()).filter(Boolean));
   const stockDupes = plannedRows.map(r => r.key).filter(k => existingKeys.has(k));
   if (stockDupes.length) {
@@ -2093,7 +2121,7 @@ async function backupPlannedInjectionRows(plannedRows) {
     r.card.nomCarte || '',
     JSON.stringify(r.card)
   ]);
-  await sheetsAppend(`${BACKUP_SHEET_NAME}!A:H`, rows, safetyId);
+  await sheetsAppend(a1(BACKUP_SHEET_NAME, `A:H`), rows, safetyId);
   logInject('ok', `✓ Backup sécurité créé (${rows.length} carte(s))`);
 }
 
@@ -2158,7 +2186,7 @@ async function injectIntoGSheet(preview = false) {
       // 1. Lot row
       const targetLotRow = await getFirstEmptyLotRow();
       const lotRow = buildLotRow(lotName, cardCount, lotPrices[orig]||0, cards, targetLotRow);
-      await sheetsUpdate(`${SHEET_NAME}!A${targetLotRow}:V${targetLotRow}`, [lotRow]);
+      await sheetsUpdate(a1(SHEET_NAME, `A${targetLotRow}:V${targetLotRow}`), [lotRow]);
       logInject('ok', `✓ Ligne de lot insérée (ligne ${targetLotRow})`);
       injLog.lotRows.push(targetLotRow);
 
@@ -2188,7 +2216,7 @@ async function injectIntoGSheet(preview = false) {
         const bStart = startRow + i;
         const bEnd = bStart + batch.length - 1;
         try {
-          await sheetsUpdate(`${SHEET_NAME}!C${bStart}:AG${bEnd}`, batch);
+          await sheetsUpdate(a1(SHEET_NAME, `C${bStart}:AG${bEnd}`), batch);
           logInject('ok', `✓ ${Math.min(i+BATCH, cardRows.length)}/${cardRows.length} cartes injectées`);
         } catch(batchErr) {
           logInject('err', `ERREUR ÉCRITURE : lignes ${bStart}-${bEnd} · ${batchErr.message}`);
@@ -2364,7 +2392,7 @@ async function loadLaterCards() {
   document.getElementById('btnLoadLater').disabled = true;
   try {
     await ensureCardHeaderRow();   // détecte la ligne d'en-tête cartes (sinon offset C/Q faux)
-    const data = await sheetsGet(`${SHEET_NAME}!C${cardHeaderRow+1}:Q99999`);
+    const data = await sheetsGet(a1(SHEET_NAME, `C${cardHeaderRow+1}:Q99999`));
     const rows = data.values || [];
     laterCards = [];
     rows.forEach(row => {

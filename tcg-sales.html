@@ -1,10 +1,39 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.10.0 (Session #11 — 2026-05-30)
+  Version : 1.12.0 (Session #13 — 2026-05-31)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.12.0 2026-05-31  Session #13 (auth Google Identity Services — #21, R4 ; jalon coordonné Sales+Master)
+         - [Sécu R4] Migration du flux OAuth implicite codé main (redirection pleine page,
+           jeton en localStorage, aucun refresh) vers le MODÈLE TOKEN de GIS :
+           chargement de https://accounts.google.com/gsi/client + initTokenClient().
+         - [Sécu R4] Jeton EN MÉMOIRE SEULE : suppression de persistToken() et de la
+           restauration localStorage ; purge proactive de l'ancien jeton disque au boot.
+         - [UX] Refresh SILENCIEUX programmé 5 min avant expiration (requestAccessToken
+           prompt:'') → fin de la déconnexion ~1 h. Connexion = popup (au tap) au lieu d'une
+           redirection ; au reload, tentative silencieuse (transparente si session active).
+         - [Sécu #23] CSP : script-src + https://accounts.google.com ; ajout frame-src
+           https://accounts.google.com (iframe du refresh). SRI : N/A — le script GIS NE
+           DOIT PAS être épinglé (lib mise à jour en continu par Google).
+         - ⚠️ Prérequis GCP : https://legardiendutcg.github.io dans « Authorized JavaScript
+           origins » du client OAuth (déjà en place). Déployer Sales ET Master en 1.12.0.
+  1.10.2 2026-05-31  Session #12 (CSP — patch Sales seul)
+         - [Sécu #23] En-tête CSP ajouté (<meta>) : default-src 'self' ; inline script/style
+           autorisés (app mono-fichier) ; connect-src limité à Sheets/OAuth Google ;
+           img https: + data: ; polices Google. ⚠️ À valider en navigateur (connexion Google +
+           une vente) avant prod ; retrait = supprimer la balise. SRI : N/A (aucun <script src> tiers).
+  1.10.1 2026-05-31  Session #12 (acheteur IMPOSÉ quand le Master publie un nom d'event — patch Sales seul)
+         - [Feature] Acheteur IMPOSÉ : quand le Master publie un nom d'event (app_state col B),
+           le champ acheteur passe en LECTURE SEULE (pastille #buyerLocked) et vaut ce nom pour
+           TOUS les vendeurs → uniformité du nom sur un event multi-vendeurs. Fin du défaut
+           écrasable de la 1.10.0. Quand le nom d'event est vide, le champ redevient éditable et
+           l'acheteur est obligatoire à la validation (inchangé).
+         - getResolvedBuyer() renvoie le nom d'event quand il est imposé (prioritaire sur le
+           champ), sinon la saisie vendeur. updateBuyerField() bascule input ⇄ #buyerLocked.
+         - Aucune autre logique touchée (outbox, cache, ventes_detail A:N, heartbeat, sécurité).
+           Master inchangé (1.11.0). Déployable seul ; le mapping reste cohérent (Master 1.11.0).
   1.10.0 2026-05-30  Session #11 (sémantique acheteur + statut master — PALIER COORDONNÉ avec Master)
          Numéro partagé avec Master 1.10.0. (Auth GIS reportée à une prochaine session.)
          - [Feature] Acheteur : le défaut vient désormais du NOM D'EVENT publié par le Master
@@ -237,6 +266,9 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<!-- CSP (#23) — durcissement. ⚠️ À TESTER en navigateur avant prod (OAuth Google).
+     Retrait = supprimer cette balise. frame-ancestors est ignoré en <meta> (nécessite un en-tête). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TCG Sales</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -821,13 +853,16 @@ body::before{content:'';position:fixed;inset:0;
 
 <div class="toast" id="toast"></div>
 
+<!-- Google Identity Services (#21, v1.12.0) — SEUL script tiers. NE PAS épingler (SRI) :
+     Google met à jour cette lib en continu, l'épinglage casserait l'auth. -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 'use strict';
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.10.0';
+const APP_VERSION      = '1.12.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -874,6 +909,12 @@ let gAccessToken = null;
 let gTokenExpiry = 0;
 let gUserEmail   = '';
 let gUserName    = '';
+// GIS (token model, #21 v1.12.0) — le jeton reste EN MÉMOIRE SEULE (jamais en localStorage).
+let tokenClient       = null;   // google.accounts.oauth2 token client
+let gisReady          = false;  // lib chargée + client initialisé
+let refreshTimer      = null;   // refresh silencieux programmé avant expiration
+let pendingInteractive = false; // la demande de jeton en cours vient-elle d'un geste utilisateur ?
+let authBootstrapped  = false;  // bootstrap post-connexion déjà fait (évite le re-bootstrap au refresh)
 
 // Master status (lu via app_state ; détection de changement d'horodatage, immunisée au décalage d'horloge)
 let masterStatus = { state: 'unknown', message: '—', eventName: '', lastReadAt: 0 };
@@ -1035,11 +1076,7 @@ function persistOfflineQueue() {
   lsSave(LS_OFFLINE_QUEUE, offlineQueue);
   renderOfflineQueueBar();
 }
-function persistToken() {
-  if (gAccessToken && gTokenExpiry > Date.now()) {
-    lsSave(LS_TOKEN, { token: gAccessToken, expiry: gTokenExpiry, email: gUserEmail, name: gUserName });
-  }
-}
+// (#21 v1.12.0) persistToken() retiré : le jeton ne quitte plus la mémoire (couvre R4).
 
 // ═══════════════════════════════════════════════════════════════
 // NETWORK STATUS
@@ -1116,68 +1153,99 @@ function updateValidateButton() {
   }
 }
 
-function toggleAuth() { if (isAuth()) logout(); else launchOAuth(); }
+function toggleAuth() { if (isAuth()) logout(); else requestToken(true); }
 
-function launchOAuth() {
-  const redirectUri = window.location.href.split('?')[0].split('#')[0];
-  const state = Math.random().toString(36).slice(2);
-  sessionStorage.setItem('oauth_state', state);
-  const params = new URLSearchParams({
-    client_id: OAUTH_CLIENT_ID, redirect_uri: redirectUri,
-    response_type: 'token',
-    scope: GSHEET_SCOPES + ' https://www.googleapis.com/auth/userinfo.email profile',
-    state, prompt: 'consent'
+// ─── Google Identity Services — modèle « token » (#21, v1.12.0) ────────────────
+// Plus de redirection pleine page : popup déclenchée au tap. Le jeton vit EN MÉMOIRE
+// SEULE et un refresh silencieux programmé avant l'expiration supprime la déconnexion ~1 h.
+
+// Attend que la lib externe accounts.google.com/gsi/client soit chargée (async defer).
+function waitForGis(timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    if (window.google && google.accounts && google.accounts.oauth2) return resolve();
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (window.google && google.accounts && google.accounts.oauth2) { clearInterval(iv); resolve(); }
+      else if (Date.now() - t0 > timeoutMs) { clearInterval(iv); reject(new Error('GIS non chargé')); }
+    }, 100);
   });
-  window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
 }
 
-async function handleOAuthCallback() {
-  // Restore from LS first (survive refresh)
-  const saved = lsLoad(LS_TOKEN, null);
-  if (saved && saved.expiry > Date.now() + 60000) { // au moins 1 min de marge
-    gAccessToken = saved.token;
-    gTokenExpiry = saved.expiry;
-    gUserEmail   = saved.email || '';
-    gUserName    = saved.name || 'Vendeur';
-    // Pas de toast au reload — connexion silencieuse
+async function initGisClient() {
+  await waitForGis();
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: OAUTH_CLIENT_ID,
+    scope: GSHEET_SCOPES + ' https://www.googleapis.com/auth/userinfo.email profile',
+    callback: onTokenResponse,
+    error_callback: onAuthError,
+  });
+  gisReady = true;
+}
+
+// interactive=true  → déclenché par un geste (tap) : popup autorisée si besoin.
+// interactive=false → tentative silencieuse (boot/refresh) : pas de popup sans geste,
+//                     un échec retombe gracieusement sur le bouton « se connecter ».
+function requestToken(interactive) {
+  if (!gisReady || !tokenClient) { if (interactive) showToast('⚠ Auth Google pas prête, réessayez', true); return; }
+  pendingInteractive = interactive;
+  try { tokenClient.requestAccessToken({ prompt: '' }); }
+  catch (e) { onAuthError({ type: 'request_failed', message: e && e.message }); }
+}
+
+async function onTokenResponse(resp) {
+  if (!resp || resp.error || !resp.access_token) { onAuthError(resp || { type: 'no_token' }); return; }
+  gAccessToken = resp.access_token;
+  gTokenExpiry = Date.now() + (parseInt(resp.expires_in || '3600', 10) * 1000);
+  scheduleTokenRefresh();
+  if (!gUserEmail) await fetchUserInfo();   // récupéré une seule fois
+  if (!authBootstrapped) {
+    authBootstrapped = true;
+    if (pendingInteractive) showToast('✓ Connecté · ' + (gUserName || 'Vendeur'));
+    updateAuthUI();
+    await loadStockCache();
+    await readMasterHeartbeat();
+  } else {
+    updateAuthUI();   // simple renouvellement → pas de re-bootstrap (cache/heartbeat déjà actifs)
   }
+  pendingInteractive = false;
+}
 
-  const hash = window.location.hash.substring(1);
-  if (!hash.includes('access_token')) return;
+function onAuthError(err) {
+  // On ne dérange l'utilisateur que si LUI a demandé la connexion. Une tentative
+  // silencieuse (boot/refresh) qui échoue laisse simplement apparaître le bouton.
+  if (pendingInteractive) {
+    const m = (err && (err.type || err.error || err.message)) || 'inconnue';
+    if (m !== 'popup_closed') showToast('✗ Connexion : ' + m, true);
+  }
+  pendingInteractive = false;
+  updateAuthUI();
+}
 
-  const params = new URLSearchParams(hash);
-  const token = params.get('access_token');
-  const expiresIn = parseInt(params.get('expires_in') || '3600');
-  if (params.get('state') !== sessionStorage.getItem('oauth_state')) return;
+function scheduleTokenRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  const lead = 5 * 60 * 1000;   // renouvelle 5 min avant l'expiration
+  const delay = Math.max(10000, gTokenExpiry - Date.now() - lead);
+  refreshTimer = setTimeout(() => { if (gAccessToken) requestToken(false); }, delay);
+}
 
-  gAccessToken = token;
-  gTokenExpiry = Date.now() + expiresIn * 1000;
-  sessionStorage.removeItem('oauth_state');
-  window.history.replaceState({}, document.title, window.location.pathname);
-
-  // Fetch user info
+async function fetchUserInfo() {
   try {
     const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: { Authorization: 'Bearer ' + token }
+      headers: { Authorization: 'Bearer ' + gAccessToken }
     });
     const info = await res.json();
     gUserEmail = info.email || '';
     gUserName  = info.name || info.email || 'Vendeur';
-    showToast('✓ Connecté · ' + gUserName);
-  } catch (e) {
-    gUserName = 'Vendeur';
-  }
-
-  persistToken();
-  updateAuthUI();
-  // Bootstrap : cache stock + premier heartbeat
-  await loadStockCache();
-  await readMasterHeartbeat();
+  } catch (e) { gUserName = gUserName || 'Vendeur'; }
 }
 
 function logout() {
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+  const tok = gAccessToken;
   gAccessToken = null; gTokenExpiry = 0; gUserEmail = ''; gUserName = '';
-  lsClear(LS_TOKEN);
+  authBootstrapped = false;
+  // Révoque le jeton côté Google (best-effort)
+  try { if (tok && window.google && google.accounts && google.accounts.oauth2) google.accounts.oauth2.revoke(tok); } catch (_) {}
   stockCacheCards.clear();
   stockCacheSealed.clear();
   masterStatus = { state: 'unknown', message: '—' };
@@ -1329,32 +1397,40 @@ function resetTvaSelect() {
   if (def) sel.value = def;
 }
 
-// Le nom d'event publié par le Master sert de DÉFAUT d'acheteur (écrasable par le vendeur).
-// S'il est vide, le vendeur doit saisir l'acheteur (obligatoire à la validation).
+// Le nom d'event publié par le Master (app_state col B) impose l'acheteur :
+//  - non vide  → acheteur IMPOSÉ, identique pour tous les vendeurs (lecture seule)
+//  - vide      → le vendeur saisit l'acheteur (obligatoire à la validation)
 function eventBuyerDefault() {
   return (masterStatus && masterStatus.eventName) ? masterStatus.eventName.trim() : '';
 }
 function masterProvidesBuyer() { return !!eventBuyerDefault(); }
 
 function updateBuyerField() {
-  const input  = document.getElementById('buyerInput');
-  const locked = document.getElementById('buyerLocked');
+  const input      = document.getElementById('buyerInput');
+  const locked     = document.getElementById('buyerLocked');
+  const lockedName = document.getElementById('buyerLockedName');
   if (!input) return;
-  // Plus de mode "lecture seule" : le champ est toujours éditable.
-  if (locked) locked.classList.add('hidden');
-  input.classList.remove('hidden');
-  // Pré-remplissage du défaut (nom d'event) tant que le vendeur n'a rien saisi
-  // et que le champ n'a pas le focus (pour ne pas écraser une frappe en cours).
   const def = eventBuyerDefault();
-  if (def && !input.value.trim() && document.activeElement !== input) {
-    input.value = def;
+  if (def) {
+    // IMPOSÉ : on masque la saisie et on affiche la pastille en lecture seule.
+    input.classList.add('hidden');
+    if (lockedName) lockedName.textContent = def;
+    if (locked) locked.classList.remove('hidden');
+  } else {
+    // ÉDITABLE : saisie vendeur (obligatoire). Pas de pré-remplissage (rien à imposer).
+    if (locked) locked.classList.add('hidden');
+    input.classList.remove('hidden');
+    input.placeholder = 'Nom du client';
   }
-  input.placeholder = def ? def : 'Nom du client';
   updateValidateButton();
 }
 
-// Acheteur effectif retenu pour la vente = ce qui est dans le champ (défaut ou saisie)
+// Acheteur effectif retenu pour la vente :
+//  - imposé par le Master (nom d'event) → prioritaire, le champ de saisie est ignoré
+//  - sinon → la saisie du vendeur
 function getResolvedBuyer() {
+  const def = eventBuyerDefault();
+  if (def) return def;
   const input = document.getElementById('buyerInput');
   return input ? input.value.trim() : '';
 }
@@ -2372,7 +2448,13 @@ async function init() {
   }
 
   updateNet();
-  await handleOAuthCallback();
+  // (#21 v1.12.0) Migration : purge de tout ancien jeton resté en clair sur le disque.
+  lsClear(LS_TOKEN);
+  // GIS : init du token client puis tentative de connexion SILENCIEUSE (transparente si la
+  // session Google est active et le consentement déjà donné ; sinon le bouton « se connecter »
+  // reste affiché — plus d'auth instantanée depuis localStorage, c'est le gain sécurité R4).
+  try { await initGisClient(); requestToken(false); }
+  catch (e) { logEvent('warn', 'GIS init échec', { message: e && e.message }); }
   updateAuthUI();
   focusScan();
 }
