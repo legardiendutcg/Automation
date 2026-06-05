@@ -8,6 +8,9 @@
   auth GIS, CENTRAL (Google Sheets) en source de vérité — comme Sales / Master.
 
   CHANGELOG
+  0.1.4  2026-06-04  Filtres en CASCADE : les options d un menu se restreignent aux valeurs
+                     encore possibles selon les autres filtres actifs (+ indice de
+                     fourchette de prix disponible dans les placeholders min/max).
   0.1.3  2026-06-04  Filtres Série / Lot d'origine / Bloc / État / Rareté passés en
                      MENUS DÉROULANTS MULTI-SÉLECTION (recherche intégrée + cases à
                      cocher + « Tout / Aucun »). Nom et Prix restent texte / min-max.
@@ -146,7 +149,7 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
     </div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.1.3</div>
+      <div class="ver" id="ver">v0.1.4</div>
     </div>
   </header>
 
@@ -241,7 +244,7 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
 <script>
 'use strict';
 // ═══════════════════════════════════════════════════════════════ CONFIG
-const APP_VERSION       = '0.1.3';
+const APP_VERSION       = '0.1.4';
 const OAUTH_CLIENT_ID   = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES     = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -472,12 +475,14 @@ function renderMsButton(key){
 function renderMsList(key){
   const list=document.getElementById('mslist-'+key); if(!list) return;
   const term=norm(msSearch[key]);
+  const avail=availableValues(key);   // cascade : seules les valeurs encore possibles
   const html=[];
   msOptions[key].forEach((o,idx)=>{
+    if(!avail.has(o.value) && !filters[key].has(o.value)) return;   // garde aussi les déjà-cochées
     if(term && !norm(o.label).includes(term)) return;
     html.push(`<label class="ms-opt"><input type="checkbox" ${filters[key].has(o.value)?'checked':''} onchange="msToggleIdx('${key}',${idx})"> <span>${esc(o.label)}</span></label>`);
   });
-  list.innerHTML = html.length? html.join('') : '<div class="ms-empty">Aucune option</div>';
+  list.innerHTML = html.length? html.join('') : '<div class="ms-empty">Aucune option (selon les autres filtres)</div>';
 }
 function toggleMenu(key){
   if(openMenu && openMenu!==key) closeMenu(openMenu);
@@ -493,8 +498,8 @@ function msToggleIdx(key,idx){
   renderMsButton(key); page=1; render();
 }
 function msAll(key){
-  const term=norm(msSearch[key]);
-  for(const o of msOptions[key]){ if(!term || norm(o.label).includes(term)) filters[key].add(o.value); }
+  const term=norm(msSearch[key]); const avail=availableValues(key);
+  for(const o of msOptions[key]){ if((avail.has(o.value)||filters[key].has(o.value)) && (!term || norm(o.label).includes(term))) filters[key].add(o.value); }
   renderMsList(key); renderMsButton(key); page=1; render();
 }
 function msNone(key){ filters[key].clear(); renderMsList(key); renderMsButton(key); page=1; render(); }
@@ -508,21 +513,28 @@ function resetFilters(){
   if(openMenu) closeMenu(openMenu);
   page=1; render();
 }
-function computeFiltered(){
-  return parsedRows.filter(r=>{
-    if(activeFilter!=='all' && r.routing!==activeFilter) return false;
-    if(filters.series.size && !filters.series.has(r.codeSerie)) return false;
-    if(filters.origines.size && !filters.origines.has(r.origine)) return false;
-    if(filters.blocs.size && !filters.blocs.has(r.bloc)) return false;
-    if(filters.etats.size && !filters.etats.has(r.etat)) return false;
-    if(filters.raretes.size && !filters.raretes.has(r.type)) return false;
-    if(filters.nom){ if(!norm(r.raw).includes(norm(filters.nom))) return false; }
+const MS_FIELD={ series:r=>r.codeSerie, origines:r=>r.origine, blocs:r=>r.bloc, etats:r=>r.etat, raretes:r=>r.type };
+// passes(r,skip) : la carte passe tous les filtres SAUF celui nommé `skip` (pour le calcul
+// en cascade des options d'un facette). skip ∈ {series,origines,blocs,etats,raretes,nom,prix,null}.
+function passes(r,skip){
+  if(activeFilter!=='all' && r.routing!==activeFilter) return false;
+  if(skip!=='series'   && filters.series.size   && !filters.series.has(r.codeSerie)) return false;
+  if(skip!=='origines' && filters.origines.size && !filters.origines.has(r.origine)) return false;
+  if(skip!=='blocs'    && filters.blocs.size    && !filters.blocs.has(r.bloc)) return false;
+  if(skip!=='etats'    && filters.etats.size    && !filters.etats.has(r.etat)) return false;
+  if(skip!=='raretes'  && filters.raretes.size  && !filters.raretes.has(r.type)) return false;
+  if(skip!=='nom' && filters.nom && !norm(r.raw).includes(norm(filters.nom))) return false;
+  if(skip!=='prix'){
     if(filters.prixMin!=null && (r.prix==null||r.prix<filters.prixMin)) return false;
     if(filters.prixMax!=null && (r.prix==null||r.prix>filters.prixMax)) return false;
-    if(selectedOnly && !selection.has(r._id)) return false;
-    return true;
-  });
+  }
+  return true;
 }
+function computeFiltered(){ return parsedRows.filter(r=> passes(r,null) && (!selectedOnly || selection.has(r._id))); }
+// Valeurs encore disponibles pour la facette `key`, compte tenu des autres filtres (cascade).
+function availableValues(key){ const s=new Set(); const g=MS_FIELD[key]; for(const r of parsedRows){ if(passes(r,key)){ const v=g(r); if(v) s.add(v); } } return s; }
+// Fourchette de prix disponible compte tenu des autres filtres (hors contrainte prix).
+function priceRange(){ let lo=Infinity,hi=-Infinity; for(const r of parsedRows){ if(passes(r,'prix') && r.prix!=null){ if(r.prix<lo)lo=r.prix; if(r.prix>hi)hi=r.prix; } } return lo<=hi?[lo,hi]:null; }
 
 // ═══════════════════════════════════════════════════════════════ SÉLECTION
 function toggleSelect(id,checked){
@@ -580,6 +592,10 @@ function render(){
   document.getElementById('routeTabs').innerHTML=defs.map(([k,lbl])=>`<button class="${activeFilter===k?'active':''}" onclick="setRoute('${k}')">${lbl}</button>`).join('');
 
   const list=computeFiltered();
+  const pr=priceRange();
+  const pmin=document.getElementById('fPrixMin'), pmax=document.getElementById('fPrixMax');
+  if(pr){ pmin.placeholder=`min (${pr[0].toFixed(2)})`; pmax.placeholder=`max (${pr[1].toFixed(2)})`; }
+  else { pmin.placeholder='min'; pmax.placeholder='max'; }
   document.getElementById('tablecount').textContent=`${list.length} carte(s) après filtres`;
   updateSelBar(list);
 
