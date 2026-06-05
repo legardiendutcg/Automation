@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="fr">
+<!--
+  TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket en premier)
+  ────────────────────────────────────────────────────────────────────────────
+  App de SORTIE : pousse les articles du stock vers des canaux de vente externes.
+  Distincte de tcg-intake (entrée de stock). Mono-fichier statique (GitHub Pages),
+  auth GIS, CENTRAL (Google Sheets) en source de vérité — comme Sales / Master.
+
+  CHANGELOG
+  0.1.0  2026-06-04  Première brique. Auth GIS (modèle token, popup au tap, refresh
+                     silencieux) + lecture LIVE du stock depuis CENTRAL
+                     (cartes_stock_et_transactions) + parser FR validé sur données
+                     réelles (99,9 % de clés série+numéro) : segmentation de jeu
+                     (Pokémon vs autres, ex. One Piece), routage des lots en vrac,
+                     extraction (base · numéro · suffixes). Tableau de contrôle à
+                     l'écran avec aiguillage single / lot / autre-jeu / exception.
+                     ⚠️ Pas encore de matching CardMarket (catalogue + pont
+                     Poképédia → v0.2.0). Aucune écriture : lecture seule.
+
+  NOTE CSP : connect-src couvre Sheets + OAuth Google uniquement (v0.1.0 lit le stock).
+  En v0.2.0 (pont Poképédia / catalogue), il faudra étendre connect-src à
+  https://www.pokepedia.fr et aux proxies CORS (comme dans tcg-intake).
+-->
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self';">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TCG Integrator</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+:root {
+  --bg: #0a0c10;
+  --surface: #12151c;
+  --surface2: #181c26;
+  --border: #222736;
+  --accent: #e8ff47;
+  --accent2: #47c8ff;
+  --accent3: #ff6b6b;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --text: #e8eaf0;
+  --muted: #6b7280;
+  --dim: #9ca3af;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Syne', sans-serif;
+  min-height: 100vh;
+}
+body::before {
+  content:''; position:fixed; inset:0;
+  background-image: linear-gradient(rgba(232,255,71,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(232,255,71,.025) 1px, transparent 1px);
+  background-size: 48px 48px; pointer-events:none; z-index:0;
+}
+.app { max-width:1320px; margin:0 auto; padding:28px 24px; position:relative; z-index:1; }
+header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:28px; gap:16px; flex-wrap:wrap; }
+.logo h1 { font-size:2rem; font-weight:800; letter-spacing:-.03em; }
+.logo h1 span { color:var(--accent); }
+.logo p { font-family:'Space Mono',monospace; font-size:.62rem; color:var(--muted); margin-top:6px; text-transform:uppercase; letter-spacing:.15em; }
+.header-right { display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
+.ver { font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted); border:1px solid var(--border); border-radius:20px; padding:6px 10px; }
+
+.auth-pill {
+  font-family:'Space Mono',monospace; font-size:.62rem; padding:6px 12px;
+  border-radius:20px; border:1px solid var(--border); color:var(--muted);
+  cursor:pointer; transition:all .2s; white-space:nowrap;
+}
+.auth-pill.connected { border-color:var(--success); color:var(--success); }
+.auth-pill:hover { border-color:var(--accent2); color:var(--accent2); }
+
+.intro { color:var(--dim); font-size:.92rem; line-height:1.5; max-width:880px; margin-bottom:22px; }
+.intro b { color:var(--text); }
+
+.toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:24px; }
+button.btn {
+  font-family:'Syne',sans-serif; font-weight:700; font-size:.85rem;
+  background:var(--accent); color:#0a0c10; border:none; border-radius:8px;
+  padding:11px 18px; cursor:pointer; transition:transform .12s, opacity .2s;
+}
+button.btn:hover { transform:translateY(-1px); }
+button.btn:disabled { opacity:.4; cursor:not-allowed; transform:none; }
+button.btn.ghost { background:transparent; color:var(--accent2); border:1px solid var(--border); }
+.status { font-family:'Space Mono',monospace; font-size:.72rem; color:var(--muted); }
+
+/* ── stats ── */
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:26px; }
+.stat { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+.stat .n { font-size:1.7rem; font-weight:800; letter-spacing:-.02em; }
+.stat .l { font-family:'Space Mono',monospace; font-size:.6rem; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); margin-top:4px; }
+.stat.single .n { color:var(--success); }
+.stat.lot .n { color:var(--warning); }
+.stat.other .n { color:var(--accent2); }
+.stat.exc .n { color:var(--accent3); }
+
+/* ── filter tabs ── */
+.filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+.filters button {
+  font-family:'Space Mono',monospace; font-size:.68rem; background:var(--surface);
+  color:var(--dim); border:1px solid var(--border); border-radius:20px;
+  padding:7px 14px; cursor:pointer; transition:all .15s;
+}
+.filters button.active { background:var(--surface2); color:var(--text); border-color:var(--accent); }
+
+/* ── table ── */
+.table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+table { width:100%; border-collapse:collapse; font-size:.82rem; }
+thead th {
+  text-align:left; font-family:'Space Mono',monospace; font-weight:700; font-size:.6rem;
+  text-transform:uppercase; letter-spacing:.1em; color:var(--muted);
+  padding:12px 14px; border-bottom:1px solid var(--border); background:var(--surface2); position:sticky; top:0;
+}
+tbody td { padding:10px 14px; border-bottom:1px solid var(--border); vertical-align:top; }
+tbody tr:last-child td { border-bottom:none; }
+tbody tr:hover { background:var(--surface2); }
+.mono { font-family:'Space Mono',monospace; font-size:.74rem; }
+.dim { color:var(--muted); }
+.serie { color:var(--accent2); }
+.key { color:var(--accent); font-family:'Space Mono',monospace; font-size:.72rem; }
+
+.badge { font-family:'Space Mono',monospace; font-size:.58rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; padding:3px 8px; border-radius:6px; white-space:nowrap; }
+.badge.single { background:rgba(74,222,128,.12); color:var(--success); }
+.badge.lot { background:rgba(251,191,36,.12); color:var(--warning); }
+.badge.other { background:rgba(71,200,255,.12); color:var(--accent2); }
+.badge.exc { background:rgba(255,107,107,.12); color:var(--accent3); }
+.suf { display:inline-block; font-family:'Space Mono',monospace; font-size:.56rem; color:var(--dim); background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:1px 5px; margin-right:3px; }
+
+.empty { padding:48px 24px; text-align:center; color:var(--muted); font-family:'Space Mono',monospace; font-size:.8rem; }
+.tablecount { font-family:'Space Mono',monospace; font-size:.62rem; color:var(--muted); margin:10px 2px; }
+
+/* toast */
+#toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(120px); background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:12px 20px; border-radius:10px; font-size:.82rem; transition:transform .3s; z-index:100; max-width:90vw; }
+#toast.show { transform:translateX(-50%) translateY(0); }
+#toast.err { border-color:var(--accent3); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">
+      <h1>TCG <span>INTEGRATOR</span></h1>
+      <p>Publication multi-canal → CardMarket · by Cassius</p>
+    </div>
+    <div class="header-right">
+      <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
+      <div class="ver" id="ver">v0.1.0</div>
+    </div>
+  </header>
+
+  <p class="intro">
+    Étape de <b>préparation</b> : lecture seule de ton stock. L'app lit les cartes disponibles dans CENTRAL,
+    segmente par <b>jeu</b>, isole les <b>lots en vrac</b>, et extrait pour chaque carte la <b>clé du pont</b>
+    <span class="mono">(série + numéro)</span> qui servira au matching CardMarket en v0.2.0.
+    <b>Aucune écriture, aucune publication</b> à ce stade.
+  </p>
+
+  <div class="toolbar">
+    <button class="btn" id="loadBtn" onclick="loadStock()" disabled>Charger le stock</button>
+    <span class="status" id="status">Connecte-toi à Google pour commencer.</span>
+  </div>
+
+  <div id="results" style="display:none;">
+    <div class="stats" id="stats"></div>
+    <div class="filters" id="filters"></div>
+    <div class="tablecount" id="tablecount"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Série</th><th>Nom (stock)</th><th>Jeu</th><th>Base</th><th>Numéro</th>
+          <th>Suffixes</th><th>État</th><th>Prix</th><th>Clé pont</th><th>Aiguillage</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+// ═══════════════════════════════════════════════════════════════ CONFIG
+const APP_VERSION       = '0.1.0';
+const OAUTH_CLIENT_ID   = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
+const GSHEET_SCOPES     = 'https://www.googleapis.com/auth/spreadsheets.readonly';
+const CENTRAL_GSHEET_ID = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+const SHEET_CARDS       = 'cartes_stock_et_transactions';
+
+// ═══════════════════════════════════════════════════════════════ STATE
+let gAccessToken = null;
+let gTokenExpiry = 0;
+let gUserEmail   = '';
+let gUserName    = '';
+let tokenClient        = null;
+let gisReady           = false;
+let refreshTimer       = null;
+let pendingInteractive = false;
+let cardHeaderRow      = null;
+let parsedRows         = [];
+let activeFilter       = 'single';
+
+function isAuth() { return gAccessToken && Date.now() < gTokenExpiry; }
+
+// ═══════════════════════════════════════════════════════════════ GIS AUTH
+// Modèle « token » (popup au tap, jeton en mémoire seule, refresh silencieux) —
+// même pattern que Sales/Master depuis v1.12.0.
+function waitForGis(timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    if (window.google && google.accounts && google.accounts.oauth2) return resolve();
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (window.google && google.accounts && google.accounts.oauth2) { clearInterval(iv); resolve(); }
+      else if (Date.now() - t0 > timeoutMs) { clearInterval(iv); reject(new Error('GIS non chargé')); }
+    }, 100);
+  });
+}
+async function initGisClient() {
+  try { await waitForGis(); }
+  catch (e) { setStatus('⚠ Google Identity non chargé (réseau/CSP).'); return; }
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: OAUTH_CLIENT_ID,
+    scope: GSHEET_SCOPES + ' https://www.googleapis.com/auth/userinfo.email profile',
+    callback: onTokenResponse,
+    error_callback: onAuthError,
+  });
+  gisReady = true;
+}
+function requestToken(interactive) {
+  if (!gisReady || !tokenClient) { if (interactive) showToast('⚠ Auth Google pas prête, réessayez', true); return; }
+  pendingInteractive = interactive;
+  try { tokenClient.requestAccessToken({ prompt: '' }); }
+  catch (e) { onAuthError({ type: 'request_failed', message: e && e.message }); }
+}
+async function onTokenResponse(resp) {
+  if (!resp || resp.error || !resp.access_token) { onAuthError(resp || { type: 'no_token' }); return; }
+  gAccessToken = resp.access_token;
+  gTokenExpiry = Date.now() + (parseInt(resp.expires_in || '3600', 10) * 1000);
+  scheduleTokenRefresh();
+  if (!gUserEmail) await fetchUserInfo();
+  updateAuthUI();
+  if (pendingInteractive) {
+    showToast('✓ Connecté · ' + (gUserName || gUserEmail));
+    loadStock();   // confort : on enchaîne sur la lecture du stock
+  }
+  pendingInteractive = false;
+}
+function onAuthError(err) {
+  const m = (err && (err.type || err.error || err.message)) || 'inconnue';
+  if (m === 'popup_failed_to_open') showToast('⚠ Popup bloquée — autorise les popups pour ce site', true);
+  else if (pendingInteractive && m !== 'popup_closed') showToast('✗ Connexion : ' + m, true);
+  pendingInteractive = false;
+  updateAuthUI();
+}
+function scheduleTokenRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  const lead = 5 * 60 * 1000;
+  const delay = Math.max(10000, gTokenExpiry - Date.now() - lead);
+  refreshTimer = setTimeout(() => { if (gAccessToken) requestToken(false); }, delay);
+}
+async function fetchUserInfo() {
+  try {
+    const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: 'Bearer ' + gAccessToken } });
+    const info = await res.json();
+    gUserEmail = info.email || '';
+    gUserName  = info.name || info.email || '';
+  } catch (e) { /* non bloquant */ }
+}
+function logout() {
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+  gAccessToken = null; gTokenExpiry = 0; gUserEmail = ''; gUserName = '';
+  updateAuthUI();
+  showToast('Déconnecté de Google');
+}
+function toggleAuth() { if (isAuth()) logout(); else requestToken(true); }
+function updateAuthUI() {
+  const pill = document.getElementById('authPill');
+  const btn  = document.getElementById('loadBtn');
+  if (isAuth()) {
+    pill.textContent = '● ' + (gUserName || 'Google connecté');
+    pill.className = 'auth-pill connected';
+    btn.disabled = false;
+    if (!parsedRows.length) setStatus('Connecté. Clique « Charger le stock ».');
+  } else {
+    pill.textContent = '🔑 Se connecter à Google';
+    pill.className = 'auth-pill';
+    btn.disabled = true;
+    setStatus('Connecte-toi à Google pour commencer.');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════ SHEETS (lecture)
+function a1(sheet, rng) { return "'" + String(sheet).replace(/'/g, "''") + "'!" + rng; }
+async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
+  if (!res.ok) throw new Error(`Sheets GET ${res.status}: ${(await res.text()).slice(0,160)}`);
+  return res.json();
+}
+// Détection dynamique de la ligne d'en-tête des cartes (≈ ligne 143) — même heuristique que Master.
+async function findCardsHeaderRow() {
+  const r = await sheetsGet(a1(SHEET_CARDS, 'A1:AF300'));
+  const rows = r.values || [];
+  for (let i = 0; i < rows.length; i++) {
+    const colD  = (rows[i][3]  || '').toString().trim().toLowerCase();
+    const colAF = (rows[i][31] || '').toString().trim().toLowerCase();
+    if (colD === 'clé' || colD === 'cle' || colD === 'key' || colAF === 'statut' || colAF === 'status' || colAF.includes('régime')) return i + 1;
+  }
+  return 143;
+}
+
+// ═══════════════════════════════════════════════════════════════ PARSER FR (validé 04/06/2026)
+// Segmentation jeu : One Piece & autres TCG écartés (catalogue products_singles_6 = Pokémon only).
+const RE_OTHER_NAME = /\((?:OP|ST|EB|PRB)\d|\(P-\d/i;
+const RE_OTHER_SC   = /^(?:OP\d|ST\d|PRB|OP02-JP|OP15|EB0[234]\b|UP)/i;
+function detectGame(serieCode, nom) {
+  if (RE_OTHER_NAME.test(nom) || RE_OTHER_SC.test(serieCode || '')) return 'other';
+  return 'pokemon';
+}
+const RE_LOT     = /^\s*lot\b/i;
+const RE_BRACKET = /\[[^\]]*\]/g;
+const RE_FULL    = /(\d{1,3}[a-z]?)\s*\/\s*(\d{1,4})/i;
+const RE_PART    = /(\d{1,3}[a-z]?)\s*\/\s*(?!\d)/i;
+const RE_PROMO_G = /\b([A-Z]{1,5}\d{1,4}[a-z]?)\b/gi;
+const RE_GRADE   = /\b(CA|Pre-Grade|GD|EXC|NM|PSA|BGS)\b/gi;
+const RE_BARE    = /(?:^|\s)(\d{1,3}[a-z]?)(?:\s|$)/g;
+const RE_SUFFIX  = /\b(ex|gx|vmax|vstar|v|prisme|prism|break|tag ?team|delta|holo|reverse|shiny|rainbow|gold|full ?art|fa|sar|sir|ar|alt|promo)\b/gi;
+function stripAccents(s) { return s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+
+function parseNumber(work) {
+  let m = work.match(RE_FULL);
+  if (m) return { number: m[1] + '/' + m[2], kind: 'full', matched: m[0] };
+  m = work.match(RE_PART);
+  if (m) return { number: m[1] + '/?', kind: 'partial', matched: m[0] };
+  const promo = (work.match(RE_PROMO_G) || []).filter(t => /\d/.test(t) && /[A-Z]/i.test(t.replace(/\d/g,'')) && /[A-Z]/.test(t));
+  if (promo.length) { const p = promo[promo.length - 1]; return { number: p, kind: 'promo', matched: p }; }
+  const cleaned = work.replace(RE_GRADE, ' ');
+  const bare = [...cleaned.matchAll(RE_BARE)].map(x => x[1]);
+  if (bare.length) { const b = bare[bare.length - 1]; return { number: b, kind: 'bare', matched: b }; }
+  return { number: null, kind: null, matched: null };
+}
+
+function parseCard(c) {
+  const raw = (c.name || '').toString().trim();
+  const game = detectGame(c.codeSerie, raw);
+  const isLot = RE_LOT.test(raw);
+
+  const bracketMatch = raw.match(/\[([^\]]*)\]/);
+  const bracket = bracketMatch ? bracketMatch[1].trim() : null;
+  let work = raw.replace(RE_BRACKET, ' ');
+
+  const num = parseNumber(work);
+  if (num.matched) work = work.replace(num.matched, ' ');
+
+  const suffixes = (work.match(RE_SUFFIX) || []).map(s => s.toLowerCase());
+  let base = work.replace(RE_SUFFIX, ' ').replace(/\s+/g, ' ').replace(/^[\s-]+|[\s-]+$/g, '');
+  const baseNorm = stripAccents(base).toLowerCase().replace(/\s+/g, ' ').trim();
+
+  let routing;
+  if (game === 'other') routing = 'other';
+  else if (isLot)       routing = 'lot';
+  else if (num.number)  routing = 'single';
+  else                  routing = 'exception';
+
+  const bridgeKey = (routing === 'single') ? ((c.codeSerie || '?') + ' · ' + num.number) : null;
+
+  return { ...c, raw, game, isLot, bracket, base, baseNorm,
+           number: num.number, numKind: num.kind, suffixes, routing, bridgeKey };
+}
+
+// ═══════════════════════════════════════════════════════════════ PRIX
+function parsePrix(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') return v;
+  let s = String(v).replace(/[^\d.,-]/g, '').trim();
+  if (!s) return null;
+  // gère "1.234,56" et "1234.56" / "12,00"
+  if (s.includes(',') && s.includes('.')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (s.includes(',')) s = s.replace(',', '.');
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+// ═══════════════════════════════════════════════════════════════ LOAD
+async function loadStock() {
+  if (!isAuth()) { showToast('⚠ Connecte-toi à Google d\'abord', true); return; }
+  const btn = document.getElementById('loadBtn');
+  btn.disabled = true; setStatus('Lecture du stock…');
+  try {
+    cardHeaderRow = await findCardsHeaderRow();
+    // Lecture C..AF à partir de l'en-tête. Indices RELATIFS à C :
+    //  D=1(Key) · G=4(CodeSérie) · H=5(NomSérie) · I=6(Nom) · J=7(Type) · K=8(État)
+    //  P=13(Statut) · Q=14(Prix vente) · V=19(Prix d'achat)
+    const res = await sheetsGet(a1(SHEET_CARDS, `C${cardHeaderRow + 1}:AF`));
+    const rows = res.values || [];
+    const cards = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const key = (row[1] || '').toString().trim();
+      if (!key) continue;
+      const statut = (row[13] || '').toString().trim();
+      if (statut !== '') continue; // garde uniquement le stock disponible (P vide)
+      cards.push({
+        key,
+        codeSerie: (row[4] || '').toString().trim(),
+        nomSerie:  (row[5] || '').toString().trim(),
+        name:      (row[6] || '').toString().trim(),
+        type:      (row[7] || '').toString().trim(),
+        etat:      (row[8] || '').toString().trim(),
+        prix:      parsePrix(row[14]),
+        pa:        parsePrix(row[19]),
+      });
+    }
+    parsedRows = cards.map(parseCard);
+    render();
+    const g = parsedRows.filter(r => r.game === 'pokemon').length;
+    setStatus(`Stock lu : ${parsedRows.length} cartes disponibles (${g} Pokémon). En-tête détecté ligne ${cardHeaderRow}.`);
+  } catch (e) {
+    setStatus('✗ ' + (e.message || e));
+    showToast('✗ Lecture échouée : ' + (e.message || e), true);
+  } finally {
+    btn.disabled = !isAuth();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════ RENDER
+function counts() {
+  const c = { total: parsedRows.length, single: 0, lot: 0, other: 0, exception: 0 };
+  for (const r of parsedRows) c[r.routing]++;
+  return c;
+}
+function render() {
+  document.getElementById('results').style.display = parsedRows.length ? 'block' : 'none';
+  const c = counts();
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="n">${c.total}</div><div class="l">Stock dispo</div></div>
+    <div class="stat single"><div class="n">${c.single}</div><div class="l">Singles Pokémon</div></div>
+    <div class="stat lot"><div class="n">${c.lot}</div><div class="l">Lots en vrac</div></div>
+    <div class="stat other"><div class="n">${c.other}</div><div class="l">Autres jeux</div></div>
+    <div class="stat exc"><div class="n">${c.exception}</div><div class="l">Exceptions</div></div>`;
+
+  const defs = [
+    ['single', `Singles (${c.single})`], ['lot', `Lots (${c.lot})`],
+    ['other', `Autres jeux (${c.other})`], ['exception', `Exceptions (${c.exception})`],
+    ['all', `Tout (${c.total})`],
+  ];
+  document.getElementById('filters').innerHTML = defs.map(([k, lbl]) =>
+    `<button class="${activeFilter === k ? 'active' : ''}" onclick="setFilter('${k}')">${lbl}</button>`).join('');
+
+  const list = activeFilter === 'all' ? parsedRows : parsedRows.filter(r => r.routing === activeFilter);
+  document.getElementById('tablecount').textContent = `${list.length} ligne(s) affichée(s)`;
+  const tbody = document.getElementById('tbody');
+  if (!list.length) { tbody.innerHTML = `<tr><td colspan="10" class="empty">Aucune carte dans cette catégorie.</td></tr>`; return; }
+
+  const badge = { single: ['single', 'Single CM'], lot: ['lot', 'Lot vrac'], other: ['other', 'Autre jeu'], exception: ['exc', 'Exception'] };
+  tbody.innerHTML = list.slice(0, 1500).map(r => {
+    const [bc, bl] = badge[r.routing];
+    const sufHtml = r.suffixes.map(s => `<span class="suf">${esc(s)}</span>`).join('');
+    const num = r.number ? `<span class="mono">${esc(r.number)}</span>` + (r.numKind === 'partial' ? ' <span class="dim mono">(tronqué)</span>' : '') : '<span class="dim">—</span>';
+    const prix = r.prix != null ? r.prix.toFixed(2) + ' €' : '<span class="dim">—</span>';
+    return `<tr>
+      <td class="mono serie">${esc(r.codeSerie || '—')}</td>
+      <td>${esc(r.raw)}</td>
+      <td class="mono dim">${r.game === 'pokemon' ? 'Pokémon' : 'autre'}</td>
+      <td class="dim">${esc(r.base || '—')}</td>
+      <td>${num}</td>
+      <td>${sufHtml || '<span class="dim">—</span>'}</td>
+      <td class="mono dim">${esc(r.etat || '—')}</td>
+      <td class="mono">${prix}</td>
+      <td>${r.bridgeKey ? `<span class="key">${esc(r.bridgeKey)}</span>` : '<span class="dim">—</span>'}</td>
+      <td><span class="badge ${bc}">${bl}</span></td>
+    </tr>`;
+  }).join('') + (list.length > 1500 ? `<tr><td colspan="10" class="empty">… ${list.length - 1500} lignes supplémentaires masquées (affichage limité).</td></tr>` : '');
+}
+function setFilter(k) { activeFilter = k; render(); }
+
+// ═══════════════════════════════════════════════════════════════ UTILS
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+function setStatus(t) { document.getElementById('status').textContent = t; }
+let toastTimer = null;
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = ''; }, 4000);
+}
+
+// ═══════════════════════════════════════════════════════════════ INIT
+document.getElementById('ver').textContent = 'v' + APP_VERSION;
+window.addEventListener('DOMContentLoaded', async () => {
+  await initGisClient();
+  updateAuthUI();
+});
+</script>
+</body>
+</html>
