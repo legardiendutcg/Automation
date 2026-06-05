@@ -8,17 +8,12 @@
   auth GIS, CENTRAL (Google Sheets) en source de vérité — comme Sales / Master.
 
   CHANGELOG
-  0.1.2  2026-06-04  Pagination : choix du nombre de cartes par écran (10 / 20 / 50)
-                     + navigation page précédente / suivante.
-  0.1.1  2026-06-04  Outil de SÉLECTION + filtres : bloc · série · nom · prix (min/max) ·
-                     état · rareté (Type_Carte) · lot d'origine (colonne Origine).
-                     Sélection par cases à cocher (+ tout sélectionner sur le filtre
-                     courant), compteur + valeur totale, vue « sélection seule »,
-                     export CSV de la sélection. Toujours lecture seule.
-  0.1.0  2026-06-04  Première brique. Auth GIS (modèle token) + lecture LIVE du stock
-                     depuis CENTRAL + parser FR validé (99,9 % de clés série+numéro) :
-                     segmentation de jeu, routage des lots, tableau de contrôle.
-                     Pas encore de matching CardMarket (→ v0.2.0).
+  0.1.3  2026-06-04  Filtres Série / Lot d'origine / Bloc / État / Rareté passés en
+                     MENUS DÉROULANTS MULTI-SÉLECTION (recherche intégrée + cases à
+                     cocher + « Tout / Aucun »). Nom et Prix restent texte / min-max.
+  0.1.2  2026-06-04  Pagination : nombre de cartes par écran (10 / 20 / 50) + nav.
+  0.1.1  2026-06-04  Outil de SÉLECTION + filtres + export CSV.
+  0.1.0  2026-06-04  Auth GIS + lecture LIVE du stock + parser FR validé (99,9 %).
 
   NOTE CSP : connect-src couvre Sheets + OAuth Google uniquement (lecture du stock).
   En v0.2.0 (pont Poképédia / catalogue), étendre connect-src à pokepedia + proxies CORS.
@@ -67,37 +62,50 @@ button.btn.ghost { background:transparent; color:var(--accent2); border:1px soli
 .stat.other .n { color:var(--accent2); }
 .stat.exc .n { color:var(--accent3); }
 
-/* routing tabs */
 .filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
 .filters button { font-family:'Space Mono',monospace; font-size:.68rem; background:var(--surface); color:var(--dim); border:1px solid var(--border); border-radius:20px; padding:7px 14px; cursor:pointer; transition:all .15s; }
 .filters button.active { background:var(--surface2); color:var(--text); border-color:var(--accent); }
 
-/* filter panel */
 .panel { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:18px; }
 .panel-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; }
 .fgroup label.t { display:block; font-family:'Space Mono',monospace; font-size:.6rem; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); margin-bottom:8px; }
-.fgroup input[type=text], .fgroup input[type=number], .fgroup select {
-  width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:7px;
-  color:var(--text); font-family:'Syne',sans-serif; font-size:.84rem; padding:8px 10px;
-}
-.fgroup input:focus, .fgroup select:focus { outline:none; border-color:var(--accent2); }
+.fgroup input[type=text], .fgroup input[type=number] { width:100%; background:var(--surface2); border:1px solid var(--border); border-radius:7px; color:var(--text); font-family:'Syne',sans-serif; font-size:.84rem; padding:8px 10px; }
+.fgroup input:focus { outline:none; border-color:var(--accent2); }
 .prix-row { display:flex; gap:8px; align-items:center; }
 .prix-row span { color:var(--muted); font-family:'Space Mono',monospace; font-size:.7rem; }
-.chips { display:flex; flex-wrap:wrap; gap:6px; max-height:108px; overflow:auto; }
-.chip { font-family:'Space Mono',monospace; font-size:.62rem; background:var(--surface2); color:var(--dim); border:1px solid var(--border); border-radius:16px; padding:5px 11px; cursor:pointer; transition:all .12s; }
-.chip.on { background:rgba(232,255,71,.12); color:var(--accent); border-color:var(--accent); }
+
+/* multi-select dropdown */
+.ms { position:relative; }
+.ms-btn { width:100%; text-align:left; background:var(--surface2); border:1px solid var(--border); border-radius:7px; color:var(--text); font-family:'Syne',sans-serif; font-size:.84rem; padding:8px 10px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.ms-btn:hover { border-color:var(--accent2); }
+.ms-btn.has { border-color:var(--accent); }
+.ms-btn .lbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ms-btn.has .lbl { color:var(--accent); }
+.ms-btn .caret { color:var(--muted); font-size:.7rem; flex-shrink:0; }
+.ms-menu { position:absolute; z-index:30; top:calc(100% + 4px); left:0; right:0; background:var(--surface2); border:1px solid var(--accent2); border-radius:8px; box-shadow:0 12px 32px rgba(0,0,0,.55); padding:8px; display:none; }
+.ms-menu.open { display:block; }
+.ms-search { width:100%; background:var(--surface); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:'Syne',sans-serif; font-size:.78rem; padding:6px 8px; margin-bottom:6px; }
+.ms-search:focus { outline:none; border-color:var(--accent2); }
+.ms-actions { display:flex; gap:14px; margin-bottom:6px; padding:0 2px; }
+.ms-actions a { font-family:'Space Mono',monospace; font-size:.6rem; color:var(--accent2); cursor:pointer; }
+.ms-actions a:hover { text-decoration:underline; }
+.ms-list { max-height:210px; overflow:auto; display:flex; flex-direction:column; gap:1px; }
+.ms-opt { display:flex; align-items:center; gap:8px; padding:5px 6px; border-radius:5px; cursor:pointer; font-size:.78rem; }
+.ms-opt:hover { background:var(--surface); }
+.ms-empty { color:var(--muted); font-family:'Space Mono',monospace; font-size:.66rem; padding:8px; }
+
 .panel-foot { display:flex; gap:14px; align-items:center; flex-wrap:wrap; margin-top:16px; padding-top:14px; border-top:1px solid var(--border); }
 .reset { font-family:'Space Mono',monospace; font-size:.66rem; color:var(--accent3); background:none; border:none; cursor:pointer; }
 .reset:hover { text-decoration:underline; }
 
-/* selection summary */
 .selbar { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin:8px 2px 14px; }
 .selbar .sum { font-family:'Space Mono',monospace; font-size:.72rem; color:var(--accent); }
 .selbar .sub { font-family:'Space Mono',monospace; font-size:.66rem; color:var(--muted); }
 .selbar a { color:var(--accent2); cursor:pointer; font-family:'Space Mono',monospace; font-size:.66rem; }
 .selbar label.so { display:inline-flex; align-items:center; gap:6px; font-family:'Space Mono',monospace; font-size:.66rem; color:var(--dim); cursor:pointer; }
+.pgsize { display:inline-flex; align-items:center; gap:6px; font-family:'Space Mono',monospace; font-size:.66rem; color:var(--dim); }
+.pgsize select { background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:'Space Mono',monospace; font-size:.66rem; padding:4px 6px; }
 
-/* table */
 .tablecount { font-family:'Space Mono',monospace; font-size:.62rem; color:var(--muted); margin:0 2px 10px; }
 .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:auto; max-height:72vh; }
 table { width:100%; border-collapse:collapse; font-size:.82rem; }
@@ -118,17 +126,14 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
 .badge.exc { background:rgba(255,107,107,.12); color:var(--accent3); }
 .empty { padding:48px 24px; text-align:center; color:var(--muted); font-family:'Space Mono',monospace; font-size:.8rem; }
 
-#toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(120px); background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:12px 20px; border-radius:10px; font-size:.82rem; transition:transform .3s; z-index:100; max-width:90vw; }
-#toast.show { transform:translateX(-50%) translateY(0); }
-/* pager */
 .pager { display:flex; gap:14px; align-items:center; justify-content:center; margin:14px 0 4px; }
 .pgbtn { font-family:'Space Mono',monospace; font-size:.68rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:7px 14px; cursor:pointer; transition:all .15s; }
 .pgbtn:hover:not(:disabled) { border-color:var(--accent); }
 .pgbtn:disabled { opacity:.35; cursor:not-allowed; }
 .pgind { font-family:'Space Mono',monospace; font-size:.68rem; color:var(--muted); }
-.pgsize { display:inline-flex; align-items:center; gap:6px; font-family:'Space Mono',monospace; font-size:.66rem; color:var(--dim); }
-.pgsize select { background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:'Space Mono',monospace; font-size:.66rem; padding:4px 6px; }
 
+#toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(120px); background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:12px 20px; border-radius:10px; font-size:.82rem; transition:transform .3s; z-index:100; max-width:90vw; }
+#toast.show { transform:translateX(-50%) translateY(0); }
 #toast.err { border-color:var(--accent3); }
 </style>
 </head>
@@ -141,7 +146,7 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
     </div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.1.2</div>
+      <div class="ver" id="ver">v0.1.3</div>
     </div>
   </header>
 
@@ -168,8 +173,8 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
           <input type="text" id="fNom" placeholder="ex. Dracaufeu, Pikachu…" oninput="setText('nom',this.value)">
         </div>
         <div class="fgroup">
-          <label class="t">Série (code ou nom)</label>
-          <input type="text" id="fSerie" placeholder="ex. EV4.0, Faille Paradoxe…" oninput="setText('serie',this.value)">
+          <label class="t">Série</label>
+          <div class="ms" id="ms-series"></div>
         </div>
         <div class="fgroup">
           <label class="t">Prix de vente (€)</label>
@@ -181,19 +186,19 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
         </div>
         <div class="fgroup">
           <label class="t">Lot d'origine</label>
-          <select id="fOrigine" onchange="setText('origine',this.value)"></select>
+          <div class="ms" id="ms-origines"></div>
         </div>
         <div class="fgroup">
-          <label class="t" id="lblBloc">Bloc</label>
-          <div class="chips" id="fBloc"></div>
+          <label class="t">Bloc</label>
+          <div class="ms" id="ms-blocs"></div>
         </div>
         <div class="fgroup">
-          <label class="t" id="lblEtat">État</label>
-          <div class="chips" id="fEtat"></div>
+          <label class="t">État</label>
+          <div class="ms" id="ms-etats"></div>
         </div>
         <div class="fgroup" style="grid-column:1 / -1;">
-          <label class="t" id="lblRarete">Rareté (Type_Carte)</label>
-          <div class="chips" id="fRarete"></div>
+          <label class="t">Rareté (Type_Carte)</label>
+          <div class="ms" id="ms-raretes"></div>
         </div>
       </div>
       <div class="panel-foot">
@@ -220,7 +225,7 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th style="width:34px;"><input type="checkbox" id="selAll" onchange="toggleSelectAll(this.checked)" title="Tout sélectionner (vue filtrée)"></th>
+          <th style="width:34px;"><input type="checkbox" id="selAll" onchange="toggleSelectAll(this.checked)" title="Tout sélectionner (vue filtrée, toutes pages)"></th>
           <th>Série</th><th>Nom (stock)</th><th>Rareté</th><th>Numéro</th>
           <th>État</th><th>Prix</th><th>Lot d'origine</th><th>Clé pont</th><th>Aiguillage</th>
         </tr></thead>
@@ -236,7 +241,7 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
 <script>
 'use strict';
 // ═══════════════════════════════════════════════════════════════ CONFIG
-const APP_VERSION       = '0.1.2';
+const APP_VERSION       = '0.1.3';
 const OAUTH_CLIENT_ID   = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES     = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -247,12 +252,24 @@ let gAccessToken=null, gTokenExpiry=0, gUserEmail='', gUserName='';
 let tokenClient=null, gisReady=false, refreshTimer=null, pendingInteractive=false;
 let cardHeaderRow=null;
 let parsedRows=[];
-let activeFilter='single';                 // onglet routage
-let selection=new Set();                    // _id sélectionnés
+let activeFilter='single';
+let selection=new Set();
 let selectedOnly=false;
 let pageSize=20, page=1;
-let filters={ nom:'', serie:'', origine:'', prixMin:null, prixMax:null,
-              blocs:new Set(), etats:new Set(), raretes:new Set() };
+let filters={ nom:'', prixMin:null, prixMax:null,
+              series:new Set(), origines:new Set(), blocs:new Set(), etats:new Set(), raretes:new Set() };
+
+// Multi-select : config + options + état de recherche + menu ouvert
+const MS_DEFS=[
+  {key:'series',   label:'Série'},
+  {key:'origines', label:"Lot d'origine"},
+  {key:'blocs',    label:'Bloc'},
+  {key:'etats',    label:'État'},
+  {key:'raretes',  label:'Rareté'},
+];
+let msOptions={ series:[], origines:[], blocs:[], etats:[], raretes:[] }; // [{value,label}]
+let msSearch ={ series:'', origines:'', blocs:'', etats:'', raretes:'' };
+let openMenu=null;
 
 function isAuth(){ return gAccessToken && Date.now() < gTokenExpiry; }
 
@@ -376,7 +393,6 @@ function parseCard(c,idx){
   return {...c, _id:idx, raw, game, isLot, base, bloc:blocOf(c.codeSerie),
           number:num.number, numKind:num.kind, suffixes, routing, bridgeKey};
 }
-
 function parsePrix(v){
   if(v==null) return null; if(typeof v==='number') return v;
   let s=String(v).replace(/[^\d.,-]/g,'').trim(); if(!s) return null;
@@ -403,14 +419,14 @@ async function loadStock(){
         codeSerie:(row[4]||'').toString().trim(),
         nomSerie:(row[5]||'').toString().trim(),
         name:(row[6]||'').toString().trim(),
-        type:(row[7]||'').toString().trim(),     // rareté
+        type:(row[7]||'').toString().trim(),
         etat:(row[8]||'').toString().trim(),
         prix:parsePrix(row[14]), pa:parsePrix(row[19]),
       });
     }
     parsedRows=cards.map(parseCard);
-    selection.clear(); selectedOnly=false; resetFilterState();
-    buildFilterOptions();
+    selection.clear(); selectedOnly=false; document.getElementById('selOnly').checked=false;
+    resetFilterState(); buildFilterOptions(); page=1;
     render();
     const g=parsedRows.filter(r=>r.game==='pokemon').length;
     setStatus(`Stock lu : ${parsedRows.length} cartes dispo (${g} Pokémon). En-tête ligne ${cardHeaderRow}.`);
@@ -419,53 +435,87 @@ async function loadStock(){
 }
 
 // ═══════════════════════════════════════════════════════════════ FILTRES
-function resetFilterState(){ filters={ nom:'',serie:'',origine:'',prixMin:null,prixMax:null,blocs:new Set(),etats:new Set(),raretes:new Set() }; }
+function resetFilterState(){ filters={ nom:'',prixMin:null,prixMax:null,series:new Set(),origines:new Set(),blocs:new Set(),etats:new Set(),raretes:new Set() }; msSearch={ series:'',origines:'',blocs:'',etats:'',raretes:'' }; }
 function distinct(getter){ const s=new Set(); for(const r of parsedRows){ const v=getter(r); if(v) s.add(v); } return [...s]; }
 
 function buildFilterOptions(){
-  // Lot d'origine (select)
-  const origines=distinct(r=>r.origine).sort();
-  const sel=document.getElementById('fOrigine');
-  sel.innerHTML=`<option value="">Tous les lots (${origines.length})</option>`+
-    origines.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('');
-  // Bloc (chips)
-  const blocs=distinct(r=>r.bloc).sort();
-  document.getElementById('lblBloc').textContent=`Bloc (${blocs.length})`;
-  document.getElementById('fBloc').innerHTML=blocs.map(b=>`<span class="chip" data-k="blocs" data-v="${esc(b)}" onclick="toggleChip(this)">${esc(b)}</span>`).join('');
-  // État (chips)
-  const etats=distinct(r=>r.etat).sort();
-  document.getElementById('lblEtat').textContent=`État (${etats.length})`;
-  document.getElementById('fEtat').innerHTML=etats.map(e=>`<span class="chip" data-k="etats" data-v="${esc(e)}" onclick="toggleChip(this)">${esc(e)}</span>`).join('');
-  // Rareté (chips)
-  const rar=distinct(r=>r.type).sort();
-  document.getElementById('lblRarete').textContent=`Rareté · Type_Carte (${rar.length})`;
-  document.getElementById('fRarete').innerHTML=rar.map(t=>`<span class="chip" data-k="raretes" data-v="${esc(t)}" onclick="toggleChip(this)">${esc(t)}</span>`).join('');
-  // reset inputs
-  document.getElementById('fNom').value=''; document.getElementById('fSerie').value='';
-  document.getElementById('fPrixMin').value=''; document.getElementById('fPrixMax').value='';
+  // Série : value = code, label = "code — nom" (un nom représentatif par code)
+  const nameByCode={}; for(const r of parsedRows){ if(r.codeSerie && !(r.codeSerie in nameByCode)) nameByCode[r.codeSerie]=r.nomSerie||''; }
+  msOptions.series=Object.keys(nameByCode).sort().map(c=>({value:c,label:nameByCode[c]?`${c} — ${nameByCode[c]}`:c}));
+  msOptions.origines=distinct(r=>r.origine).sort().map(v=>({value:v,label:v}));
+  msOptions.blocs=distinct(r=>r.bloc).sort().map(v=>({value:v,label:v}));
+  msOptions.etats=distinct(r=>r.etat).sort().map(v=>({value:v,label:v}));
+  msOptions.raretes=distinct(r=>r.type).sort().map(v=>({value:v,label:v}));
+  for(const d of MS_DEFS) buildMsSkeleton(d.key,d.label);
+  // reset inputs texte/prix
+  document.getElementById('fNom').value=''; document.getElementById('fPrixMin').value=''; document.getElementById('fPrixMax').value='';
 }
+function buildMsSkeleton(key,label){
+  const cont=document.getElementById('ms-'+key);
+  cont.innerHTML=`
+    <button class="ms-btn" id="msbtn-${key}" type="button" onclick="toggleMenu('${key}')">
+      <span class="lbl">Tous</span><span class="caret">▾</span>
+    </button>
+    <div class="ms-menu" id="msmenu-${key}">
+      <input class="ms-search" id="mssearch-${key}" placeholder="Filtrer (${msOptions[key].length})…" oninput="msSetSearch('${key}',this.value)">
+      <div class="ms-actions"><a onclick="msAll('${key}')">Tout (visible)</a><a onclick="msNone('${key}')">Aucun</a></div>
+      <div class="ms-list" id="mslist-${key}"></div>
+    </div>`;
+  renderMsButton(key);
+}
+function renderMsButton(key){
+  const n=filters[key].size; const btn=document.getElementById('msbtn-'+key);
+  if(!btn) return;
+  btn.querySelector('.lbl').textContent = n? (n+' sélectionné'+(n>1?'s':'')) : 'Tous';
+  btn.classList.toggle('has', n>0);
+}
+function renderMsList(key){
+  const list=document.getElementById('mslist-'+key); if(!list) return;
+  const term=norm(msSearch[key]);
+  const html=[];
+  msOptions[key].forEach((o,idx)=>{
+    if(term && !norm(o.label).includes(term)) return;
+    html.push(`<label class="ms-opt"><input type="checkbox" ${filters[key].has(o.value)?'checked':''} onchange="msToggleIdx('${key}',${idx})"> <span>${esc(o.label)}</span></label>`);
+  });
+  list.innerHTML = html.length? html.join('') : '<div class="ms-empty">Aucune option</div>';
+}
+function toggleMenu(key){
+  if(openMenu && openMenu!==key) closeMenu(openMenu);
+  const menu=document.getElementById('msmenu-'+key);
+  if(menu.classList.contains('open')){ menu.classList.remove('open'); openMenu=null; }
+  else { renderMsList(key); menu.classList.add('open'); openMenu=key; const s=document.getElementById('mssearch-'+key); if(s) s.focus(); }
+}
+function closeMenu(key){ const m=document.getElementById('msmenu-'+key); if(m) m.classList.remove('open'); if(openMenu===key) openMenu=null; }
+function msSetSearch(key,v){ msSearch[key]=v; renderMsList(key); }
+function msToggleIdx(key,idx){
+  const v=msOptions[key][idx].value;
+  if(filters[key].has(v)) filters[key].delete(v); else filters[key].add(v);
+  renderMsButton(key); page=1; render();
+}
+function msAll(key){
+  const term=norm(msSearch[key]);
+  for(const o of msOptions[key]){ if(!term || norm(o.label).includes(term)) filters[key].add(o.value); }
+  renderMsList(key); renderMsButton(key); page=1; render();
+}
+function msNone(key){ filters[key].clear(); renderMsList(key); renderMsButton(key); page=1; render(); }
+
 function setText(k,v){ filters[k]=v.trim(); page=1; render(); }
 function setPrix(k,v){ filters[k]=(v===''||isNaN(parseFloat(v)))?null:parseFloat(v); page=1; render(); }
-function toggleChip(el){
-  const k=el.getAttribute('data-k'), v=el.getAttribute('data-v');
-  if(filters[k].has(v)) filters[k].delete(v); else filters[k].add(v);
-  el.classList.toggle('on'); page=1; render();
-}
 function resetFilters(){
   resetFilterState(); selectedOnly=false; document.getElementById('selOnly').checked=false;
-  document.querySelectorAll('.chip.on').forEach(c=>c.classList.remove('on'));
-  document.getElementById('fNom').value=''; document.getElementById('fSerie').value='';
-  document.getElementById('fPrixMin').value=''; document.getElementById('fPrixMax').value='';
-  document.getElementById('fOrigine').value=''; page=1; render();
+  document.getElementById('fNom').value=''; document.getElementById('fPrixMin').value=''; document.getElementById('fPrixMax').value='';
+  for(const d of MS_DEFS){ const s=document.getElementById('mssearch-'+d.key); if(s) s.value=''; renderMsButton(d.key); renderMsList(d.key); }
+  if(openMenu) closeMenu(openMenu);
+  page=1; render();
 }
 function computeFiltered(){
   return parsedRows.filter(r=>{
     if(activeFilter!=='all' && r.routing!==activeFilter) return false;
+    if(filters.series.size && !filters.series.has(r.codeSerie)) return false;
+    if(filters.origines.size && !filters.origines.has(r.origine)) return false;
     if(filters.blocs.size && !filters.blocs.has(r.bloc)) return false;
     if(filters.etats.size && !filters.etats.has(r.etat)) return false;
     if(filters.raretes.size && !filters.raretes.has(r.type)) return false;
-    if(filters.origine && r.origine!==filters.origine) return false;
-    if(filters.serie){ const q=norm(filters.serie); if(!(norm(r.codeSerie).includes(q)||norm(r.nomSerie).includes(q))) return false; }
     if(filters.nom){ if(!norm(r.raw).includes(norm(filters.nom))) return false; }
     if(filters.prixMin!=null && (r.prix==null||r.prix<filters.prixMin)) return false;
     if(filters.prixMax!=null && (r.prix==null||r.prix>filters.prixMax)) return false;
@@ -492,7 +542,7 @@ function updateSelBar(filtered){
   document.getElementById('selSum').textContent=`${selection.size} sélectionnée(s)`;
   document.getElementById('selVal').textContent=selection.size?`· valeur totale ${sum.toFixed(2)} €`:'';
   const all=filtered.length>0 && filtered.every(r=>selection.has(r._id));
-  const sa=document.getElementById('selAll'); sa.checked=all;
+  document.getElementById('selAll').checked=all;
   document.getElementById('csvBtn').disabled=(selection.size===0 && filtered.length===0);
 }
 
@@ -534,10 +584,8 @@ function render(){
   updateSelBar(list);
 
   const pageCount=Math.max(1,Math.ceil(list.length/pageSize));
-  if(page>pageCount) page=pageCount;
-  if(page<1) page=1;
-  const start=(page-1)*pageSize;
-  const pageItems=list.slice(start,start+pageSize);
+  if(page>pageCount) page=pageCount; if(page<1) page=1;
+  const start=(page-1)*pageSize; const pageItems=list.slice(start,start+pageSize);
   renderPager(list.length,pageCount);
 
   const tbody=document.getElementById('tbody');
@@ -579,6 +627,9 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;'
 function setStatus(t){ document.getElementById('status').textContent=t; }
 let toastTimer=null;
 function showToast(msg,isErr){ const t=document.getElementById('toast'); t.textContent=msg; t.className='show'+(isErr?' err':''); if(toastTimer)clearTimeout(toastTimer); toastTimer=setTimeout(()=>{t.className='';},4000); }
+
+// fermeture des menus au clic extérieur
+document.addEventListener('click',(e)=>{ if(!openMenu) return; const cont=document.getElementById('ms-'+openMenu); if(cont && !cont.contains(e.target)) closeMenu(openMenu); });
 
 // ═══════════════════════════════════════════════════════════════ INIT
 document.getElementById('ver').textContent='v'+APP_VERSION;
