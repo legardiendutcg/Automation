@@ -4,6 +4,15 @@
   TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket)
   ────────────────────────────────────────────────────────────────────────────
   CHANGELOG
+  0.2.3  2026-06-06  Pont série→extension AUTOMATIQUE via table de correspondance
+                     (copie « slim » du MAPPING de tcg-intake : setCode → code_série +
+                     nom_série ; dédup future via module commun #24). Résolution par
+                     code_série ; levée d'ambiguïté par nom_série pour les sets éclatés
+                     (Foudre Noire→BLK, Flamme Blanche→WHT) + préférence du code canonique
+                     (non « x… » / sans « _ »). Corrections de table : LG→LC (Legendary
+                     Collection), UL=Déchaînement, UD=Indomptable, CL2 retiré. Le mapping
+                     manuel devient un récap auto avec surcharge ponctuelle ; bouton
+                     catalogue manuel masqué (secours si l'auto échoue). Lecture seule.
   0.2.2  2026-06-04  Matching par NUMÉRO (stratégie locale, sans réseau ni TCGdex).
                      Catalogue = export TCG PT (cardmarketId · collectorNumber ·
                      rarity · expansion · expansionCode) : sur-ensemble du fichier CM
@@ -154,20 +163,20 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
     <div class="logo"><h1>TCG <span>INTEGRATOR</span></h1><p>Publication multi-canal → CardMarket · by Cassius</p></div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.2.2</div>
+      <div class="ver" id="ver">v0.2.3</div>
     </div>
   </header>
 
   <p class="intro">
-    <b>1. Sélection</b> : filtre ton stock et coche les cartes à publier. <b>2. Matching CM</b> : mappe chaque série à son
-    extension CardMarket, puis l'app résout l'<b>idProduct</b> automatiquement par le <b>numéro</b> (toujours modifiable).
-    <span class="dim">Lecture seule.</span>
+    <b>1. Sélection</b> : filtre ton stock et coche les cartes à publier. <b>2. Matching CM</b> : l'app relie
+    automatiquement chaque série à son extension CardMarket (table interne), puis résout l'<b>idProduct</b> par le
+    <b>numéro</b>. Surcharge et idProduct toujours modifiables. <span class="dim">Lecture seule.</span>
   </p>
 
   <div class="toolbar">
     <button class="btn" id="loadBtn" onclick="loadStock()" disabled>Charger le stock</button>
     <input type="file" id="catFile" accept=".csv,text/csv" style="display:none" onchange="onCatFile(this.files)">
-    <button class="btn ghost" onclick="document.getElementById('catFile').click()">Charger le catalogue (.csv)</button>
+    <button class="btn ghost" id="catManualBtn" style="display:none" onclick="document.getElementById('catFile').click()">Charger le catalogue (.csv)</button>
     <span class="status" id="status">Connecte-toi à Google pour commencer.</span>
     <span class="status" id="catStatus" style="margin-left:auto;">Catalogue : —</span>
   </div>
@@ -229,12 +238,212 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 <script>
 'use strict';
 // ═══════════ CONFIG ═══════════
-const APP_VERSION='0.2.2';
+const APP_VERSION='0.2.3';
 const OAUTH_CLIENT_ID='774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES='https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID='1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_CARDS='cartes_stock_et_transactions';
 const CATALOGUE_URL='./cm-catalogue.csv';   // déposé à côté de l'app dans le repo (même origine → CSP OK)
+// Pont série → extension CardMarket (copie « slim » du MAPPING de tcg-intake.html,
+// source de vérité ; corrigée en 0.2.3 : LG→LC, UL=Déchaînement, UD=Indomptable, CL2 retiré.
+// Clé = setCode CM ; cs = code_série interne (GSheet col G) ; ns = nom_série FR (col H).
+// À terme : factoriser avec tcg-intake via le module commun tcg-common.js (backlog #24).
+const SERIE_BRIDGE={
+  "AOR":{cs:"XY7.0",ns:"Origines Antiques"},
+  "AQ":{cs:"WOTC10.0",ns:"Aquapolis"},
+  "AR":{cs:"PL4.0",ns:"Platinum Arceus"},
+  "ASC":{cs:"ME2.5",ns:"Héros Transcendants"},
+  "ASR":{cs:"EB10.0",ns:"Astres Radieux"},
+  "B2":{cs:"WOTC_B2",ns:"Base Set 2"},
+  "BCR":{cs:"NB7.0",ns:"Frontières Franchies"},
+  "BKP":{cs:"XY9.0",ns:"Rupture Turbo"},
+  "BKT":{cs:"XY8.0",ns:"Impulsion Turbo"},
+  "BLK":{cs:"EV10.5",ns:"Foudre Noire"},
+  "BLW":{cs:"NB1.0",ns:"Noir et Blanc"},
+  "BRS":{cs:"EB9.0",ns:"Stars Etincelantes"},
+  "BS":{cs:"WOTC1.0",ns:"Set de Base"},
+  "BST":{cs:"EB5.0",ns:"Styles de Combat"},
+  "BUS":{cs:"SL3.0",ns:"Ombres Ardentes"},
+  "BW":{cs:"Promos",ns:"Promos NB"},
+  "CEC":{cs:"SL12.0",ns:"Eclipse Cosmique"},
+  "CEL":{cs:"EB7.5",ns:"Celebrations"},
+  "CES":{cs:"SL7.0",ns:"Tempête Céleste"},
+  "CG":{cs:"EX13.0",ns:"Gardiens de Cristal"},
+  "CIN":{cs:"SL4.0",ns:"Invasion Carmin"},
+  "CL":{cs:"HGSS5.0",ns:"Appel des Légendes"},
+  "CLF":{cs:"CLF",ns:"Pokémon Card Game Classic: Charizard & Ho-Oh ex Deck"},
+  "CLK":{cs:"CLK",ns:"Pokémon Card Game Classic: Blastoise & Suicune ex Deck"},
+  "CLL":{cs:"CLL",ns:"Pokémon Card Game Classic: Venusaur & Lugia ex Deck"},
+  "CPA":{cs:"EB3.5",ns:"La Voie du Maître"},
+  "CRE":{cs:"EB6.0",ns:"Règne de Glace"},
+  "CRI":{cs:"ME4.0",ns:"Chaos Ascendant"},
+  "CRZ":{cs:"EB12.5",ns:"Zénith Suprême"},
+  "DAA":{cs:"EB3.0",ns:"Ténèbres Embrasées"},
+  "DCR":{cs:"DC1.0",ns:"Double Danger"},
+  "DEX":{cs:"NB5.0",ns:"Explorateurs Obscurs"},
+  "DF":{cs:"EX14.0",ns:"Îles des Dragons"},
+  "DP":{cs:"DP1.0",ns:"Diamant et Perle"},
+  "DPPR":{cs:"Promos",ns:"Promos DP"},
+  "DR":{cs:"EX3.0",ns:"Dragon"},
+  "DRI":{cs:"EV10.0",ns:"Rivalités Destinées"},
+  "DRM":{cs:"SL7.5",ns:"Majesté des Dragons"},
+  "DRV":{cs:"NB5.5",ns:"Coffre des Dragons"},
+  "DRX":{cs:"NB6.0",ns:"Dragons Exaltés"},
+  "DS":{cs:"EX10.0",ns:"Espèces Delta"},
+  "DX":{cs:"EX6.0",ns:"Deoxys"},
+  "EM":{cs:"EX7.0",ns:"Emeraude"},
+  "EPO":{cs:"NB2.0",ns:"Pouvoirs Émergents"},
+  "EVO":{cs:"XY12.0",ns:"Evolutions"},
+  "EVS":{cs:"EB7.0",ns:"Evolution Céleste"},
+  "EX":{cs:"WOTC9.0",ns:"Expedition"},
+  "FCO":{cs:"XY10.0",ns:"Impact des Destins"},
+  "FFI":{cs:"XY3.0",ns:"Poings Furieux"},
+  "FL":{cs:"EX4.0",ns:"Rouge Feu Vert Feuille"},
+  "FLF":{cs:"XY2.0",ns:"Etincelles"},
+  "FLI":{cs:"SL6.0",ns:"Lumière Interdite"},
+  "FO":{cs:"WOTC3.0",ns:"Fossil"},
+  "FST":{cs:"EB8.0",ns:"Poing de Fusion"},
+  "GC":{cs:"WOTC_GC",ns:"Gym Challenge"},
+  "GE":{cs:"DP4.0",ns:"Duels au sommet"},
+  "GEN":{cs:"XY10.5",ns:"Generations"},
+  "GH":{cs:"WOTC_GH",ns:"Gym Heroes"},
+  "GRI":{cs:"SL2.0",ns:"Gardiens Ascendants"},
+  "HGSS":{cs:"Promos",ns:"Promos HGSS"},
+  "HIF":{cs:"SL11.5",ns:"Destinées Occultes"},
+  "HL":{cs:"EX8.0",ns:"Légendes Oubliées"},
+  "HP":{cs:"EX12.0",ns:"Fantômes Holon"},
+  "HS":{cs:"HGSS1.0",ns:"Heart Gold Soul Silver"},
+  "JTG":{cs:"EV9.0",ns:"Aventures Ensemble"},
+  "JU":{cs:"WOTC2.0",ns:"Jungle"},
+  "KSS":{cs:"XY0.0",ns:"Bienvenue à Kalos"},
+  "LA":{cs:"DP6.0",ns:"Eveil des Légendes"},
+  "LC":{cs:"WOTC_LC",ns:"Legendary Collection"},
+  "LM":{cs:"EX11.0",ns:"Créateurs de Légendes"},
+  "LOR":{cs:"EB11.0",ns:"Origine Perdue"},
+  "LOT":{cs:"SL8.0",ns:"Tonnerre Perdu"},
+  "LTR":{cs:"NB11.0",ns:"Trésors Légendaires"},
+  "M23":{cs:"MCD23",ns:"McDo 2023"},
+  "M24":{cs:"MCD24",ns:"McDo 2024"},
+  "MA":{cs:"EX5.0",ns:"Team Aqua Team Magma"},
+  "MCD11":{cs:"MCD11",ns:"McDo 2011"},
+  "MCD13":{cs:"MCD13",ns:"McDo 2013"},
+  "MCD14":{cs:"MCD14",ns:"McDo 2014"},
+  "MCD15":{cs:"MCD15",ns:"McDo 2015"},
+  "MCD16":{cs:"MCD16",ns:"McDo 2016"},
+  "MCD17":{cs:"MCD17",ns:"McDo 2017"},
+  "MCD18":{cs:"MCD18",ns:"McDo 2018"},
+  "MCD18F":{cs:"MCD18",ns:"McDo 2018"},
+  "MCD19F":{cs:"MCD19",ns:"McDo 2019"},
+  "MCD22":{cs:"MCD22",ns:"McDo 2022"},
+  "MCD25":{cs:"MCD25",ns:"McDo 2025"},
+  "MD":{cs:"DP5.0",ns:"Aube Majestueuse"},
+  "MEG":{cs:"ME1.0",ns:"Méga Evolution"},
+  "MEP":{cs:"Promos",ns:"Promos ME"},
+  "MEW":{cs:"EV3.5",ns:"151"},
+  "MT":{cs:"DP2.0",ns:"Trésors Mystérieux"},
+  "N2":{cs:"WOTC_N2",ns:"Neo Discovery"},
+  "NDE":{cs:"WOTC8.0",ns:"Neo Destiny"},
+  "NG":{cs:"WOTC5.0",ns:"Neo Genesis"},
+  "NR":{cs:"WOTC6.0",ns:"Neo Revelation"},
+  "NVI":{cs:"NB3.0",ns:"Nobles Victoires"},
+  "NXD":{cs:"NB4.0",ns:"Destinées Futures"},
+  "OBF":{cs:"EV3.0",ns:"Flammes Obsidiennes"},
+  "PAF":{cs:"EV4.5",ns:"Destinées de Paldéa"},
+  "PAL":{cs:"EV2.0",ns:"Evolutions à Paldéa"},
+  "PAR":{cs:"EV4.0",ns:"Faille Paradoxe"},
+  "PBL":{cs:"ME5.0",ns:"Nuit Noire"},
+  "PFL":{cs:"ME2.0",ns:"Flammes Phantasmagoriques"},
+  "PGO":{cs:"EB10.5",ns:"Pokemon Go"},
+  "PHF":{cs:"XY4.0",ns:"Vigueur Spectrale"},
+  "PK":{cs:"EX15.0",ns:"Gardiens du Pouvoir"},
+  "PL":{cs:"PL1.0",ns:"Platine"},
+  "PLB":{cs:"NB10.0",ns:"Explosion Plasma"},
+  "PLF":{cs:"NB9.0",ns:"Glaciation Plasma"},
+  "PLF_nb":{cs:"NB9.0",ns:"Glaciation Plasma"},
+  "PLS":{cs:"NB8.0",ns:"Tempête Plasma"},
+  "POP2":{cs:"POP2",ns:"POP Série 2"},
+  "POP3":{cs:"POP3",ns:"POP Série 3"},
+  "POP4":{cs:"POP4",ns:"POP Série 4"},
+  "POP5":{cs:"POP5",ns:"POP Series 5"},
+  "POP6":{cs:"POP6",ns:"POP Series 6"},
+  "POP7":{cs:"POP7",ns:"POP Série 7"},
+  "POP8":{cs:"POP8",ns:"POP Series 8"},
+  "POP9":{cs:"POP9",ns:"POP Série 9"},
+  "POR":{cs:"ME3.0",ns:"Équilibre Parfait"},
+  "PPS1":{cs:"PPS1",ns:"Play! Pokémon Prize Pack Series 1"},
+  "PRC":{cs:"XY5.0",ns:"Primo-Choc"},
+  "PRE":{cs:"EV8.5",ns:"Evolutions Prismatiques"},
+  "PWC":{cs:"Promos",ns:"Promos WOTC"},
+  "RCL":{cs:"EB2.0",ns:"Clash des Rebelles"},
+  "ROS":{cs:"XY6.0",ns:"Ciel Rugissant"},
+  "RR":{cs:"PL2.0",ns:"Rivaux Emergents"},
+  "RS":{cs:"EX1.0",ns:"Rubis et Saphir"},
+  "SCR":{cs:"EV7.0",ns:"Couronne Stellaire"},
+  "SF":{cs:"DP7.0",ns:"Tempête"},
+  "SFA":{cs:"EV6.5",ns:"Fable Nébuleuse"},
+  "SHF":{cs:"EB4.5",ns:"Destinées Radieuses"},
+  "SIT":{cs:"EB12.0",ns:"Tempête Argentée"},
+  "SK":{cs:"WOTC11.0",ns:"Skyridge"},
+  "SLG":{cs:"SL3.5",ns:"Légendes Brillantes"},
+  "SM":{cs:"Promos",ns:"Promos SL"},
+  "SS":{cs:"EX2.0",ns:"Tempête de Sable"},
+  "SSH":{cs:"EB1.0",ns:"Epée et Bouclier"},
+  "SSP":{cs:"EV8.0",ns:"Etincelles Déferlantes"},
+  "STF":{cs:"DP7.0",ns:"Tempête"},
+  "STS":{cs:"XY11.0",ns:"Offensive Vapeur"},
+  "SUM":{cs:"SL1.0",ns:"Soleil et Lune"},
+  "SV":{cs:"PL3.0",ns:"Vainqueurs Suprêmes"},
+  "SVI":{cs:"EV1.0",ns:"Ecarlate et Violet"},
+  "SVP":{cs:"Promos",ns:"Promos EV"},
+  "SVP JPN":{cs:"Promos JPN",ns:"Promos SV"},
+  "SW":{cs:"DP3.0",ns:"Merveilles Secrètes"},
+  "SWSH":{cs:"Promos",ns:"Promos EB"},
+  "TEF":{cs:"EV5.0",ns:"Forces Temporelles"},
+  "TEU":{cs:"SL9.0",ns:"Duo de Choc"},
+  "TK11":{cs:"tk11",ns:"Lost Abyss"},
+  "TM":{cs:"HGSS4.0",ns:"Triomphe"},
+  "TR":{cs:"WOTC4.0",ns:"Team Rocket"},
+  "TWM":{cs:"EV6.0",ns:"Mascarade Crépusculaire"},
+  "UD":{cs:"HGSS3.0",ns:"Indomptable"},
+  "UF":{cs:"EX9.0",ns:"Forces Cachées"},
+  "UL":{cs:"HGSS2.0",ns:"Déchaînement"},
+  "UNB":{cs:"SL10.0",ns:"Alliance Infaillible"},
+  "UNM":{cs:"SL11.0",ns:"Harmonie des Esprits"},
+  "UNP":{cs:"Promos",ns:"Promos"},
+  "UPR":{cs:"SL5.0",ns:"Ultra Prisme"},
+  "VIV":{cs:"EB4.0",ns:"Voltage Eclatant"},
+  "WHT":{cs:"EV10.5",ns:"Flamme Blanche"},
+  "WP":{cs:"Promos",ns:"Promos WOTC"},
+  "XY":{cs:"XY1.0",ns:"XY"},
+  "XY8b":{cs:"XY8b",ns:"Explosive Warrior"},
+  "XYPR":{cs:"Promos",ns:"Promos XY"},
+  "m1S":{cs:"m1S",ns:"Mega Symphonia"},
+  "m2a":{cs:"m2a",ns:"Mega Dream"},
+  "s12a":{cs:"s12a",ns:"VSTAR Universe"},
+  "s6K":{cs:"s6K",ns:"Jet Black Spirit"},
+  "s6a":{cs:"s6a",ns:"Eevee Heroes"},
+  "sm10":{cs:"sm10",ns:"Double Blaze"},
+  "sv11W":{cs:"sv11W",ns:"White Flare JP"},
+  "sv11b":{cs:"sv11b",ns:"Black Bolt"},
+  "sv1a":{cs:"sv1a",ns:"Triple Beat"},
+  "sv3":{cs:"sv3",ns:"Ruler of the Black Flame"},
+  "sv4K":{cs:"sv4k",ns:"Ancient Roar"},
+  "sv4a":{cs:"sv4a",ns:"Shint Treasure ex"},
+  "sv5M":{cs:"sv5M",ns:"Cyber Judge"},
+  "sv5a":{cs:"sv5a",ns:"Crimson Haze"},
+  "sv6":{cs:"sv6",ns:"Mask of Change"},
+  "sv6a":{cs:"sv6a",ns:"Night Wanderer"},
+  "sv7":{cs:"sv7",ns:"Stellar Miracle"},
+  "sv8a":{cs:"sv8a",ns:"Terastal Festival ex"},
+  "sv9":{cs:"sv9",ns:"Battle Partners"},
+  "sv9a":{cs:"sv9a",ns:"Heat Wave Arena"},
+  "xBLK":{cs:"EV10.5",ns:"Foudre Noire"},
+  "xJTG":{cs:"JTG",ns:"Aventures Ensemble"},
+  "xMEG":{cs:"ME1.0",ns:"Méga Evolutions"},
+  "xPRE":{cs:"EV8.5",ns:"Evolutions Prismatiques"},
+  "xWHT":{cs:"EV10.5",ns:"Flamme Blanche"},
+  "xsv8a":{cs:"sv8a",ns:"Terastal Festival ex"}
+};
 
 // ═══════════ STATE ═══════════
 let gAccessToken=null, gTokenExpiry=0, gUserEmail='', gUserName='';
@@ -251,7 +460,8 @@ let catLoaded=false;
 let catByCode=new Map();        // code -> [rec] (non-JP)
 let catByCodeNum=new Map();     // code -> Map(numNorm -> [rec])
 let catExpansions=[];           // [{code,name}] distinct (non-JP)
-let serieToCode=new Map();      // série interne -> expansionCode
+let serieToCodes=new Map();     // code_série interne -> [{code, ns}] présents au catalogue
+let bridgeOverride=new Map();    // "codeSerie|nomSerie" -> expansionCode (surcharge manuelle)
 let assign=new Map();           // cardId -> idProduct
 let assignMode=new Map();       // cardId -> 'auto' | 'manual'
 let openMatch=null, matchSearch=new Map();
@@ -316,7 +526,7 @@ async function loadStock(){
       cards.push({ key, origine:(row[3]||'').toString().trim(), codeSerie:(row[4]||'').toString().trim(), nomSerie:(row[5]||'').toString().trim(), name:(row[6]||'').toString().trim(), type:(row[7]||'').toString().trim(), etat:(row[8]||'').toString().trim(), prix:parsePrix(row[14]), pa:parsePrix(row[19]) }); }
     parsedRows=cards.map(parseCard);
     selection.clear(); selectedOnly=false; document.getElementById('selOnly').checked=false;
-    assign.clear(); assignMode.clear(); serieToCode.clear();
+    assign.clear(); assignMode.clear(); bridgeOverride.clear();
     resetFilterState(); buildFilterOptions(); page=1; setView('select'); render();
     const g=parsedRows.filter(r=>r.game==='pokemon').length;
     setStatus(`Stock lu : ${parsedRows.length} cartes dispo (${g} Pokémon). En-tête ligne ${cardHeaderRow}.`);
@@ -334,13 +544,13 @@ function parseCSV(text){
   return rows;
 }
 function onCatFile(files){ const f=files&&files[0]; if(!f) return; document.getElementById('catStatus').textContent='Catalogue : lecture…'; const r=new FileReader(); r.onload=()=>{ try{ ingestCatalogueCSV(r.result); }catch(e){ catErr(e); } }; r.onerror=()=>catErr(new Error('lecture impossible')); r.readAsText(f); }
-function catErr(e){ document.getElementById('catStatus').textContent='Catalogue : ✗ '+(e.message||e); showToast('✗ Catalogue : '+(e.message||e),true); }
+function catErr(e){ document.getElementById('catStatus').textContent='Catalogue : ✗ '+(e.message||e); const b=document.getElementById('catManualBtn'); if(b) b.style.display=''; showToast('✗ Catalogue : '+(e.message||e),true); }
 async function autoLoadCatalogue(){
   try{
     document.getElementById('catStatus').textContent='Catalogue : chargement auto…';
     const res=await fetch(CATALOGUE_URL,{cache:'no-cache'}); if(!res.ok) throw new Error('HTTP '+res.status);
     ingestCatalogueCSV(await res.text());
-  }catch(e){ document.getElementById('catStatus').textContent='Catalogue : auto indisponible — charge le .csv manuellement'; }
+  }catch(e){ document.getElementById('catStatus').textContent='Catalogue : auto indisponible — charge le .csv manuellement'; const b=document.getElementById('catManualBtn'); if(b) b.style.display=''; }
 }
 function ingestCatalogueCSV(text){
   document.getElementById('catStatus').textContent='Catalogue : indexation…';
@@ -362,6 +572,7 @@ function ingestCatalogueCSV(text){
     }
     catExpansions=[...expSet.entries()].map(([code,name])=>({code,name})).sort((a,b)=>a.name.localeCompare(b.name));
     catLoaded=true;
+    buildSerieBridge();
     document.getElementById('expDatalist').innerHTML=catExpansions.map(e=>`<option value="${esc(e.code+' — '+e.name)}">`).join('');
     document.getElementById('catStatus').textContent=`Catalogue : ${tot.toLocaleString('fr-FR')} cartes · ${catByCode.size} extensions (JP exclu : ${jp})`;
     showToast(`✓ Catalogue indexé (${Date.now()-t0} ms)`);
@@ -413,32 +624,66 @@ function matchRowsList(){ return parsedRows.filter(r=> selection.has(r._id)&&r.r
 function setView(v){ view=v; document.getElementById('selectView').style.display=v==='select'?'block':'none'; document.getElementById('matchView').style.display=v==='match'?'block':'none'; document.getElementById('vt-select').classList.toggle('active',v==='select'); document.getElementById('vt-match').classList.toggle('active',v==='match'); if(v==='match') renderMatch(); else render(); }
 function expName(code){ const e=catExpansions.find(x=>x.code===code); return e?e.name:''; }
 function numHits(code,nn){ const m=catByCodeNum.get(code); return (m&&m.get(nn))||[]; }
-function cardStatus(r){ if(assign.has(r._id)) return 'done'; const code=serieToCode.get(r.codeSerie); if(!code) return 'unmapped'; if(!r.numNorm) return 'none'; const h=numHits(code,r.numNorm); if(h.length===0) return 'none'; if(h.length===1) return 'auto1'; return 'collision'; }
-function runAutoMatch(toast){ if(!catLoaded){ showToast('Charge le catalogue d\'abord',true); return; } let n=0; for(const r of matchRowsList()){ if(assign.has(r._id)) continue; const code=serieToCode.get(r.codeSerie); if(!code||!r.numNorm) continue; const h=numHits(code,r.numNorm); if(h.length===1){ assign.set(r._id,h[0].id); assignMode.set(r._id,'auto'); n++; } } renderMatch(); if(toast) showToast(n?`✓ ${n} carte(s) auto-matchée(s)`:'Aucun nouvel auto-match (mappe les extensions ?)'); }
-function setSerieCodeFromInput(serie,val){ const m=String(val||'').split(' — ')[0].trim(); if(m && catByCode.has(m)){ serieToCode.set(serie,m); } else if(!val.trim()){ serieToCode.delete(serie); } runAutoMatch(false); }
+
+// ----- Pont série → extension (auto, via SERIE_BRIDGE) -----
+function buildSerieBridge(){
+  serieToCodes=new Map();
+  for(const code in SERIE_BRIDGE){ const info=SERIE_BRIDGE[code];
+    if(!catByCode.has(code)) continue;            // ne garder que les extensions réellement présentes au catalogue
+    let arr=serieToCodes.get(info.cs); if(!arr){ arr=[]; serieToCodes.set(info.cs,arr); }
+    arr.push({code, ns:info.ns}); }
+}
+function canonCode(c){ return !/^x/.test(c) && !/_/.test(c); }   // code « de base » vs additionals / variantes
+function resolveSetCodes(card){
+  const arr=serieToCodes.get(card.codeSerie); if(!arr||!arr.length) return [];
+  if(arr.length===1) return [arr[0].code];
+  const n=normCat(card.nomSerie||'');
+  let pool = n ? arr.filter(e=>normCat(e.ns)===n) : [];        // 1) lever l'ambiguïté par nom_série (Foudre Noire→BLK…)
+  if(!pool.length) pool=arr;
+  const canon=pool.filter(e=>canonCode(e.code));               // 2) préférer le code canonique (non « x… »)
+  if(canon.length) pool=canon;
+  return [...new Set(pool.map(e=>e.code))];
+}
+function bridgeKeyOf(r){ return (r.codeSerie||'')+'|'+(r.nomSerie||''); }
+function effectiveCodes(r){ const o=bridgeOverride.get(bridgeKeyOf(r)); if(o) return [o]; return resolveSetCodes(r); }
+function numHitsCards(codes,nn){ const seen=new Set(),out=[]; for(const c of codes){ for(const rec of numHits(c,nn)){ if(!seen.has(rec.id)){ seen.add(rec.id); out.push(rec); } } } return out; }
+function setBridgeOverride(key,val){ const m=String(val||'').split(' — ')[0].trim(); if(m && catByCode.has(m)){ bridgeOverride.set(key,m); } else if(!String(val).trim()){ bridgeOverride.delete(key); } runAutoMatch(false); }
+
+function cardStatus(r){ if(assign.has(r._id)) return 'done'; const codes=effectiveCodes(r); if(!codes.length) return 'unmapped'; if(!r.numNorm) return 'none'; const h=numHitsCards(codes,r.numNorm); if(h.length===0) return 'none'; if(h.length===1) return 'auto1'; return 'collision'; }
+function runAutoMatch(toast){ if(!catLoaded){ showToast('Charge le catalogue d\'abord',true); return; } let n=0; for(const r of matchRowsList()){ if(assign.has(r._id)) continue; const codes=effectiveCodes(r); if(!codes.length||!r.numNorm) continue; const h=numHitsCards(codes,r.numNorm); if(h.length===1){ assign.set(r._id,h[0].id); assignMode.set(r._id,'auto'); n++; } } renderMatch(); if(toast) showToast(n?`✓ ${n} carte(s) auto-matchée(s)`:'Aucun nouvel auto-match'); }
+
 function renderMatch(){
   const body=document.getElementById('matchBody'), info=document.getElementById('matchInfo'), bar=document.getElementById('matchBar');
   const exp=document.getElementById('exportAssignBtn'), auto=document.getElementById('autoBtn'), mapB=document.getElementById('mapBlock');
-  if(!catLoaded){ info.textContent='Charge le catalogue CM (.csv) — auto depuis le repo, ou via le bouton.'; bar.style.width='0'; exp.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Catalogue non chargé.</td></tr>'; return; }
+  if(!catLoaded){ info.textContent='Catalogue CM non chargé (auto depuis le repo).'; bar.style.width='0'; exp.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Catalogue non chargé.</td></tr>'; return; }
   const rows=matchRowsList();
   if(!rows.length){ info.textContent='Sélectionne d\'abord des cartes (onglet Sélection).'; bar.style.width='0'; exp.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Aucune carte sélectionnée.</td></tr>'; return; }
   auto.disabled=false;
-  // bloc mapping série -> extension
-  const series=[...new Set(rows.map(r=>r.codeSerie))].sort();
-  mapB.innerHTML='<h3>Mapping série → extension CardMarket</h3>'+series.map(s=>{
-    const cnt=rows.filter(r=>r.codeSerie===s).length; const nomS=(parsedRows.find(r=>r.codeSerie===s)||{}).nomSerie||'';
-    const code=serieToCode.get(s); const val=code?`${code} — ${expName(code)}`:'';
-    return `<div class="maprow"><span class="ms">${esc(s)}</span><span class="cnt">${cnt} carte(s)</span><input list="expDatalist" class="${code?'ok':''}" placeholder="${esc(nomS)} → tape le nom de l'extension CM…" value="${esc(val)}" onchange="setSerieCodeFromInput('${esc(s)}',this.value)"></div>`;
+  // récap AUTO du pont série → extension, groupé par (code_série · nom_série) ; surcharge ponctuelle possible
+  const groups=new Map();
+  for(const r of rows){ const k=bridgeKeyOf(r); let g=groups.get(k); if(!g){ g={cs:r.codeSerie,ns:r.nomSerie,n:0,sample:r}; groups.set(k,g); } g.n++; }
+  const gArr=[...groups.values()].sort((a,b)=> (a.cs||'').localeCompare(b.cs||'') || (a.ns||'').localeCompare(b.ns||''));
+  let okN=0,toFixN=0;
+  const mapRows=gArr.map(g=>{
+    const ovKey=g.cs+'|'+g.ns, ov=bridgeOverride.get(ovKey); const codes=ov?[ov]:resolveSetCodes(g.sample);
+    const resolved=codes.length===1; if(resolved) okN++; else toFixN++;
+    const codeTxt = resolved ? `${esc(codes[0])} — ${esc(expName(codes[0]))}` : (codes.length>1?`<span class="dim">ambigu : ${codes.map(esc).join(' / ')}</span>`:'<span class="dim">non relié (promo / hors catalogue)</span>');
+    const val = (resolved&&!ov)?'' : (ov?`${ov} — ${expName(ov)}`:'');
+    return `<div class="maprow"><span class="ms">${esc(g.cs||'?')}${g.ns?' · '+esc(g.ns):''}</span><span class="cnt">${g.n} carte(s)</span>`
+      + `<span class="mono dim" style="min-width:160px">${resolved&&!ov?'✓ auto · ':''}${ov?'✎ surcharge · ':''}${codeTxt}</span>`
+      + `<input list="expDatalist" class="${resolved?'ok':''}" placeholder="surcharger l'extension CM…" value="${esc(val)}" onchange="setBridgeOverride('${esc(ovKey)}',this.value)"></div>`;
   }).join('');
+  mapB.innerHTML=`<h3>Pont série → extension CardMarket <span class="dim" style="font-weight:400">— auto ; surcharge si besoin (${okN} résolue(s)${toFixN?`, ${toFixN} à vérifier`:''})</span></h3>`+mapRows;
   const done=rows.filter(r=>assign.has(r._id)).length;
   info.textContent=`${done} / ${rows.length} assignées`; bar.style.width=(rows.length?Math.round(100*done/rows.length):0)+'%'; exp.disabled=(done===0);
-  const stLabel={done:['done','✓ assigné'],collision:['collision','⚠ collision'],none:['none','non trouvé'],unmapped:['unmapped','série à mapper'],auto1:['done','✓ unique']};
+  const stLabel={done:['done','✓ assigné'],collision:['collision','⚠ collision'],none:['none','non trouvé'],unmapped:['unmapped','à relier'],auto1:['done','✓ unique']};
   const h=[];
   for(const r of rows){
-    const st=cardStatus(r); const [sc,sl]=stLabel[st]||['none','?']; const code=serieToCode.get(r.codeSerie); const idp=assign.get(r._id)||''; const open=openMatch===r._id;
+    const st=cardStatus(r); const [sc,sl]=stLabel[st]||['none','?']; const codes=effectiveCodes(r); const idp=assign.get(r._id)||''; const open=openMatch===r._id;
+    const codeCell = codes.length? (esc(codes.join(' / '))+(codes.length===1?' — '+esc(expName(codes[0])):'')) : '<span class="dim">à relier</span>';
     h.push(`<tr class="${idp?'done':''}" data-mid="${r._id}">
       <td class="key">${esc(r.bridgeKey||'—')}</td><td>${esc(r.raw)}</td>
-      <td class="mono dim">${code?esc(code+' — '+expName(code)):'<span class="dim">à mapper</span>'}</td>
+      <td class="mono dim">${codeCell}</td>
       <td><input class="idp" value="${esc(idp)}" placeholder="idProduct" onchange="assignManual(${r._id},this.value)"></td>
       <td><span class="st ${sc}">${sl}</span></td>
       <td><button class="pgbtn" onclick="toggleMatchSearch(${r._id})">${open?'Fermer':(st==='collision'?'⚖ choisir':'🔍')}</button></td>
@@ -455,20 +700,20 @@ function matchSearchInput(id,v){ matchSearch.set(id,v); renderCandidates(id); }
 function candRow(id,rec){ return `<div class="cand"><span class="cn">${esc(rec.name)}</span><span class="cnum">n°${esc(rec.num||'?')}</span><span class="crar">${esc(rec.rarity||'')}</span><span class="ce">${esc(rec.code)} — ${esc(rec.exp||expName(rec.code))}</span><span class="cid">id ${esc(rec.id)}</span><button onclick="assignFromCandidate(${id},'${esc(rec.id)}','${esc(rec.code)}')">Assigner</button></div>`; }
 function renderCandidates(id){
   const box=document.getElementById('cand-'+id); if(!box) return; const card=parsedRows.find(r=>r._id===id); if(!card) return;
-  const code=serieToCode.get(card.codeSerie); const term=normCat(matchSearch.get(id)||'');
-  // 1) candidats par numéro (si extension mappée + numéro) — typiquement les variantes en collision
-  let byNum=[]; if(code&&card.numNorm) byNum=numHits(code,card.numNorm);
-  // 2) recherche par nom (dans l'extension mappée si dispo, sinon global)
-  let byName=[]; if(term.length>=2){ const pool = code?(catByCode.get(code)||[]):[].concat(...catByCode.values()); for(const rec of pool){ if(rec.ns.includes(term)){ byName.push(rec); if(byName.length>=60) break; } } }
+  const codes=effectiveCodes(card); const term=normCat(matchSearch.get(id)||'');
+  // 1) candidats par numéro (extensions reliées + numéro) — typiquement les variantes en collision
+  let byNum=[]; if(codes.length&&card.numNorm) byNum=numHitsCards(codes,card.numNorm);
+  // 2) recherche par nom (dans les extensions reliées si dispo, sinon global)
+  let byName=[]; if(term.length>=2){ const pool = codes.length? [].concat(...codes.map(c=>catByCode.get(c)||[])) : [].concat(...catByCode.values()); for(const rec of pool){ if(rec.ns.includes(term)){ byName.push(rec); if(byName.length>=60) break; } } }
   let html='';
-  if(byNum.length){ html+=`<div class="ms-empty">Par numéro (${esc(card.numNorm)}) dans ${esc(code)} : ${byNum.length} candidat(s)</div>`+byNum.map(rec=>candRow(id,rec)).join(''); }
-  if(term.length>=2){ html+=`<div class="ms-empty">Par nom « ${esc(matchSearch.get(id)||'')} »${code?' dans '+esc(code):' (global)'} : ${byName.length}</div>`+(byName.length?byName.map(rec=>candRow(id,rec)).join(''):'<div class="ms-empty">aucun</div>'); }
-  if(!html) html='<div class="ms-empty">'+(code?'Aucun candidat par numéro — tape un nom anglais pour chercher.':'Mappe d\'abord l\'extension ci-dessus, ou tape un nom anglais (recherche globale).')+'</div>';
+  if(byNum.length){ html+=`<div class="ms-empty">Par numéro (${esc(card.numNorm)}) dans ${esc(codes.join(' / '))} : ${byNum.length} candidat(s)</div>`+byNum.map(rec=>candRow(id,rec)).join(''); }
+  if(term.length>=2){ html+=`<div class="ms-empty">Par nom « ${esc(matchSearch.get(id)||'')} »${codes.length?' dans '+esc(codes.join(' / ')):' (global)'} : ${byName.length}</div>`+(byName.length?byName.map(rec=>candRow(id,rec)).join(''):'<div class="ms-empty">aucun</div>'); }
+  if(!html) html='<div class="ms-empty">'+(codes.length?'Aucun candidat par numéro — tape un nom anglais pour chercher.':'Série non reliée — surcharge l\'extension ci-dessus, ou tape un nom anglais (recherche globale).')+'</div>';
   box.innerHTML=html;
 }
-function assignFromCandidate(id,idProduct,code){ assign.set(id,String(idProduct)); assignMode.set(id,'manual'); const card=parsedRows.find(r=>r._id===id); if(card&&code&&!serieToCode.has(card.codeSerie)&&catByCode.has(code)) serieToCode.set(card.codeSerie,code); openMatch=null; renderMatch(); showToast('✓ idProduct '+idProduct+' assigné'); }
+function assignFromCandidate(id,idProduct,code){ assign.set(id,String(idProduct)); assignMode.set(id,'manual'); const card=parsedRows.find(r=>r._id===id); if(card&&code&&catByCode.has(code)){ const k=bridgeKeyOf(card); if(!bridgeOverride.has(k)&&!resolveSetCodes(card).includes(code)) bridgeOverride.set(k,code); } openMatch=null; renderMatch(); showToast('✓ idProduct '+idProduct+' assigné'); }
 function assignManual(id,val){ val=String(val||'').trim(); if(!val){ assign.delete(id); assignMode.delete(id); } else { assign.set(id,val); assignMode.set(id,'manual'); } renderMatch(); }
-function exportAssign(){ const rows=matchRowsList().filter(r=>assign.has(r._id)); if(!rows.length){ showToast('Aucune assignation',true); return; } download(csv(['Key','ClePont','CodeSerie','NomFR','Rarete','Etat','Prix','ExpansionCode','idProduct','Mode'], rows.map(r=>[r.key,r.bridgeKey||'',r.codeSerie,r.raw,r.type,r.etat,r.prix==null?'':r.prix.toFixed(2),serieToCode.get(r.codeSerie)||'',assign.get(r._id),assignMode.get(r._id)||''])),'assignations_cm'); showToast(`✓ ${rows.length} assignation(s) exportée(s)`); }
+function exportAssign(){ const rows=matchRowsList().filter(r=>assign.has(r._id)); if(!rows.length){ showToast('Aucune assignation',true); return; } download(csv(['Key','ClePont','CodeSerie','NomFR','Rarete','Etat','Prix','ExpansionCode','idProduct','Mode'], rows.map(r=>{ const c=effectiveCodes(r); return [r.key,r.bridgeKey||'',r.codeSerie,r.raw,r.type,r.etat,r.prix==null?'':r.prix.toFixed(2),c.length===1?c[0]:c.join('|'),assign.get(r._id),assignMode.get(r._id)||'']; })),'assignations_cm'); showToast(`✓ ${rows.length} assignation(s) exportée(s)`); }
 
 // ═══════════ RENDER (vue Sélection) ═══════════
 function counts(){ const c={total:parsedRows.length,single:0,lot:0,other:0,exception:0}; for(const r of parsedRows) c[r.routing]++; return c; }

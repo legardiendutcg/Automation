@@ -2,10 +2,17 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.2.1 (Session #12 — 2026-05-31)
+  Version : 1.2.2 (Session #13 — 2026-06-06)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.2.2  2026-06-06  Session #13 (corrections table MAPPING — source de vérité)
+         - [Données] LG → LC : la Legendary Collection (WOTC) est référencée sous le code
+           « LC » dans le catalogue TCG PT / CardMarket (et non « LG »). Clé renommée.
+         - [Données] HS — Unleashed = « Déchaînement » → code UL (length 95, HGSS2.0) ;
+           HS — Undaunted = « Indomptable » → code UD (inchangé : HGSS3.0). L'entrée « CL2 »
+           (qui portait Déchaînement sous un code absent du catalogue) est supprimée ;
+           « Call of Legends » reste géré par la clé « CL ». Vérifié sur le catalogue réel.
   1.2.1  2026-05-31  Session #12 (config SAFETY_GSHEET_ID + CSP)
          - [Config] SAFETY_GSHEET_ID renseigné (feuille dédiée logs/backups d'injection) →
            getSafetySpreadsheetId() ne lève plus l'erreur ; journal + backups opérationnels.
@@ -917,7 +924,7 @@ const MAPPING = {
   "HL": { length: 101, extra: null, codeSerie: "EX8.0", nomSerie: "Légendes Oubliées" },
   "DS": { length: 113, extra: null, codeSerie: "EX10.0", nomSerie: "Espèces Delta" },
   "UF": { length: 115, extra: null, codeSerie: "EX9.0", nomSerie: "Forces Cachées" },
-  "UL": { length: 90, extra: null, codeSerie: "HGSS3.0", nomSerie: "Indomptable" },
+  "UL": { length: 95, extra: null, codeSerie: "HGSS2.0", nomSerie: "Déchaînement" },
   "UD": { length: 90, extra: null, codeSerie: "HGSS3.0", nomSerie: "Indomptable" },
   "TM": { length: 109, extra: null, codeSerie: "HGSS4.0", nomSerie: "Triomphe" },
   "m1S": { length: 63, extra: null, codeSerie: "m1S", nomSerie: "Mega Symphonia" },
@@ -1041,12 +1048,11 @@ const MAPPING = {
   "FL": { length: 112, extra: null, codeSerie: "EX4.0", nomSerie: "Rouge Feu Vert Feuille" },
   "AQ": { length: 147, extra: "H32", codeSerie: "WOTC10.0", nomSerie: "Aquapolis" },
   "SK": { length: 144, extra: null, codeSerie: "WOTC11.0", nomSerie: "Skyridge" },
-  "LG": { length: 110, extra: null, codeSerie: "WOTC_LC", nomSerie: "Legendary Collection" },
+  "LC": { length: 110, extra: null, codeSerie: "WOTC_LC", nomSerie: "Legendary Collection" },
   "B2": { length: 130, extra: null, codeSerie: "WOTC_B2", nomSerie: "Base Set 2" },
   "GC": { length: 132, extra: null, codeSerie: "WOTC_GC", nomSerie: "Gym Challenge" },
   "GH": { length: 132, extra: null, codeSerie: "WOTC_GH", nomSerie: "Gym Heroes" },
   "N2": { length: 75, extra: null, codeSerie: "WOTC_N2", nomSerie: "Neo Discovery" },
-  "CL2": { length: 95, extra: null, codeSerie: "HGSS2.0", nomSerie: "Déchaînement" },
   "DR": { length: 97, extra: null, codeSerie: "EX3.0", nomSerie: "Dragon" },
   "PLF_nb": { length: 116, extra: null, codeSerie: "NB9.0", nomSerie: "Glaciation Plasma" },
   "HS": { length: 123, extra: null, codeSerie: "HGSS1.0", nomSerie: "Heart Gold Soul Silver" },
