@@ -4,6 +4,10 @@
   TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket en premier)
   ────────────────────────────────────────────────────────────────────────────
   CHANGELOG
+  0.2.1  2026-06-04  Candidats enrichis : affichage de idMetacard (regroupe les variantes) et
+                     du nom d extension quand connu (déduit des séries déjà mappées).
+                     Rappel : le fichier CM ne contient ni nom de série ni numéro
+                     de carte — ils viendront du pont TCGdex (étape suivante).
   0.2.0  2026-06-04  MATCHING CARDMARKET (étape 1). Chargement local du catalogue
                      CM (products_singles_6.json) + indexation en mémoire (par
                      idExpansion + recherche par nom anglais). Atelier de matching
@@ -169,7 +173,7 @@ tbody tr.assigned td { background:rgba(74,222,128,.05); }
     </div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.2.0</div>
+      <div class="ver" id="ver">v0.2.1</div>
     </div>
   </header>
 
@@ -269,7 +273,7 @@ tbody tr.assigned td { background:rgba(74,222,128,.05); }
 <script>
 'use strict';
 // ═══════════════════════════════════════════════════════════════ CONFIG
-const APP_VERSION       = '0.2.0';
+const APP_VERSION       = '0.2.1';
 const OAUTH_CLIENT_ID   = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES     = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -298,6 +302,7 @@ let catByExp=new Map();         // idExpansion -> [recs]
 let catLoaded=false;
 let assign=new Map();           // cardId(_id) -> idProduct (string)
 let serieExp=new Map();         // codeSerie -> idExpansion
+let expName=new Map();          // idExpansion -> nom (déduit des séries mappées par l'utilisateur)
 let openMatch=null;             // cardId dont le panneau recherche est ouvert
 let matchSearch=new Map();      // cardId -> terme
 let matchScope=new Map();       // cardId -> bool (limiter à l'extension)
@@ -452,7 +457,7 @@ async function loadStock(){
     }
     parsedRows=cards.map(parseCard);
     selection.clear(); selectedOnly=false; document.getElementById('selOnly').checked=false;
-    assign.clear(); serieExp.clear();
+    assign.clear(); serieExp.clear(); expName.clear();
     resetFilterState(); buildFilterOptions(); page=1; setView('select'); render();
     const g=parsedRows.filter(r=>r.game==='pokemon').length;
     setStatus(`Stock lu : ${parsedRows.length} cartes dispo (${g} Pokémon). En-tête ligne ${cardHeaderRow}.`);
@@ -611,7 +616,7 @@ function renderMatch(){
     html.push(`<tr class="${idp?'assigned':''}" data-mid="${r._id}">
       <td class="key">${esc(r.bridgeKey||'—')}</td>
       <td>${esc(r.raw)}</td>
-      <td class="mono dim">${exp!=null?('exp '+exp):'<span class="dim">à détecter</span>'}</td>
+      <td class="mono dim">${exp!=null?esc(expLabel(exp)):'<span class="dim">à détecter</span>'}</td>
       <td><input class="idp" value="${esc(idp)}" placeholder="idProduct" onchange="assignManual(${r._id},this.value)"></td>
       <td><button class="pgbtn" onclick="toggleMatchSearch(${r._id})">${open?'Fermer':'🔍 Chercher'}</button></td>
     </tr>`);
@@ -642,7 +647,7 @@ function renderCandidates(id){
   if(!out.length){ box.innerHTML='<div class="ms-empty">Aucun candidat'+((scope&&exp!=null)?' dans cette extension (décoche la limite pour chercher partout)':'')+'.</div>'; return; }
   box.innerHTML=out.map(rec=>`<div class="cand">
     <span class="cn">${esc(rec.name)}</span>
-    <span class="ce">exp ${rec.exp}</span>
+    <span class="ce">${esc(expLabel(rec.exp))} · meta ${rec.meta}</span>
     <span class="cid">id ${rec.idProduct}</span>
     <button onclick="assignFromCandidate(${id},${rec.idProduct},${rec.exp})">Assigner</button>
   </div>`).join('');
@@ -651,8 +656,10 @@ function assignFromCandidate(id,idProduct,exp){
   assign.set(id, String(idProduct));
   const card=parsedRows.find(r=>r._id===id);
   if(card && exp!=null && !serieExp.has(card.codeSerie)) serieExp.set(card.codeSerie, exp);
+  if(card && exp!=null && card.nomSerie && !expName.has(exp)) expName.set(exp, card.nomSerie);
   openMatch=null; renderMatch(); showToast('✓ idProduct '+idProduct+' assigné');
 }
+function expLabel(exp){ return expName.has(exp) ? (expName.get(exp)+' · exp '+exp) : ('exp '+exp); }
 function assignManual(id,val){ val=String(val||'').trim(); if(!val) assign.delete(id); else assign.set(id,val); renderMatch(); }
 function exportAssign(){
   const rows=matchRowsList().filter(r=>assign.has(r._id));
