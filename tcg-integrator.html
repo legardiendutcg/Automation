@@ -4,6 +4,15 @@
   TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket)
   ────────────────────────────────────────────────────────────────────────────
   CHANGELOG
+  0.3.0  2026-06-06  Vignette CardMarket par candidat (désambiguïsation visuelle des variantes).
+                     Récupère l'og:image de la fiche produit CM via un proxy CORS configurable
+                     (CM_IMG_PROXY, défaut allorigins ; '' pour désactiver) et l'affiche à côté
+                     du lien. Beaucoup de spécificités sont lisibles sur le scan (masterball,
+                     pokéball, stamp, league, prerelease, shadowless, oversized…). Cache par
+                     idProduct (1 fetch/session), plafond CM_THUMB_MAX vignettes/panneau, repli
+                     silencieux sur le lien si échec. Dépendance réseau tierce assumée ; foyer
+                     durable = gateway Apps Script (#25). connect-src élargi au proxy ; l'image
+                     s'affiche via l'img-src https: déjà en place. Lecture seule (aucune écriture).
   0.2.4  2026-06-06  Lien « fiche CM » par candidat (désambiguïsation des variantes).
                      Dans le panneau de collision/recherche, chaque candidat affiche un lien
                      direct vers sa fiche CardMarket via la redirection officielle par
@@ -38,7 +47,7 @@
 -->
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://api.allorigins.win; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TCG Integrator</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -161,6 +170,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 .cand .ce { font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted); } .cand .cid { font-family:'Space Mono',monospace; font-size:.66rem; color:var(--accent2); }
 .cand button { font-family:'Space Mono',monospace; font-size:.62rem; background:var(--accent); color:#0a0c10; border:none; border-radius:5px; padding:5px 11px; cursor:pointer; font-weight:700; }
 .cand .cmlink { font-family:'Space Mono',monospace; font-size:.62rem; color:var(--accent2); text-decoration:none; border:1px solid var(--border); border-radius:5px; padding:4px 8px; white-space:nowrap; } .cand .cmlink:hover { border-color:var(--accent2); }
+.cand .cmthumb { height:58px; width:auto; max-width:44px; object-fit:contain; border:1px solid var(--border); border-radius:4px; background:var(--bg); flex:0 0 auto; }
 
 #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(120px); background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:12px 20px; border-radius:10px; font-size:.82rem; transition:transform .3s; z-index:100; max-width:90vw; }
 #toast.show { transform:translateX(-50%) translateY(0); } #toast.err { border-color:var(--accent3); }
@@ -172,7 +182,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
     <div class="logo"><h1>TCG <span>INTEGRATOR</span></h1><p>Publication multi-canal → CardMarket · by Cassius</p></div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.2.4</div>
+      <div class="ver" id="ver">v0.3.0</div>
     </div>
   </header>
 
@@ -247,12 +257,18 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 <script>
 'use strict';
 // ═══════════ CONFIG ═══════════
-const APP_VERSION='0.2.4';
+const APP_VERSION='0.3.0';
 const OAUTH_CLIENT_ID='774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES='https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID='1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_CARDS='cartes_stock_et_transactions';
 const CATALOGUE_URL='./cm-catalogue.csv';   // déposé à côté de l'app dans le repo (même origine → CSP OK)
+// Proxy CORS pour lire la page produit CardMarket et en extraire l'og:image (vignette de désambiguïsation).
+// Le navigateur ne peut pas lire cardmarket.com en cross-origin ; on passe par un proxy. {url} = URL cible encodée.
+// Défaut : allorigins (gratuit, sans clé, renvoie un JSON {contents:"<html>"}). Remplaçable par ton propre
+// proxy ou, à terme, le gateway Apps Script (#25) pour s'affranchir du tiers. Mettre '' pour désactiver la vignette.
+const CM_IMG_PROXY='https://api.allorigins.win/get?url={url}';
+const CM_THUMB_MAX=8;   // plafond de vignettes hydratées par panneau (protège le proxy ; les collisions = 2-3 candidats)
 // Pont série → extension CardMarket (copie « slim » du MAPPING de tcg-intake.html,
 // source de vérité ; corrigée en 0.2.3 : LG→LC, UL=Déchaînement, UD=Indomptable, CL2 retiré.
 // Clé = setCode CM ; cs = code_série interne (GSheet col G) ; ns = nom_série FR (col H).
@@ -706,7 +722,29 @@ function renderMatch(){
 }
 function toggleMatchSearch(id){ openMatch=(openMatch===id?null:id); renderMatch(); if(openMatch===id){ const s=document.getElementById('msrch-'+id); if(s) s.focus(); } }
 function matchSearchInput(id,v){ matchSearch.set(id,v); renderCandidates(id); }
-function candRow(id,rec){ return `<div class="cand"><span class="cn">${esc(rec.name)}</span><span class="cnum">n°${esc(rec.num||'?')}</span><span class="crar">${esc(rec.rarity||'')}</span><span class="ce">${esc(rec.code)} — ${esc(rec.exp||expName(rec.code))}</span><span class="cid">id ${esc(rec.id)}</span><a class="cmlink" href="https://www.cardmarket.com/en/Pokemon/Products?idProduct=${encodeURIComponent(rec.id)}" target="_blank" rel="noopener noreferrer" title="Ouvrir la fiche CardMarket de cet idProduct (vérifier la variante)">fiche CM ↗</a><button onclick="assignFromCandidate(${id},'${esc(rec.id)}','${esc(rec.code)}')">Assigner</button></div>`; }
+// ----- Vignette CardMarket (og:image via proxy CORS) -----
+const cmImgCache=new Map();   // idProduct -> url | null (échec/absent) | 'loading'
+function cmPageUrl(id){ return 'https://www.cardmarket.com/en/Pokemon/Products?idProduct='+encodeURIComponent(id); }
+function extractOgImage(html){
+  const m=html.match(/<meta[^>]+(?:property|name)=["']og:image["'][^>]*>/i); if(!m) return null;
+  const c=m[0].match(/content=["']([^"']+)["']/i); return c?c[1].replace(/&amp;/g,'&'):null;
+}
+async function fetchCmImage(id){
+  if(cmImgCache.has(id)){ const v=cmImgCache.get(id); return v==='loading'?null:v; }
+  if(!CM_IMG_PROXY){ cmImgCache.set(id,null); return null; }
+  cmImgCache.set(id,'loading');
+  try{
+    const purl=CM_IMG_PROXY.replace('{url}',encodeURIComponent(cmPageUrl(id)));
+    const res=await fetch(purl); if(!res.ok) throw new Error('HTTP '+res.status);
+    const txt=await res.text(); let html=txt;
+    if(/^\s*\{/.test(txt)){ try{ const j=JSON.parse(txt); html=j.contents||j.body||txt; }catch{} }
+    const url=extractOgImage(html); cmImgCache.set(id,url||null); return url||null;
+  }catch(e){ cmImgCache.set(id,null); return null; }
+}
+async function loadCmThumb(el){ const id=el.getAttribute('data-cmid'); if(!id) return; const url=await fetchCmImage(id); if(url){ el.src=url; el.style.display=''; } }
+function hydrateCmThumbs(box){ if(!box) return; [...box.querySelectorAll('img.cmthumb[data-cmid]')].slice(0,CM_THUMB_MAX).forEach(loadCmThumb); }
+
+function candRow(id,rec){ return `<div class="cand"><img class="cmthumb" data-cmid="${esc(rec.id)}" alt="" style="display:none" loading="lazy"><span class="cn">${esc(rec.name)}</span><span class="cnum">n°${esc(rec.num||'?')}</span><span class="crar">${esc(rec.rarity||'')}</span><span class="ce">${esc(rec.code)} — ${esc(rec.exp||expName(rec.code))}</span><span class="cid">id ${esc(rec.id)}</span><a class="cmlink" href="https://www.cardmarket.com/en/Pokemon/Products?idProduct=${encodeURIComponent(rec.id)}" target="_blank" rel="noopener noreferrer" title="Ouvrir la fiche CardMarket de cet idProduct (vérifier la variante)">fiche CM ↗</a><button onclick="assignFromCandidate(${id},'${esc(rec.id)}','${esc(rec.code)}')">Assigner</button></div>`; }
 function renderCandidates(id){
   const box=document.getElementById('cand-'+id); if(!box) return; const card=parsedRows.find(r=>r._id===id); if(!card) return;
   const codes=effectiveCodes(card); const term=normCat(matchSearch.get(id)||'');
@@ -719,6 +757,7 @@ function renderCandidates(id){
   if(term.length>=2){ html+=`<div class="ms-empty">Par nom « ${esc(matchSearch.get(id)||'')} »${codes.length?' dans '+esc(codes.join(' / ')):' (global)'} : ${byName.length}</div>`+(byName.length?byName.map(rec=>candRow(id,rec)).join(''):'<div class="ms-empty">aucun</div>'); }
   if(!html) html='<div class="ms-empty">'+(codes.length?'Aucun candidat par numéro — tape un nom anglais pour chercher.':'Série non reliée — surcharge l\'extension ci-dessus, ou tape un nom anglais (recherche globale).')+'</div>';
   box.innerHTML=html;
+  hydrateCmThumbs(box);
 }
 function assignFromCandidate(id,idProduct,code){ assign.set(id,String(idProduct)); assignMode.set(id,'manual'); const card=parsedRows.find(r=>r._id===id); if(card&&code&&catByCode.has(code)){ const k=bridgeKeyOf(card); if(!bridgeOverride.has(k)&&!resolveSetCodes(card).includes(code)) bridgeOverride.set(k,code); } openMatch=null; renderMatch(); showToast('✓ idProduct '+idProduct+' assigné'); }
 function assignManual(id,val){ val=String(val||'').trim(); if(!val){ assign.delete(id); assignMode.delete(id); } else { assign.set(id,val); assignMode.set(id,'manual'); } renderMatch(); }
