@@ -2,10 +2,16 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.4.2 (Session #13 — 2026-06-06)
+  Version : 1.4.4 (Session #13 — 2026-06-06)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.4.4  2026-06-06  Session #13 — SAFETY_GSHEET_ID repointé sur une Google Sheet native (le
+         précédent classeur était un .xlsx importé → refusé par l'API). Backup/log opérationnels.
+  1.4.3  2026-06-06  Session #13 — message d'erreur explicite si le classeur de backup/log
+         (SAFETY_GSHEET_ID) ou la cible est un fichier Office (.xlsx) importé au lieu d'une
+         Google Sheet native (l'API Sheets refuse les .xlsx → FAILED_PRECONDITION). Guide
+         l'utilisateur vers la création d'une Sheet native.
   1.4.2  2026-06-06  Session #13 — affichage de la version à l'écran (badge « vX.Y.Z » dans
          l'en-tête, alimenté par la constante APP_VERSION), comme les autres apps du stack.
   1.4.1  2026-06-06  Session #13 — fix auth (redirect_uri_mismatch). Migration de l'ancien flux
@@ -896,7 +902,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.4.4';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';
@@ -907,7 +913,7 @@ let cardHeaderResolved = false;
 // Fichier Google Sheets dédié à la sécurité : logs + backup.
 // Crée un nouveau Google Sheet dans ton Drive, puis colle son ID ici.
 // L'app créera automatiquement les onglets LOG_INJECTIONS et BACKUP_INJECTIONS si besoin.
-const SAFETY_GSHEET_ID = '1c-HD5zIKOd0zLq6saxT_uxmGAEmV_DtI';
+const SAFETY_GSHEET_ID = '1axA5pJeu2PLzrBnd_HLox3AEck5AjbCkFpx19rRtmJg';
 const LOG_SHEET_NAME   = 'LOG_INJECTIONS';
 const BACKUP_SHEET_NAME = 'BACKUP_INJECTIONS';
 
@@ -2768,6 +2774,13 @@ async function cmResolveTarget(){
     keyByHeader:kIdx>=0, idpByHeader:iIdx>=0 };
 }
 
+function cmFriendlyErr(e){
+  const m=(e&&e.message)||String(e);
+  if(/must not be an Office file|not supported for this document|FAILED_PRECONDITION/i.test(m)){
+    return 'Un classeur visé est un fichier Office (.xlsx) importé, pas une Google Sheet native — l\'API Sheets ne peut pas y écrire. C\'est très probablement le classeur de backup/log (SAFETY_GSHEET_ID). Solution : crée une Google Sheet NATIVE vide (sheets.new), copie son ID depuis l\'URL, et mets-le dans SAFETY_GSHEET_ID (les onglets LOG/BACKUP seront créés tout seuls).';
+  }
+  return m;
+}
 async function cmPreview(){
   if(!isAuthenticated()){ showToast('⚠ Connectez-vous à Google d\'abord'); return; }
   if(!cmAssignRows.length){ showToast('⚠ Charge d\'abord le fichier assignations_cm'); return; }
@@ -2797,7 +2810,7 @@ async function cmPreview(){
     const actionable=toWrite+overwrite;
     document.getElementById('cmBtnWrite').disabled = actionable===0;
     document.getElementById('cmStatus').textContent = actionable? `${actionable} à écrire — vérifie la cible puis écris.` : 'Rien à écrire (tout identique ou introuvable).';
-  }catch(e){ document.getElementById('cmStatus').textContent='✗ '+(e.message||e); showToast('✗ Aperçu : '+(e.message||e)); }
+  }catch(e){ const fe=cmFriendlyErr(e); document.getElementById('cmStatus').textContent='✗ '+fe; showToast('✗ Aperçu : '+(e.message||e)); }
   finally{ btn.disabled=false; }
 }
 
@@ -2847,7 +2860,7 @@ async function cmWrite(){
     cmLog('ok',`✓ Terminé : ${data.length} idProduct écrit(s) dans « ${t.sheet} » (col ${t.idpLetter}).`);
     showToast(`✓ ${data.length} idProduct écrit(s)`);
     cmPlan=null; await cmPreview();
-  }catch(e){ cmLog('err','✗ '+(e.message||e)); await persistInjectionLogs().catch(()=>{}); showToast('✗ Écriture : '+(e.message||e)); btnW.disabled=false; }
+  }catch(e){ cmLog('err','✗ '+cmFriendlyErr(e)); await persistInjectionLogs().catch(()=>{}); showToast('✗ Écriture : '+(e.message||e)); btnW.disabled=false; }
   finally{ btnP.disabled=false; }
 }
 
