@@ -4,6 +4,14 @@
   TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket)
   ────────────────────────────────────────────────────────────────────────────
   CHANGELOG
+  0.2.4  2026-06-06  Lien « fiche CM » par candidat (désambiguïsation des variantes).
+                     Dans le panneau de collision/recherche, chaque candidat affiche un lien
+                     direct vers sa fiche CardMarket via la redirection officielle par
+                     idProduct (cardmarket.com/en/Pokemon/Products?idProduct=<id>), ouverte
+                     dans un nouvel onglet. Permet de trancher les cas où nom + numéro +
+                     rareté + extension sont identiques et où seul l'idProduct distingue la
+                     variante (Set de Base « shadowless », promos « oversized »). La variante
+                     elle-même est tracée côté stock en colonne O « Variantes ». Lecture seule.
   0.2.3  2026-06-06  Pont série→extension AUTOMATIQUE via table de correspondance
                      (copie « slim » du MAPPING de tcg-intake : setCode → code_série +
                      nom_série ; dédup future via module commun #24). Résolution par
@@ -152,6 +160,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 .cand .crar { font-family:'Space Mono',monospace; font-size:.6rem; color:var(--warning); }
 .cand .ce { font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted); } .cand .cid { font-family:'Space Mono',monospace; font-size:.66rem; color:var(--accent2); }
 .cand button { font-family:'Space Mono',monospace; font-size:.62rem; background:var(--accent); color:#0a0c10; border:none; border-radius:5px; padding:5px 11px; cursor:pointer; font-weight:700; }
+.cand .cmlink { font-family:'Space Mono',monospace; font-size:.62rem; color:var(--accent2); text-decoration:none; border:1px solid var(--border); border-radius:5px; padding:4px 8px; white-space:nowrap; } .cand .cmlink:hover { border-color:var(--accent2); }
 
 #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(120px); background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:12px 20px; border-radius:10px; font-size:.82rem; transition:transform .3s; z-index:100; max-width:90vw; }
 #toast.show { transform:translateX(-50%) translateY(0); } #toast.err { border-color:var(--accent3); }
@@ -163,7 +172,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
     <div class="logo"><h1>TCG <span>INTEGRATOR</span></h1><p>Publication multi-canal → CardMarket · by Cassius</p></div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.2.3</div>
+      <div class="ver" id="ver">v0.2.4</div>
     </div>
   </header>
 
@@ -238,7 +247,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 <script>
 'use strict';
 // ═══════════ CONFIG ═══════════
-const APP_VERSION='0.2.3';
+const APP_VERSION='0.2.4';
 const OAUTH_CLIENT_ID='774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES='https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID='1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -697,7 +706,7 @@ function renderMatch(){
 }
 function toggleMatchSearch(id){ openMatch=(openMatch===id?null:id); renderMatch(); if(openMatch===id){ const s=document.getElementById('msrch-'+id); if(s) s.focus(); } }
 function matchSearchInput(id,v){ matchSearch.set(id,v); renderCandidates(id); }
-function candRow(id,rec){ return `<div class="cand"><span class="cn">${esc(rec.name)}</span><span class="cnum">n°${esc(rec.num||'?')}</span><span class="crar">${esc(rec.rarity||'')}</span><span class="ce">${esc(rec.code)} — ${esc(rec.exp||expName(rec.code))}</span><span class="cid">id ${esc(rec.id)}</span><button onclick="assignFromCandidate(${id},'${esc(rec.id)}','${esc(rec.code)}')">Assigner</button></div>`; }
+function candRow(id,rec){ return `<div class="cand"><span class="cn">${esc(rec.name)}</span><span class="cnum">n°${esc(rec.num||'?')}</span><span class="crar">${esc(rec.rarity||'')}</span><span class="ce">${esc(rec.code)} — ${esc(rec.exp||expName(rec.code))}</span><span class="cid">id ${esc(rec.id)}</span><a class="cmlink" href="https://www.cardmarket.com/en/Pokemon/Products?idProduct=${encodeURIComponent(rec.id)}" target="_blank" rel="noopener noreferrer" title="Ouvrir la fiche CardMarket de cet idProduct (vérifier la variante)">fiche CM ↗</a><button onclick="assignFromCandidate(${id},'${esc(rec.id)}','${esc(rec.code)}')">Assigner</button></div>`; }
 function renderCandidates(id){
   const box=document.getElementById('cand-'+id); if(!box) return; const card=parsedRows.find(r=>r._id===id); if(!card) return;
   const codes=effectiveCodes(card); const term=normCat(matchSearch.get(id)||'');
