@@ -4,6 +4,13 @@
   TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket)
   ────────────────────────────────────────────────────────────────────────────
   CHANGELOG
+  0.4.0  2026-06-06  Second export : fichier d'import TCG PowerTools (→ « Publish to Cardmarket »).
+                     Bouton « Exporter pour TCG PT » à côté de l'export assignations. Colonnes
+                     Quantity (1/single) · Cardmarket ID (idProduct assigné) · Language · Condition ·
+                     Price · Name. Langue & état recopiés tels quels depuis CENTRAL (origine TCG PT
+                     → réacceptés sans mapping) ; langue localisée par entête dans loadStock. CSV
+                     en virgule (standard PT). L'intégrateur produit donc 2 fichiers : assignations_cm
+                     (→ intake, write-back idProduct) et cardmarket_upload_pt (→ TCG PT → CM). Lecture seule.
   0.3.2  2026-06-06  Vignette CM DÉSACTIVÉE par défaut (CM_IMG_PROXIES=[]). Diagnostic terrain :
                      les proxies publics sont bloqués par CORS (pas d'Access-Control-Allow-Origin)
                      et/ou CM leur renvoie un mur Cloudflare/cookies sans og:image → la vignette ne
@@ -197,7 +204,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
     <div class="logo"><h1>TCG <span>INTEGRATOR</span></h1><p>Publication multi-canal → CardMarket · by Cassius</p></div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.3.2</div>
+      <div class="ver" id="ver">v0.4.0</div>
     </div>
   </header>
 
@@ -258,6 +265,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
         <span class="status" id="matchInfo"></span>
         <div class="progress"><div class="bar" id="matchBar"></div></div>
         <button class="btn ghost" id="exportAssignBtn" onclick="exportAssign()">Exporter les assignations</button>
+        <button class="btn ghost" id="exportPTBtn" onclick="exportPTUpload()">Exporter pour TCG PT (→ CM)</button>
       </div>
       <div class="mapblock" id="mapBlock"></div>
       <datalist id="expDatalist"></datalist>
@@ -272,7 +280,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 <script>
 'use strict';
 // ═══════════ CONFIG ═══════════
-const APP_VERSION='0.3.2';
+const APP_VERSION='0.4.0';
 const OAUTH_CLIENT_ID='774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES='https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID='1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -564,9 +572,12 @@ async function loadStock(){
   const btn=document.getElementById('loadBtn'); btn.disabled=true; setStatus('Lecture du stock…');
   try{
     cardHeaderRow=await findCardsHeaderRow();
+    // Localiser la colonne LANGUE par entête (robuste à un décalage) ; données lues à partir de C → offset 2.
+    let langDataIdx=-1;
+    try{ const hr=await sheetsGet(a1(SHEET_CARDS,`A${cardHeaderRow}:AF${cardHeaderRow}`)); const H=(hr.values&&hr.values[0])?hr.values[0]:[]; const li=H.findIndex(h=>/lang/i.test(String(h||''))); if(li>=2) langDataIdx=li-2; }catch(e){}
     const res=await sheetsGet(a1(SHEET_CARDS,`C${cardHeaderRow+1}:AF`)); const rows=res.values||[]; const cards=[];
     for(let i=0;i<rows.length;i++){ const row=rows[i]; const key=(row[1]||'').toString().trim(); if(!key) continue; if(((row[13]||'').toString().trim())!=='') continue;
-      cards.push({ key, origine:(row[3]||'').toString().trim(), codeSerie:(row[4]||'').toString().trim(), nomSerie:(row[5]||'').toString().trim(), name:(row[6]||'').toString().trim(), type:(row[7]||'').toString().trim(), etat:(row[8]||'').toString().trim(), prix:parsePrix(row[14]), pa:parsePrix(row[19]) }); }
+      cards.push({ key, origine:(row[3]||'').toString().trim(), codeSerie:(row[4]||'').toString().trim(), nomSerie:(row[5]||'').toString().trim(), name:(row[6]||'').toString().trim(), type:(row[7]||'').toString().trim(), etat:(row[8]||'').toString().trim(), langue:(langDataIdx>=0?(row[langDataIdx]||'').toString().trim():''), prix:parsePrix(row[14]), pa:parsePrix(row[19]) }); }
     parsedRows=cards.map(parseCard);
     selection.clear(); selectedOnly=false; document.getElementById('selOnly').checked=false;
     assign.clear(); assignMode.clear(); bridgeOverride.clear();
@@ -698,9 +709,10 @@ function runAutoMatch(toast){ if(!catLoaded){ showToast('Charge le catalogue d\'
 function renderMatch(){
   const body=document.getElementById('matchBody'), info=document.getElementById('matchInfo'), bar=document.getElementById('matchBar');
   const exp=document.getElementById('exportAssignBtn'), auto=document.getElementById('autoBtn'), mapB=document.getElementById('mapBlock');
-  if(!catLoaded){ info.textContent='Catalogue CM non chargé (auto depuis le repo).'; bar.style.width='0'; exp.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Catalogue non chargé.</td></tr>'; return; }
+  const expPT=document.getElementById('exportPTBtn');
+  if(!catLoaded){ info.textContent='Catalogue CM non chargé (auto depuis le repo).'; bar.style.width='0'; exp.disabled=true; if(expPT)expPT.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Catalogue non chargé.</td></tr>'; return; }
   const rows=matchRowsList();
-  if(!rows.length){ info.textContent='Sélectionne d\'abord des cartes (onglet Sélection).'; bar.style.width='0'; exp.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Aucune carte sélectionnée.</td></tr>'; return; }
+  if(!rows.length){ info.textContent='Sélectionne d\'abord des cartes (onglet Sélection).'; bar.style.width='0'; exp.disabled=true; if(expPT)expPT.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Aucune carte sélectionnée.</td></tr>'; return; }
   auto.disabled=false;
   // récap AUTO du pont série → extension, groupé par (code_série · nom_série) ; surcharge ponctuelle possible
   const groups=new Map();
@@ -718,7 +730,7 @@ function renderMatch(){
   }).join('');
   mapB.innerHTML=`<h3>Pont série → extension CardMarket <span class="dim" style="font-weight:400">— auto ; surcharge si besoin (${okN} résolue(s)${toFixN?`, ${toFixN} à vérifier`:''})</span></h3>`+mapRows;
   const done=rows.filter(r=>assign.has(r._id)).length;
-  info.textContent=`${done} / ${rows.length} assignées`; bar.style.width=(rows.length?Math.round(100*done/rows.length):0)+'%'; exp.disabled=(done===0);
+  info.textContent=`${done} / ${rows.length} assignées`; bar.style.width=(rows.length?Math.round(100*done/rows.length):0)+'%'; exp.disabled=(done===0); if(expPT)expPT.disabled=(done===0);
   const stLabel={done:['done','✓ assigné'],collision:['collision','⚠ collision'],none:['none','non trouvé'],unmapped:['unmapped','à relier'],auto1:['done','✓ unique']};
   const h=[];
   for(const r of rows){
@@ -792,6 +804,19 @@ function renderCandidates(id){
 function assignFromCandidate(id,idProduct,code){ assign.set(id,String(idProduct)); assignMode.set(id,'manual'); const card=parsedRows.find(r=>r._id===id); if(card&&code&&catByCode.has(code)){ const k=bridgeKeyOf(card); if(!bridgeOverride.has(k)&&!resolveSetCodes(card).includes(code)) bridgeOverride.set(k,code); } openMatch=null; renderMatch(); showToast('✓ idProduct '+idProduct+' assigné'); }
 function assignManual(id,val){ val=String(val||'').trim(); if(!val){ assign.delete(id); assignMode.delete(id); } else { assign.set(id,val); assignMode.set(id,'manual'); } renderMatch(); }
 function exportAssign(){ const rows=matchRowsList().filter(r=>assign.has(r._id)); if(!rows.length){ showToast('Aucune assignation',true); return; } download(csv(['Key','ClePont','CodeSerie','NomFR','Rarete','Etat','Prix','ExpansionCode','idProduct','Mode'], rows.map(r=>{ const c=effectiveCodes(r); return [r.key,r.bridgeKey||'',r.codeSerie,r.raw,r.type,r.etat,r.prix==null?'':r.prix.toFixed(2),c.length===1?c[0]:c.join('|'),assign.get(r._id),assignMode.get(r._id)||'']; })),'assignations_cm'); showToast(`✓ ${rows.length} assignation(s) exportée(s)`); }
+// Fichier d'import TCG PowerTools (→ « Publish to Cardmarket »). Langue & état recopiés tels quels
+// depuis CENTRAL (ils viennent de TCG PT à l'origine → réacceptés sans mapping). Quantité = 1 par single.
+// Délimiteur virgule (CSV standard attendu par l'import PT). PT laisse remapper les colonnes au besoin.
+function exportPTUpload(){
+  const rows=matchRowsList().filter(r=>assign.has(r._id));
+  if(!rows.length){ showToast('Aucune carte assignée à exporter',true); return; }
+  download(csv(
+    ['Quantity','Cardmarket ID','Language','Condition','Price','Name'],
+    rows.map(r=>['1', assign.get(r._id), r.langue||'', r.etat||'', r.prix==null?'':r.prix.toFixed(2), r.raw]),
+    ','
+  ), 'cardmarket_upload_pt');
+  showToast(`✓ ${rows.length} ligne(s) exportée(s) pour TCG PowerTools`);
+}
 
 // ═══════════ RENDER (vue Sélection) ═══════════
 function counts(){ const c={total:parsedRows.length,single:0,lot:0,other:0,exception:0}; for(const r of parsedRows) c[r.routing]++; return c; }
@@ -825,7 +850,7 @@ function setRoute(k){ activeFilter=k; page=1; render(); }
 
 // ═══════════ UTILS ═══════════
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-function csv(head,rows){ const cell=v=>{ const s=String(v==null?'':v); return /[",;\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; }; return [head.join(';')].concat(rows.map(r=>r.map(cell).join(';'))).join('\n'); }
+function csv(head,rows,delim){ delim=delim||';'; const cell=v=>{ const s=String(v==null?'':v); return /[",;\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; }; return [head.join(delim)].concat(rows.map(r=>r.map(cell).join(delim))).join('\n'); }
 function download(text,prefix){ const blob=new Blob(['\ufeff'+text],{type:'text/csv;charset=utf-8;'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`${prefix}_${new Date().toISOString().slice(0,10)}.csv`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); }
 function setStatus(t){ document.getElementById('status').textContent=t; }
 let toastTimer=null;

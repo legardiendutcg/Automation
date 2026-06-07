@@ -2,10 +2,32 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.2.2 (Session #13 — 2026-06-06)
+  Version : 1.4.0 (Session #13 — 2026-06-06)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.4.0  2026-06-06  Session #13 — auto-détection du format + fix parsing assignations.
+         - [Fix 🔴] Lecture de assignations_cm : l'intégrateur exporte en « ; » (BOM) alors que
+           parseCSV découpe sur « , » → l'onglet 5 ne lisait pas le fichier. Parsing désormais
+           agnostique au délimiteur (; ou ,) + strip BOM. Le write-back idProduct fonctionne.
+         - [Feature] Auto-détection au dépôt : si le fichier contient les en-têtes Key + idProduct
+           → mode write-back (onglet 5) ; sinon → export TCG PT → mode ajout (onglets 1-4). Marche
+           depuis n'importe quelle zone de dépôt. En mode write-back, les étapes 1-4 sont masquées
+           (l'étape 5 reste toujours visible pour basculer ; Reset revient en mode ajout).
+  1.3.0  2026-06-06  Session #13 — write-back des idProduct CardMarket (onglet « idProduct CM »).
+         - [Feature] Nouvel onglet 5 : charge le fichier « assignations_cm » (export Integrator,
+           colonnes Key + idProduct) et réinjecte les idProduct dans le stock singles.
+         - Cible résolue par ENTÊTE (clé + idProduct ; replis col D / L) sur SHEET_NAME →
+           robuste à un renommage/décalage de colonne (cf. bug casse #12). La variante (col O
+           « Variantes ») est respectée implicitement : la jointure se fait par Key, propre à
+           chaque ligne de stock.
+         - Sécurité : aperçu OBLIGATOIRE (dry-run, montre la colonne cible résolue + le plan :
+           à écrire / écrasements / identiques / introuvables), confirmation chiffrée, backup
+           des valeurs actuelles dans BACKUP_INJECTIONS avant écriture, journal LOG_INJECTIONS.
+         - Écriture par lots via values:batchUpdate (RAW), cellule par cellule sur les seules
+           lignes concernées (pas d'écrasement de colonne en bloc).
+         - [NB] Scellé (onglet stock_scelle, col « CM ») non branché : aucune source d'idProduct
+           scellé pour l'instant (l'Integrator ne matche que les singles).
   1.2.2  2026-06-06  Session #13 (corrections table MAPPING — source de vérité)
          - [Données] LG → LC : la Legendary Collection (WOTC) est référencée sous le code
            « LC » dans le catalogue TCG PT / CardMarket (et non « LG »). Clé renommée.
@@ -601,6 +623,13 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
         <div class="step-sub" id="step4-sub">En attente</div>
       </div>
     </div>
+    <div class="step-btn" id="step5" onclick="goToStep(5)">
+      <div class="step-num">CM</div>
+      <div class="step-info">
+        <div class="step-label">idProduct CM</div>
+        <div class="step-sub" id="step5-sub">Réinjection</div>
+      </div>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════ -->
@@ -813,6 +842,32 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
       Les étiquettes apparaîtront ici après une injection réussie.
     </div>
 
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- TAB 5 — idProduct CardMarket (write-back)               -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="tab hidden" id="content-5">
+    <div class="drop-zone" id="cmDropZone">
+      <span class="drop-icon">🔗</span>
+      <div class="drop-title">Dépose le fichier « assignations_cm » (export de l'Integrator)</div>
+      <div class="drop-sub">CSV · colonnes Key + idProduct · réinjecte les idProduct dans le stock</div>
+      <input type="file" accept=".csv" id="cmFileInput">
+    </div>
+    <div id="cmPanel" class="hidden" style="margin-top:24px;">
+      <div class="table-toolbar" style="gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-secondary" id="cmBtnPreview" onclick="cmPreview()">Aperçu (sans écrire)</button>
+        <button class="btn btn-primary" id="cmBtnWrite" onclick="cmWrite()" disabled>↑ Écrire les idProduct dans CENTRAL</button>
+        <span class="mono" id="cmStatus" style="color:var(--muted)"></span>
+      </div>
+      <div id="cmSummary" class="mono" style="margin-top:14px;font-size:.8rem;line-height:1.7;"></div>
+      <div class="table-scroll" style="margin-top:12px;max-height:42vh;">
+        <table><thead><tr>
+          <th>Key</th><th>idProduct (nouveau)</th><th>Actuel</th><th>Action</th><th>Ligne</th>
+        </tr></thead><tbody id="cmTableBody"></tbody></table>
+      </div>
+      <div class="log hidden" id="cmLog" style="margin-top:14px;"></div>
+    </div>
   </div>
 
 </div><!-- /app -->
@@ -2575,11 +2630,32 @@ fileInput.addEventListener('change', e => { if (e.target.files[0]) readFile(e.ta
 
 function readFile(file) {
   const reader = new FileReader();
-  reader.onload = e => processFile(e.target.result);
+  reader.onload = e => routeDroppedFile(e.target.result);
   reader.readAsText(file, 'UTF-8');
 }
 
+// Auto-détection du format déposé : export TCG PT (→ onglets 1-4) vs assignations_cm
+// (en-têtes Key + idProduct → onglet 5). Marche quelle que soit la zone de dépôt utilisée.
+function intakeSniff(text){
+  const first=String(text||'').replace(/^\ufeff/,'').replace(/\r\n?/g,'\n').split('\n').find(l=>l.trim())||'';
+  const delim=cmDetectDelim(first);
+  const heads=cmSplitLine(first,delim).map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase());
+  const hasKey=heads.includes('key');
+  const hasIdp=heads.some(h=>['idproduct','idproduct cm','cm'].includes(h));
+  return (hasKey&&hasIdp)?'idproduct':'cards';
+}
+function routeDroppedFile(text){
+  if(intakeSniff(text)==='idproduct'){ try{ cmParseAssign(text); }catch(e){ showToast('⚠ '+(e.message||e)); } }
+  else { setIntakeMode('cards'); processFile(text); }
+}
+// Mode UI : 'idproduct' masque les étapes 1-4 (write-back seul) ; 'cards' les réaffiche.
+// L'étape 5 reste toujours visible pour pouvoir basculer (pas de cul-de-sac).
+function setIntakeMode(mode){
+  ['step1','step2','step3','step4'].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display=(mode==='idproduct')?'none':''; });
+}
+
 document.getElementById('btnReset').addEventListener('click', () => {
+  setIntakeMode('cards');
   allRows = []; unknownSets = new Set(); lotPrices = {};
   highValuePrices = {}; highValueComplete = false;
   seriesResolved = false; pricesComplete = false;
@@ -2612,6 +2688,178 @@ document.getElementById('filterLang').addEventListener('change', renderTable);
 document.getElementById('mappingCount').textContent = Object.keys(MAPPING).length + ' séries';
 handleOAuthCallback();
 updateAuthUI();
+
+// ════════════════════════════════════════════════════════════
+// idProduct CardMarket — write-back vers la GSheet CENTRAL (v1.3.0)
+// Source : fichier « assignations_cm » exporté par tcg-integrator (colonnes Key + idProduct).
+// Cible : onglet des singles (SHEET_NAME). Colonnes localisées par ENTÊTE (repli D / L).
+// Aperçu OBLIGATOIRE (dry-run) → backup des valeurs actuelles (BACKUP_INJECTIONS) → écriture
+// par lots (values:batchUpdate) → journal (LOG_INJECTIONS). L'intégrateur reste en lecture seule.
+// Scellé (onglet stock_scelle, col « CM ») : à brancher dès qu'une source d'idProduct scellé
+// existera — le matching de l'intégrateur ne produit aujourd'hui que des singles.
+// ════════════════════════════════════════════════════════════
+const CM_KEY_HEADERS = ['key','clé','cle'];
+const CM_IDP_HEADERS = ['cm','idproduct','id product','idproduct cm','id_product','cardmarket'];
+const CM_KEY_FALLBACK_COL = 'D';
+const CM_IDP_FALLBACK_COL = 'L';
+let cmAssignRows = [];   // [{key, idProduct}]
+let cmPlan = null;       // résultat du dernier aperçu
+
+function cmColLetter(i){ let s='', n=Number(i); do{ s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; }while(n>=0); return s; }
+function cmColIndex(letters){ let n=0; for(const c of String(letters).toUpperCase()) n=n*26+(c.charCodeAt(0)-64); return n-1; }
+
+async function sheetsValuesBatchUpdate(data, spreadsheetId = GSHEET_ID){
+  const url=`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`;
+  const res=await fetch(url,{ method:'POST', headers:{ Authorization:`Bearer ${gAccessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify({ valueInputOption:'RAW', data }) });
+  if(!res.ok) throw new Error(`Sheets VALUES BATCH ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+function cmLog(type,msg){
+  const box=document.getElementById('cmLog');
+  if(box){ box.classList.remove('hidden'); const d=document.createElement('div'); d.className='log-'+type; d.textContent=msg; box.appendChild(d); box.scrollTop=box.scrollHeight; }
+  currentSessionLogs.push([new Date().toISOString(), currentInjectionId||'', type, msg]);
+}
+
+function cmReadFile(file){
+  const reader=new FileReader();
+  reader.onload=e=>routeDroppedFile(e.target.result);
+  reader.readAsText(file,'UTF-8');
+}
+function cmSplitLine(l,delim){ const out=[]; let cur='',q=false; for(let i=0;i<l.length;i++){ const c=l[i]; if(c==='"'){ if(q&&l[i+1]==='"'){ cur+='"'; i++; } else q=!q; } else if(c===delim&&!q){ out.push(cur); cur=''; } else cur+=c; } out.push(cur); return out; }
+function cmDetectDelim(headerLine){ return (headerLine.split(';').length>headerLine.split(',').length)?';':','; }
+function cmParseAssign(text){
+  // assignations_cm vient de l'intégrateur en « ; » (BOM) ; on reste agnostique au délimiteur.
+  const lines=String(text||'').replace(/^\ufeff/,'').replace(/\r\n?/g,'\n').trim().split('\n').filter(l=>l.trim());
+  if(!lines.length) throw new Error('CSV vide');
+  const delim=cmDetectDelim(lines[0]);
+  const headers=cmSplitLine(lines[0],delim).map(h=>h.replace(/^"|"$/g,'').trim());
+  const keyI=headers.findIndex(h=>h.toLowerCase()==='key');
+  const idpI=headers.findIndex(h=>['idproduct','idproduct cm','cm'].includes(h.toLowerCase()));
+  if(keyI<0||idpI<0) throw new Error('Colonnes « Key » et « idProduct » attendues dans le fichier');
+  const map=new Map(); let conflicts=0;
+  for(let i=1;i<lines.length;i++){ const v=cmSplitLine(lines[i],delim); const key=String(v[keyI]||'').trim(); const idp=String(v[idpI]||'').trim(); if(!key||!idp) continue; if(map.has(key)&&map.get(key)!==idp) conflicts++; map.set(key,idp); }
+  cmAssignRows=[...map.entries()].map(([key,idProduct])=>({key,idProduct}));
+  cmPlan=null;
+  setIntakeMode('idproduct');
+  document.getElementById('cmPanel').classList.remove('hidden');
+  document.getElementById('cmBtnWrite').disabled=true;
+  document.getElementById('cmTableBody').innerHTML='';
+  document.getElementById('cmSummary').innerHTML='';
+  document.getElementById('cmStatus').textContent=`${cmAssignRows.length} idProduct chargé(s)${conflicts?` · ⚠ ${conflicts} clé(s) en conflit (dernière gardée)`:''}. Lance l'aperçu.`;
+  unlockStep(5); goToStep(5);
+  showToast(`✓ ${cmAssignRows.length} assignation(s) chargée(s)`);
+}
+
+async function cmResolveTarget(){
+  const sheet=SHEET_NAME;                       // singles ; scellé : à brancher
+  const headerRow=await ensureCardHeaderRow();
+  const hr=await sheetsGet(a1(sheet, `A${headerRow}:AZ${headerRow}`));
+  const headers=(hr.values&&hr.values[0])?hr.values[0]:[];
+  const norm=s=>String(s||'').trim().toLowerCase();
+  const kIdx=headers.findIndex(h=>CM_KEY_HEADERS.includes(norm(h)));
+  const iIdx=headers.findIndex(h=>CM_IDP_HEADERS.includes(norm(h)));
+  const keyCol=kIdx>=0?kIdx:cmColIndex(CM_KEY_FALLBACK_COL);
+  const idpCol=iIdx>=0?iIdx:cmColIndex(CM_IDP_FALLBACK_COL);
+  return { sheet, headerRow, keyCol, idpCol,
+    keyLetter:cmColLetter(keyCol), idpLetter:cmColLetter(idpCol),
+    keyHeader:(headers[keyCol]||'').toString().trim(), idpHeader:(headers[idpCol]||'').toString().trim(),
+    keyByHeader:kIdx>=0, idpByHeader:iIdx>=0 };
+}
+
+async function cmPreview(){
+  if(!isAuthenticated()){ showToast('⚠ Connectez-vous à Google d\'abord'); return; }
+  if(!cmAssignRows.length){ showToast('⚠ Charge d\'abord le fichier assignations_cm'); return; }
+  const btn=document.getElementById('cmBtnPreview'); btn.disabled=true;
+  document.getElementById('cmStatus').textContent='Aperçu en cours…';
+  try{
+    const t=await cmResolveTarget();
+    const startRow=t.headerRow+1;
+    const [kd,idd]=await Promise.all([
+      sheetsGet(a1(t.sheet, `${t.keyLetter}${startRow}:${t.keyLetter}99999`)),
+      sheetsGet(a1(t.sheet, `${t.idpLetter}${startRow}:${t.idpLetter}99999`))
+    ]);
+    const skeys=(kd.values||[]).map(r=>String(r[0]||'').trim());
+    const sidps=(idd.values||[]);
+    const keyToRow=new Map(); let sheetDupKeys=0;
+    skeys.forEach((k,i)=>{ if(!k) return; if(keyToRow.has(k)){ sheetDupKeys++; return; } keyToRow.set(k,{ row:startRow+i, cur:String((sidps[i]&&sidps[i][0])||'').trim() }); });
+    const writes=[]; let toWrite=0, identical=0, overwrite=0, notFound=0;
+    for(const a of cmAssignRows){
+      const hit=keyToRow.get(a.key);
+      if(!hit){ notFound++; writes.push({key:a.key,newVal:a.idProduct,cur:'',row:null,kind:'introuvable'}); continue; }
+      if(hit.cur===a.idProduct){ identical++; writes.push({key:a.key,newVal:a.idProduct,cur:hit.cur,row:hit.row,kind:'identique'}); }
+      else if(hit.cur){ overwrite++; writes.push({key:a.key,newVal:a.idProduct,cur:hit.cur,row:hit.row,kind:'écrasement'}); }
+      else { toWrite++; writes.push({key:a.key,newVal:a.idProduct,cur:'',row:hit.row,kind:'écriture'}); }
+    }
+    cmPlan={ target:t, writes, stats:{toWrite,identical,overwrite,notFound,sheetDupKeys} };
+    cmRenderPlan();
+    const actionable=toWrite+overwrite;
+    document.getElementById('cmBtnWrite').disabled = actionable===0;
+    document.getElementById('cmStatus').textContent = actionable? `${actionable} à écrire — vérifie la cible puis écris.` : 'Rien à écrire (tout identique ou introuvable).';
+  }catch(e){ document.getElementById('cmStatus').textContent='✗ '+(e.message||e); showToast('✗ Aperçu : '+(e.message||e)); }
+  finally{ btn.disabled=false; }
+}
+
+function cmRenderPlan(){
+  const t=cmPlan.target, s=cmPlan.stats;
+  document.getElementById('cmSummary').innerHTML=
+     `<b>Cible</b> : onglet « ${esc(t.sheet)} » · entête ligne ${t.headerRow} · `
+    +`clé = col ${t.keyLetter}${t.keyByHeader?` « ${esc(t.keyHeader)} »`:' <span style="color:#fbbf24">(repli)</span>'} · `
+    +`idProduct → col ${t.idpLetter}${t.idpByHeader?` « ${esc(t.idpHeader)} »`:' <span style="color:#fbbf24">(repli — entête non trouvé, vérifie !)</span>'}<br>`
+    +`<b>Plan</b> : <span style="color:#4ade80">${s.toWrite} à écrire</span> · `
+    +`<span style="color:#fbbf24">${s.overwrite} écrasement(s)</span> · `
+    +`${s.identical} identique(s) (ignoré) · <span style="color:#ff6b6b">${s.notFound} clé(s) introuvable(s)</span>`
+    +(s.sheetDupKeys?` · ⚠ ${s.sheetDupKeys} clé(s) en double dans le stock (1ʳᵉ gardée)`:'');
+  const order={écrasement:0,'écriture':1,introuvable:2,identique:3};
+  const col={écriture:'#4ade80','écrasement':'#fbbf24',introuvable:'#ff6b6b',identique:'#9ca3af'};
+  const rows=[...cmPlan.writes].sort((a,b)=>order[a.kind]-order[b.kind]).slice(0,200);
+  document.getElementById('cmTableBody').innerHTML = rows.map(w=>
+    `<tr><td class="mono">${esc(w.key)}</td><td class="mono">${esc(w.newVal)}</td>`
+    +`<td class="mono" style="color:#9ca3af">${esc(w.cur||'—')}</td>`
+    +`<td class="mono" style="color:${col[w.kind]||'#9ca3af'}">${w.kind}</td>`
+    +`<td class="mono" style="color:#9ca3af">${w.row||'—'}</td></tr>`
+  ).join('') + (cmPlan.writes.length>200?`<tr><td colspan="5" class="mono" style="color:#9ca3af">… ${cmPlan.writes.length-200} ligne(s) de plus</td></tr>`:'');
+}
+
+async function cmWrite(){
+  if(!isAuthenticated()){ showToast('⚠ Connectez-vous à Google d\'abord'); return; }
+  if(!cmPlan){ showToast('⚠ Lance l\'aperçu d\'abord'); return; }
+  const s=cmPlan.stats, actionable=s.toWrite+s.overwrite;
+  if(!actionable){ showToast('Rien à écrire'); return; }
+  if(!confirm(`Écrire ${actionable} idProduct dans « ${cmPlan.target.sheet} » (col ${cmPlan.target.idpLetter})`+(s.overwrite?`, dont ${s.overwrite} écrasement(s)`:'')+` ?\n\nUn backup des valeurs actuelles sera créé au préalable.`)) return;
+  const btnW=document.getElementById('cmBtnWrite'), btnP=document.getElementById('cmBtnPreview');
+  btnW.disabled=true; btnP.disabled=true;
+  currentInjectionId=`IDP_${getTodayStr()}_${new Date().toTimeString().slice(0,8).replace(/:/g,'')}`;
+  document.getElementById('cmLog').innerHTML='';
+  cmLog('info',`── ÉCRITURE idProduct · ${currentInjectionId} ──`);
+  try{
+    const t=cmPlan.target;
+    const targets=cmPlan.writes.filter(w=>w.kind==='écriture'||w.kind==='écrasement');
+    const safetyId=await ensureSafetySheets();
+    const now=new Date().toISOString();
+    const backup=targets.map(w=>[now,currentInjectionId,'IDPRODUCT',t.sheet,String(w.row),w.key,'',JSON.stringify({col:t.idpLetter,old:w.cur,new:w.newVal})]);
+    if(backup.length){ await sheetsAppend(a1(BACKUP_SHEET_NAME,`A:H`),backup,safetyId); cmLog('ok',`✓ Backup créé (${backup.length} valeur(s)) dans ${BACKUP_SHEET_NAME}`); }
+    const data=targets.map(w=>({ range:a1(t.sheet, `${t.idpLetter}${w.row}`), values:[[w.newVal]] }));
+    const CHUNK=200; let done=0;
+    for(let i=0;i<data.length;i+=CHUNK){ const slice=data.slice(i,i+CHUNK); await sheetsValuesBatchUpdate(slice); done+=slice.length; cmLog('ok',`✓ ${done}/${data.length} écrit(s)`); }
+    await persistInjectionLogs();
+    cmLog('ok',`✓ Terminé : ${data.length} idProduct écrit(s) dans « ${t.sheet} » (col ${t.idpLetter}).`);
+    showToast(`✓ ${data.length} idProduct écrit(s)`);
+    cmPlan=null; await cmPreview();
+  }catch(e){ cmLog('err','✗ '+(e.message||e)); await persistInjectionLogs().catch(()=>{}); showToast('✗ Écriture : '+(e.message||e)); btnW.disabled=false; }
+  finally{ btnP.disabled=false; }
+}
+
+(function(){
+  const cz=document.getElementById('cmDropZone'), ci=document.getElementById('cmFileInput');
+  if(ci) ci.addEventListener('change', e=>{ if(e.target.files[0]) cmReadFile(e.target.files[0]); });
+  if(cz){
+    cz.addEventListener('dragover', e=>{ e.preventDefault(); cz.classList.add('drag-over'); });
+    cz.addEventListener('dragleave', ()=>cz.classList.remove('drag-over'));
+    cz.addEventListener('drop', e=>{ e.preventDefault(); cz.classList.remove('drag-over'); const f=e.dataTransfer.files[0]; if(f&&f.name.endsWith('.csv')) cmReadFile(f); else showToast('⚠ Fichier CSV requis'); });
+  }
+  setIntakeMode('cards');
+})();
 
 </script>
 </body>
