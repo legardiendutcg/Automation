@@ -2,10 +2,18 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.4.0 (Session #13 — 2026-06-06)
+  Version : 1.4.2 (Session #13 — 2026-06-06)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.4.2  2026-06-06  Session #13 — affichage de la version à l'écran (badge « vX.Y.Z » dans
+         l'en-tête, alimenté par la constante APP_VERSION), comme les autres apps du stack.
+  1.4.1  2026-06-06  Session #13 — fix auth (redirect_uri_mismatch). Migration de l'ancien flux
+         OAuth implicite (response_type=token + redirect_uri → bloqué par Google « Error 400 :
+         redirect_uri_mismatch ») vers le flux GIS token popup, identique à tcg-integrator.
+         Basé sur l'origine JS déjà autorisée → aucune modification de la console Google requise.
+         Ajout de la lib GIS + CSP (script-src/frame-src accounts.google.com) + rafraîchissement
+         de token automatique. Scope inchangé (spreadsheets, lecture-écriture).
   1.4.0  2026-06-06  Session #13 — auto-détection du format + fix parsing assignations.
          - [Fix 🔴] Lecture de assignations_cm : l'intégrateur exporte en « ; » (BOM) alors que
            parseCSV découpe sur « , » → l'onglet 5 ne lisait pas le fichier. Parsing désormais
@@ -95,7 +103,8 @@
 <meta charset="UTF-8">
 <!-- CSP (#23) — durcissement. ⚠️ À TESTER en navigateur avant prod (OAuth + scraping).
      Retrait = supprimer cette balise. frame-ancestors est ignoré en <meta> (nécessite un en-tête). -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://www.pokepedia.fr https://api.allorigins.win https://thingproxy.freeboard.io https://api.codetabs.com https://corsproxy.io; object-src 'none'; base-uri 'self';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://www.pokepedia.fr https://api.allorigins.win https://thingproxy.freeboard.io https://api.codetabs.com https://corsproxy.io; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self';">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TCG Intake</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -138,6 +147,7 @@ header { display:flex; align-items:center; justify-content:space-between; margin
 .logo h1 span { color:var(--accent); }
 .logo p { font-family:'Space Mono',monospace; font-size:.62rem; color:var(--muted); margin-top:6px; text-transform:uppercase; letter-spacing:.15em; }
 .header-right { display:flex; align-items:center; gap:12px; }
+.ver { font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted); border:1px solid var(--border); border-radius:20px; padding:6px 10px; }
 
 /* ── Auth badge ── */
 .auth-pill {
@@ -589,6 +599,7 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
       <p>TCG Power Tools → Google Sheets · by Cassius</p>
     </div>
     <div class="header-right">
+      <div class="ver" id="appVer"></div>
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
     </div>
   </header>
@@ -885,6 +896,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
+const APP_VERSION = '1.4.2';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';
@@ -914,6 +926,7 @@ let currentInjectionId = null;
 let currentSessionLogs = [];
 let gAccessToken = null;
 let gTokenExpiry = 0;
+let tokenClient=null, gisReady=false, refreshTimer=null, pendingInteractive=false, gUserEmail='', gUserName='';
 let _sheetId     = null;
 
 // ============================================================
@@ -1779,7 +1792,7 @@ function isAuthenticated() { return gAccessToken && Date.now() < gTokenExpiry; }
 function updateAuthUI() {
   const pill = document.getElementById('authPill');
   if (isAuthenticated()) {
-    pill.textContent = '● Google connecté';
+    pill.textContent = '● ' + (gUserName || 'Google connecté');
     pill.className = 'auth-pill connected';
   } else {
     pill.textContent = '🔑 Se connecter à Google';
@@ -1788,35 +1801,22 @@ function updateAuthUI() {
 }
 
 function toggleAuth() {
-  if (isAuthenticated()) { logout(); } else { launchOAuth(); }
+  if (isAuthenticated()) { logout(); } else { requestToken(true); }
 }
 
-function launchOAuth() {
-  const redirectUri = window.location.href.split('?')[0].split('#')[0];
-  const state = Math.random().toString(36).slice(2);
-  sessionStorage.setItem('oauth_state', state);
-  const params = new URLSearchParams({ client_id: OAUTH_CLIENT_ID, redirect_uri: redirectUri, response_type: 'token', scope: GSHEET_SCOPES, state, prompt: 'consent' });
-  window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
-}
-
-function handleOAuthCallback() {
-  const hash = window.location.hash.substring(1);
-  if (!hash.includes('access_token')) return;
-  const params = new URLSearchParams(hash);
-  const token = params.get('access_token');
-  const expiresIn = parseInt(params.get('expires_in') || '3600');
-  const state = params.get('state');
-  if (state !== sessionStorage.getItem('oauth_state')) return;
-  gAccessToken = token;
-  gTokenExpiry = Date.now() + expiresIn * 1000;
-  sessionStorage.removeItem('oauth_state');
-  window.history.replaceState({}, document.title, window.location.pathname);
-  updateAuthUI();
-  showToast('✓ Connecté à Google Sheets');
-}
+// ── Auth GIS (token popup), alignée sur tcg-integrator : basée sur l'origine JS autorisée,
+//    SANS redirect_uri (corrige le redirect_uri_mismatch de l'ancien flux implicite). ──
+function waitForGis(t=10000){ return new Promise((res,rej)=>{ if(window.google&&google.accounts&&google.accounts.oauth2) return res(); const t0=Date.now(); const iv=setInterval(()=>{ if(window.google&&google.accounts&&google.accounts.oauth2){clearInterval(iv);res();} else if(Date.now()-t0>t){clearInterval(iv);rej(new Error('GIS'));} },100); }); }
+async function initGisClient(){ try{ await waitForGis(); }catch(e){ showToast('⚠ Google Identity non chargé'); return; } tokenClient=google.accounts.oauth2.initTokenClient({ client_id:OAUTH_CLIENT_ID, scope:GSHEET_SCOPES+' https://www.googleapis.com/auth/userinfo.email profile', callback:onTokenResponse, error_callback:onAuthError }); gisReady=true; }
+function requestToken(i){ if(!gisReady||!tokenClient){ if(i) showToast('⚠ Auth pas prête (recharge la page)'); return; } pendingInteractive=i; try{ tokenClient.requestAccessToken({prompt:''}); }catch(e){ onAuthError({type:'request_failed'}); } }
+async function onTokenResponse(resp){ if(!resp||resp.error||!resp.access_token){ onAuthError(resp||{type:'no_token'}); return; } gAccessToken=resp.access_token; gTokenExpiry=Date.now()+(parseInt(resp.expires_in||'3600',10)*1000); scheduleTokenRefresh(); if(!gUserEmail) await fetchUserInfo(); updateAuthUI(); if(pendingInteractive) showToast('✓ Connecté · '+(gUserName||gUserEmail||'Google')); pendingInteractive=false; }
+function onAuthError(err){ const m=(err&&(err.type||err.error||err.message))||'inconnue'; if(m==='popup_failed_to_open') showToast('⚠ Popup bloquée — autorise les popups'); else if(pendingInteractive&&m!=='popup_closed') showToast('✗ Connexion : '+m); pendingInteractive=false; updateAuthUI(); }
+function scheduleTokenRefresh(){ if(refreshTimer) clearTimeout(refreshTimer); const d=Math.max(10000,gTokenExpiry-Date.now()-5*60*1000); refreshTimer=setTimeout(()=>{ if(gAccessToken) requestToken(false); },d); }
+async function fetchUserInfo(){ try{ const res=await fetch('https://www.googleapis.com/oauth2/v2/userinfo',{headers:{Authorization:'Bearer '+gAccessToken}}); const info=await res.json(); gUserEmail=info.email||''; gUserName=info.name||info.email||''; }catch(e){} }
 
 function logout() {
-  gAccessToken = null; gTokenExpiry = 0;
+  if(refreshTimer){ clearTimeout(refreshTimer); refreshTimer=null; }
+  gAccessToken = null; gTokenExpiry = 0; gUserEmail=''; gUserName='';
   updateAuthUI();
   showToast('Déconnecté de Google');
 }
@@ -2685,8 +2685,9 @@ document.getElementById('filterSerie').addEventListener('change', renderTable);
 document.getElementById('filterLang').addEventListener('change', renderTable);
 
 // Init
+document.getElementById('appVer').textContent = 'v' + APP_VERSION;
 document.getElementById('mappingCount').textContent = Object.keys(MAPPING).length + ' séries';
-handleOAuthCallback();
+initGisClient();
 updateAuthUI();
 
 // ════════════════════════════════════════════════════════════
