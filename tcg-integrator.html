@@ -4,6 +4,16 @@
   TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket)
   ────────────────────────────────────────────────────────────────────────────
   CHANGELOG
+  0.4.2  2026-06-06  UX matching : le pont série → extension n'est plus dans un panneau séparé.
+                     L'extension CM est désormais éditable directement dans la colonne de chaque
+                     carte (datalist, surcharge ponctuelle → applique à toute la série). Colonnes
+                     resserrées pour garder une carte par ligne. Code couleur : vert = résolu auto,
+                     bleu = surcharge, orange = ambigu / à relier (placeholder explicite).
+  0.4.1  2026-06-06  UX matching : les correspondances UNIQUES sont pré-remplies automatiquement
+                     à l'affichage (statut « ✓ auto »), sans clic de validation — toujours
+                     modifiables et vérifiables via la fiche CM. Un champ vidé à la main n'est
+                     pas re-rempli (autoCleared) ; le bouton « auto » ré-attribue tout, y compris
+                     les uniques précédemment vidés. Seules les collisions restent à choisir.
   0.4.0  2026-06-06  Second export : fichier d'import TCG PowerTools (→ « Publish to Cardmarket »).
                      Bouton « Exporter pour TCG PT » à côté de l'export assignations. Colonnes
                      Quantity (1/single) · Cardmarket ID (idProduct assigné) · Language · Condition ·
@@ -176,6 +186,11 @@ input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; curs
 .maprow input:focus { outline:none; border-color:var(--accent2); }
 .maprow input.ok { border-color:var(--success); }
 .idp { width:110px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--accent); font-family:'Space Mono',monospace; font-size:.74rem; padding:5px 7px; }
+.extcol { width:104px; background:var(--surface2); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:'Space Mono',monospace; font-size:.7rem; padding:5px 7px; }
+.extcol:focus { outline:none; border-color:var(--accent2); }
+.extcol.ok { border-color:var(--success); } .extcol.ov { border-color:var(--accent2); } .extcol.warn { border-color:var(--warning); }
+.extcol::placeholder { color:var(--warning); font-size:.62rem; }
+#matchView thead th, #matchView tbody td { padding-left:9px; padding-right:9px; }
 .idp:focus { outline:none; border-color:var(--accent2); }
 tbody tr.done td { background:rgba(74,222,128,.05); }
 .st { font-family:'Space Mono',monospace; font-size:.58rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; padding:3px 8px; border-radius:6px; white-space:nowrap; }
@@ -204,7 +219,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
     <div class="logo"><h1>TCG <span>INTEGRATOR</span></h1><p>Publication multi-canal → CardMarket · by Cassius</p></div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.4.0</div>
+      <div class="ver" id="ver">v0.4.2</div>
     </div>
   </header>
 
@@ -267,7 +282,6 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
         <button class="btn ghost" id="exportAssignBtn" onclick="exportAssign()">Exporter les assignations</button>
         <button class="btn ghost" id="exportPTBtn" onclick="exportPTUpload()">Exporter pour TCG PT (→ CM)</button>
       </div>
-      <div class="mapblock" id="mapBlock"></div>
       <datalist id="expDatalist"></datalist>
       <div class="table-wrap"><table><thead><tr>
         <th>Clé pont</th><th>Nom (FR · stock)</th><th>Extension CM</th><th>idProduct</th><th>Statut</th><th style="width:110px;"></th>
@@ -280,7 +294,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 <script>
 'use strict';
 // ═══════════ CONFIG ═══════════
-const APP_VERSION='0.4.0';
+const APP_VERSION='0.4.2';
 const OAUTH_CLIENT_ID='774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES='https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID='1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
@@ -515,6 +529,7 @@ let serieToCodes=new Map();     // code_série interne -> [{code, ns}] présents
 let bridgeOverride=new Map();    // "codeSerie|nomSerie" -> expansionCode (surcharge manuelle)
 let assign=new Map();           // cardId -> idProduct
 let assignMode=new Map();       // cardId -> 'auto' | 'manual'
+let autoCleared=new Set();      // cardId vidés manuellement → ne pas re-auto-remplir
 let openMatch=null, matchSearch=new Map();
 
 function isAuth(){ return gAccessToken && Date.now()<gTokenExpiry; }
@@ -580,7 +595,7 @@ async function loadStock(){
       cards.push({ key, origine:(row[3]||'').toString().trim(), codeSerie:(row[4]||'').toString().trim(), nomSerie:(row[5]||'').toString().trim(), name:(row[6]||'').toString().trim(), type:(row[7]||'').toString().trim(), etat:(row[8]||'').toString().trim(), langue:(langDataIdx>=0?(row[langDataIdx]||'').toString().trim():''), prix:parsePrix(row[14]), pa:parsePrix(row[19]) }); }
     parsedRows=cards.map(parseCard);
     selection.clear(); selectedOnly=false; document.getElementById('selOnly').checked=false;
-    assign.clear(); assignMode.clear(); bridgeOverride.clear();
+    assign.clear(); assignMode.clear(); bridgeOverride.clear(); autoCleared.clear();
     resetFilterState(); buildFilterOptions(); page=1; setView('select'); render();
     const g=parsedRows.filter(r=>r.game==='pokemon').length;
     setStatus(`Stock lu : ${parsedRows.length} cartes dispo (${g} Pokémon). En-tête ligne ${cardHeaderRow}.`);
@@ -702,43 +717,43 @@ function bridgeKeyOf(r){ return (r.codeSerie||'')+'|'+(r.nomSerie||''); }
 function effectiveCodes(r){ const o=bridgeOverride.get(bridgeKeyOf(r)); if(o) return [o]; return resolveSetCodes(r); }
 function numHitsCards(codes,nn){ const seen=new Set(),out=[]; for(const c of codes){ for(const rec of numHits(c,nn)){ if(!seen.has(rec.id)){ seen.add(rec.id); out.push(rec); } } } return out; }
 function setBridgeOverride(key,val){ const m=String(val||'').split(' — ')[0].trim(); if(m && catByCode.has(m)){ bridgeOverride.set(key,m); } else if(!String(val).trim()){ bridgeOverride.delete(key); } runAutoMatch(false); }
+function setBridgeOverrideForCard(id,val){ const r=parsedRows.find(x=>x._id===id); if(!r) return; setBridgeOverride(bridgeKeyOf(r),val); }
 
 function cardStatus(r){ if(assign.has(r._id)) return 'done'; const codes=effectiveCodes(r); if(!codes.length) return 'unmapped'; if(!r.numNorm) return 'none'; const h=numHitsCards(codes,r.numNorm); if(h.length===0) return 'none'; if(h.length===1) return 'auto1'; return 'collision'; }
-function runAutoMatch(toast){ if(!catLoaded){ showToast('Charge le catalogue d\'abord',true); return; } let n=0; for(const r of matchRowsList()){ if(assign.has(r._id)) continue; const codes=effectiveCodes(r); if(!codes.length||!r.numNorm) continue; const h=numHitsCards(codes,r.numNorm); if(h.length===1){ assign.set(r._id,h[0].id); assignMode.set(r._id,'auto'); n++; } } renderMatch(); if(toast) showToast(n?`✓ ${n} carte(s) auto-matchée(s)`:'Aucun nouvel auto-match'); }
+function runAutoMatch(toast){ if(!catLoaded){ showToast('Charge le catalogue d\'abord',true); return; } autoCleared.clear(); let n=0; for(const r of matchRowsList()){ if(assign.has(r._id)) continue; const codes=effectiveCodes(r); if(!codes.length||!r.numNorm) continue; const h=numHitsCards(codes,r.numNorm); if(h.length===1){ assign.set(r._id,h[0].id); assignMode.set(r._id,'auto'); n++; } } renderMatch(); if(toast) showToast(n?`✓ ${n} carte(s) (ré)auto-matchée(s)`:'Aucun nouvel auto-match'); }
 
 function renderMatch(){
   const body=document.getElementById('matchBody'), info=document.getElementById('matchInfo'), bar=document.getElementById('matchBar');
-  const exp=document.getElementById('exportAssignBtn'), auto=document.getElementById('autoBtn'), mapB=document.getElementById('mapBlock');
+  const exp=document.getElementById('exportAssignBtn'), auto=document.getElementById('autoBtn');
   const expPT=document.getElementById('exportPTBtn');
-  if(!catLoaded){ info.textContent='Catalogue CM non chargé (auto depuis le repo).'; bar.style.width='0'; exp.disabled=true; if(expPT)expPT.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Catalogue non chargé.</td></tr>'; return; }
+  if(!catLoaded){ info.textContent='Catalogue CM non chargé (auto depuis le repo).'; bar.style.width='0'; exp.disabled=true; if(expPT)expPT.disabled=true; auto.disabled=true; body.innerHTML='<tr><td colspan="6" class="empty">Catalogue non chargé.</td></tr>'; return; }
   const rows=matchRowsList();
-  if(!rows.length){ info.textContent='Sélectionne d\'abord des cartes (onglet Sélection).'; bar.style.width='0'; exp.disabled=true; if(expPT)expPT.disabled=true; auto.disabled=true; mapB.innerHTML=''; body.innerHTML='<tr><td colspan="6" class="empty">Aucune carte sélectionnée.</td></tr>'; return; }
+  if(!rows.length){ info.textContent='Sélectionne d\'abord des cartes (onglet Sélection).'; bar.style.width='0'; exp.disabled=true; if(expPT)expPT.disabled=true; auto.disabled=true; body.innerHTML='<tr><td colspan="6" class="empty">Aucune carte sélectionnée.</td></tr>'; return; }
   auto.disabled=false;
-  // récap AUTO du pont série → extension, groupé par (code_série · nom_série) ; surcharge ponctuelle possible
-  const groups=new Map();
-  for(const r of rows){ const k=bridgeKeyOf(r); let g=groups.get(k); if(!g){ g={cs:r.codeSerie,ns:r.nomSerie,n:0,sample:r}; groups.set(k,g); } g.n++; }
-  const gArr=[...groups.values()].sort((a,b)=> (a.cs||'').localeCompare(b.cs||'') || (a.ns||'').localeCompare(b.ns||''));
-  let okN=0,toFixN=0;
-  const mapRows=gArr.map(g=>{
-    const ovKey=g.cs+'|'+g.ns, ov=bridgeOverride.get(ovKey); const codes=ov?[ov]:resolveSetCodes(g.sample);
-    const resolved=codes.length===1; if(resolved) okN++; else toFixN++;
-    const codeTxt = resolved ? `${esc(codes[0])} — ${esc(expName(codes[0]))}` : (codes.length>1?`<span class="dim">ambigu : ${codes.map(esc).join(' / ')}</span>`:'<span class="dim">non relié (promo / hors catalogue)</span>');
-    const val = (resolved&&!ov)?'' : (ov?`${ov} — ${expName(ov)}`:'');
-    return `<div class="maprow"><span class="ms">${esc(g.cs||'?')}${g.ns?' · '+esc(g.ns):''}</span><span class="cnt">${g.n} carte(s)</span>`
-      + `<span class="mono dim" style="min-width:160px">${resolved&&!ov?'✓ auto · ':''}${ov?'✎ surcharge · ':''}${codeTxt}</span>`
-      + `<input list="expDatalist" class="${resolved?'ok':''}" placeholder="surcharger l'extension CM…" value="${esc(val)}" onchange="setBridgeOverride('${esc(ovKey)}',this.value)"></div>`;
-  }).join('');
-  mapB.innerHTML=`<h3>Pont série → extension CardMarket <span class="dim" style="font-weight:400">— auto ; surcharge si besoin (${okN} résolue(s)${toFixN?`, ${toFixN} à vérifier`:''})</span></h3>`+mapRows;
+  // Pré-remplissage AUTO des correspondances UNIQUES (haute confiance) : affichées directement,
+  // toujours modifiables et vérifiables (fiche CM). Respecte les champs vidés (autoCleared) et
+  // n'écrase jamais une saisie existante. Les collisions restent à choisir manuellement.
+  for(const r of rows){
+    if(assign.has(r._id)||autoCleared.has(r._id)||!r.numNorm) continue;
+    const codes=effectiveCodes(r); if(!codes.length) continue;
+    const hh=numHitsCards(codes,r.numNorm);
+    if(hh.length===1){ assign.set(r._id,hh[0].id); assignMode.set(r._id,'auto'); }
+  }
   const done=rows.filter(r=>assign.has(r._id)).length;
   info.textContent=`${done} / ${rows.length} assignées`; bar.style.width=(rows.length?Math.round(100*done/rows.length):0)+'%'; exp.disabled=(done===0); if(expPT)expPT.disabled=(done===0);
   const stLabel={done:['done','✓ assigné'],collision:['collision','⚠ collision'],none:['none','non trouvé'],unmapped:['unmapped','à relier'],auto1:['done','✓ unique']};
   const h=[];
   for(const r of rows){
-    const st=cardStatus(r); const [sc,sl]=stLabel[st]||['none','?']; const codes=effectiveCodes(r); const idp=assign.get(r._id)||''; const open=openMatch===r._id;
-    const codeCell = codes.length? (esc(codes.join(' / '))+(codes.length===1?' — '+esc(expName(codes[0])):'')) : '<span class="dim">à relier</span>';
+    const st=cardStatus(r); let [sc,sl]=stLabel[st]||['none','?']; if(st==='done') sl=(assignMode.get(r._id)==='auto')?'✓ auto':'✓ assigné'; const codes=effectiveCodes(r); const idp=assign.get(r._id)||''; const open=openMatch===r._id;
+    const ov=bridgeOverride.get(bridgeKeyOf(r));
+    let extVal='',extPh='',extTitle='',extCls='';
+    if(codes.length===1){ extVal=codes[0]; extTitle=codes[0]+' — '+expName(codes[0]); extCls=ov?'ov':'ok'; }
+    else if(codes.length>1){ extPh='ambigu : '+codes.join(' / '); extCls='warn'; }
+    else { extPh='à relier…'; extCls='warn'; }
+    const extInput=`<input class="extcol ${extCls}" list="expDatalist" value="${esc(extVal)}" placeholder="${esc(extPh)}" title="${esc(extTitle)}" onchange="setBridgeOverrideForCard(${r._id},this.value)">`;
     h.push(`<tr class="${idp?'done':''}" data-mid="${r._id}">
       <td class="key">${esc(r.bridgeKey||'—')}</td><td>${esc(r.raw)}</td>
-      <td class="mono dim">${codeCell}</td>
+      <td>${extInput}</td>
       <td><input class="idp" value="${esc(idp)}" placeholder="idProduct" onchange="assignManual(${r._id},this.value)"></td>
       <td><span class="st ${sc}">${sl}</span></td>
       <td><button class="pgbtn" onclick="toggleMatchSearch(${r._id})">${open?'Fermer':(st==='collision'?'⚖ choisir':'🔍')}</button></td>
@@ -801,8 +816,8 @@ function renderCandidates(id){
   box.innerHTML=html;
   hydrateCmThumbs(box);
 }
-function assignFromCandidate(id,idProduct,code){ assign.set(id,String(idProduct)); assignMode.set(id,'manual'); const card=parsedRows.find(r=>r._id===id); if(card&&code&&catByCode.has(code)){ const k=bridgeKeyOf(card); if(!bridgeOverride.has(k)&&!resolveSetCodes(card).includes(code)) bridgeOverride.set(k,code); } openMatch=null; renderMatch(); showToast('✓ idProduct '+idProduct+' assigné'); }
-function assignManual(id,val){ val=String(val||'').trim(); if(!val){ assign.delete(id); assignMode.delete(id); } else { assign.set(id,val); assignMode.set(id,'manual'); } renderMatch(); }
+function assignFromCandidate(id,idProduct,code){ assign.set(id,String(idProduct)); assignMode.set(id,'manual'); autoCleared.delete(id); const card=parsedRows.find(r=>r._id===id); if(card&&code&&catByCode.has(code)){ const k=bridgeKeyOf(card); if(!bridgeOverride.has(k)&&!resolveSetCodes(card).includes(code)) bridgeOverride.set(k,code); } openMatch=null; renderMatch(); showToast('✓ idProduct '+idProduct+' assigné'); }
+function assignManual(id,val){ val=String(val||'').trim(); if(!val){ assign.delete(id); assignMode.delete(id); autoCleared.add(id); } else { assign.set(id,val); assignMode.set(id,'manual'); autoCleared.delete(id); } renderMatch(); }
 function exportAssign(){ const rows=matchRowsList().filter(r=>assign.has(r._id)); if(!rows.length){ showToast('Aucune assignation',true); return; } download(csv(['Key','ClePont','CodeSerie','NomFR','Rarete','Etat','Prix','ExpansionCode','idProduct','Mode'], rows.map(r=>{ const c=effectiveCodes(r); return [r.key,r.bridgeKey||'',r.codeSerie,r.raw,r.type,r.etat,r.prix==null?'':r.prix.toFixed(2),c.length===1?c[0]:c.join('|'),assign.get(r._id),assignMode.get(r._id)||'']; })),'assignations_cm'); showToast(`✓ ${rows.length} assignation(s) exportée(s)`); }
 // Fichier d'import TCG PowerTools (→ « Publish to Cardmarket »). Langue & état recopiés tels quels
 // depuis CENTRAL (ils viennent de TCG PT à l'origine → réacceptés sans mapping). Quantité = 1 par single.
