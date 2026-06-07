@@ -4,6 +4,13 @@
   TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket)
   ────────────────────────────────────────────────────────────────────────────
   CHANGELOG
+  0.3.2  2026-06-06  Vignette CM DÉSACTIVÉE par défaut (CM_IMG_PROXIES=[]). Diagnostic terrain :
+                     les proxies publics sont bloqués par CORS (pas d'Access-Control-Allow-Origin)
+                     et/ou CM leur renvoie un mur Cloudflare/cookies sans og:image → la vignette ne
+                     peut pas fonctionner via proxy public. On revient au lien « fiche CM » seul (UI
+                     propre, ni ⏳ ni ∅). Toute la mécanique reste en place : renseigner un proxy
+                     maîtrisé ou le gateway #25 dans CM_IMG_PROXIES la réactive. connect-src réduit
+                     à Google (proxies retirés).
   0.3.1  2026-06-06  Vignette CM : robustesse. Chaîne de proxies de secours essayés dans l'ordre
                      (codetabs → allorigins/raw → allorigins/get) au lieu d'un seul, car les
                      proxies publics sont capricieux et CM peut renvoyer un mur Cloudflare/cookies
@@ -54,7 +61,7 @@
 -->
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com https://api.allorigins.win https://api.codetabs.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TCG Integrator</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -190,7 +197,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
     <div class="logo"><h1>TCG <span>INTEGRATOR</span></h1><p>Publication multi-canal → CardMarket · by Cassius</p></div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
-      <div class="ver" id="ver">v0.3.1</div>
+      <div class="ver" id="ver">v0.3.2</div>
     </div>
   </header>
 
@@ -265,22 +272,20 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 <script>
 'use strict';
 // ═══════════ CONFIG ═══════════
-const APP_VERSION='0.3.1';
+const APP_VERSION='0.3.2';
 const OAUTH_CLIENT_ID='774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES='https://www.googleapis.com/auth/spreadsheets.readonly';
 const CENTRAL_GSHEET_ID='1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_CARDS='cartes_stock_et_transactions';
 const CATALOGUE_URL='./cm-catalogue.csv';   // déposé à côté de l'app dans le repo (même origine → CSP OK)
-// Proxies CORS pour lire la page produit CardMarket et en extraire l'og:image (vignette de désambiguïsation).
-// Le navigateur ne peut pas lire cardmarket.com en cross-origin ; on passe par un proxy. {url} = URL cible encodée.
-// Liste essayée dans l'ordre jusqu'à obtenir une image (les proxies publics sont capricieux et CM peut
-// renvoyer un mur Cloudflare/cookies). Remplaçable par ton propre proxy / le gateway Apps Script (#25).
-// Tableau vide [] pour désactiver la vignette. Diagnostic en console (préfixe « [CM thumb] »).
-const CM_IMG_PROXIES=[
-  'https://api.codetabs.com/v1/proxy/?quest={url}',
-  'https://api.allorigins.win/raw?url={url}',
-  'https://api.allorigins.win/get?url={url}'
-];
+// Proxies CORS pour récupérer la vignette (og:image de la fiche CM). DÉSACTIVÉ par défaut ([]) :
+// les proxies publics testés sont soit bloqués par CORS (pas d'en-tête Access-Control-Allow-Origin),
+// soit reçoivent de CardMarket un mur Cloudflare/cookies sans og:image — la vignette ne peut donc pas
+// fonctionner de façon fiable via un proxy public. Pour réactiver : mettre ici un proxy que TU contrôles
+// (ou, à terme, le gateway Apps Script #25 qui lira la page côté serveur, sans CORS). {url} = URL cible
+// encodée ; les entrées sont essayées dans l'ordre. Exemple : 'https://ton-proxy.example/fetch?url={url}'.
+// La mécanique (chaîne, état ⏳/∅, cache, logs « [CM thumb] ») est conservée pour réactivation immédiate.
+const CM_IMG_PROXIES=[];
 const CM_THUMB_MAX=8;   // plafond de vignettes hydratées par panneau (protège les proxies ; collisions = 2-3 candidats)
 // Pont série → extension CardMarket (copie « slim » du MAPPING de tcg-intake.html,
 // source de vérité ; corrigée en 0.2.3 : LG→LC, UL=Déchaînement, UD=Indomptable, CL2 retiré.
@@ -769,7 +774,7 @@ async function loadCmThumb(el){
 }
 function hydrateCmThumbs(box){ if(!box) return; [...box.querySelectorAll('img.cmthumb[data-cmid]')].slice(0,CM_THUMB_MAX).forEach(loadCmThumb); }
 
-function candRow(id,rec){ return `<div class="cand"><span class="cmthumb-ph" data-cmph="${esc(rec.id)}" title="chargement de la vignette…">⏳</span><img class="cmthumb" data-cmid="${esc(rec.id)}" alt="" style="display:none" loading="lazy"><span class="cn">${esc(rec.name)}</span><span class="cnum">n°${esc(rec.num||'?')}</span><span class="crar">${esc(rec.rarity||'')}</span><span class="ce">${esc(rec.code)} — ${esc(rec.exp||expName(rec.code))}</span><span class="cid">id ${esc(rec.id)}</span><a class="cmlink" href="https://www.cardmarket.com/en/Pokemon/Products?idProduct=${encodeURIComponent(rec.id)}" target="_blank" rel="noopener noreferrer" title="Ouvrir la fiche CardMarket de cet idProduct (vérifier la variante)">fiche CM ↗</a><button onclick="assignFromCandidate(${id},'${esc(rec.id)}','${esc(rec.code)}')">Assigner</button></div>`; }
+function candRow(id,rec){ const thumb=(CM_IMG_PROXIES&&CM_IMG_PROXIES.length)?`<span class="cmthumb-ph" data-cmph="${esc(rec.id)}" title="chargement de la vignette…">⏳</span><img class="cmthumb" data-cmid="${esc(rec.id)}" alt="" style="display:none" loading="lazy">`:''; return `<div class="cand">${thumb}<span class="cn">${esc(rec.name)}</span><span class="cnum">n°${esc(rec.num||'?')}</span><span class="crar">${esc(rec.rarity||'')}</span><span class="ce">${esc(rec.code)} — ${esc(rec.exp||expName(rec.code))}</span><span class="cid">id ${esc(rec.id)}</span><a class="cmlink" href="https://www.cardmarket.com/en/Pokemon/Products?idProduct=${encodeURIComponent(rec.id)}" target="_blank" rel="noopener noreferrer" title="Ouvrir la fiche CardMarket de cet idProduct (vérifier la variante)">fiche CM ↗</a><button onclick="assignFromCandidate(${id},'${esc(rec.id)}','${esc(rec.code)}')">Assigner</button></div>`; }
 function renderCandidates(id){
   const box=document.getElementById('cand-'+id); if(!box) return; const card=parsedRows.find(r=>r._id===id); if(!card) return;
   const codes=effectiveCodes(card); const term=normCat(matchSearch.get(id)||'');
