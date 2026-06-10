@@ -1,59 +1,81 @@
 # Contexte Projet — Le Gardien du TCG
 > Document à coller en premier message dans chaque nouvelle session Claude.
-> Dernière mise à jour : **04/06/2026 — tcg-integrator v0.1.0 livré** · **Versions actuelles : Sales 1.14.0 / Master 1.14.0 (roll-back de vente, #27) / Intake 1.2.1 (ex-`tcg-converter`) / Integrator 0.1.0 (NOUVEAU)**
-> · **Cadrage CardMarket approfondi + ossature multi-canal — 04/06/2026** (voir **§6bis**)
->
-> 🔁 **Renommage acté (04/06/2026) :** `tcg-converter.html` → **`tcg-intake.html`** (titre interne « TCG Intake », logo « TCG INT » conservé). Le nom **« TCG Integrator » est désormais réservé à la NOUVELLE app de publication `tcg-integrator`** (sortie multi-canal — voir §6bis). Les apps du projet sont donc : **Sales** (vendeurs), **Master** (gérant), **Intake** (entrée de stock, ex-converter), **Integrator** (sortie/publication vers canaux — à construire).
->
-> ⚠️ **Lecture prioritaire — Session #13 : 3 jalons coordonnés livrés** (1.12.0 auth GIS · 1.13.0 vidage panier + durcissement auth + panneau comptoir · 1.14.0 roll-back de vente #27), **tous `node --check` OK mais AUCUN testé en navigateur.** 👉 **Checklist de test navigateur complète en fin de §0** (à faire avant prod ; déployer **Sales 1.14.0 + Master 1.14.0 ENSEMBLE**, Ctrl+Shift+R). Détails dans « ## 5. État Actuel — Session #13 ».
->
-> 🎯 **Priorité du moment — construire `tcg-integrator` (publication multi-canal), CardMarket en premier.** Cadrage technique approfondi le 04/06/2026 sur fichiers réels (catalogue CM 70 144 singles + export stock 4 095 cartes dispo). **Découverte structurante : stock en FRANÇAIS vs catalogue CM en ANGLAIS → 75,7 % des cartes Pokémon ne matchent PAS par nom seul.** Le pont retenu = **série interne + numéro de collection → Poképédia/TCGdex (multilingue, indexé numéro) → nom EN → `idProduct` CM.** 👉 **Détail complet en §6bis.** *(Le backlog Sales/Master/Intake reste en pause — cf. §5.)*
+> **Dernière mise à jour : 10/06/2026 — session #21** · **Versions actuelles : Sales 1.15.0 / Master 1.16.0 / Intake 1.4.4 / Integrator 0.4.2**
 
 ---
 
-## 0. Instructions pour Claude
+## 0. Instructions permanentes pour Claude
 
-- **Tout au long de la discussion** : mettre à jour ce document en arrière-plan au fil des avancées — ajouter les nouveaux milestones complétés, les nouvelles idées de développement à garder pour plus tard, et retirer du backlog les améliorations sur lesquelles on a travaillé et validées.
+- **Tout au long de la discussion** : mettre à jour ce document en arrière-plan au fil des avancées — ajouter les nouveaux milestones complétés et les nouvelles idées à garder pour plus tard, retirer du backlog les améliorations validées.
+- **Au début de chaque nouvelle discussion** : lire les fichiers HTML (`tcg-sales.html`, `tcg-master.html`, `tcg-intake.html`, `tcg-integrator.html`) pour assimiler l'intégralité du code, puis faire une passe de revue systématique — triple-check à la recherche de bugs, repérage des incohérences et du code mort, analyse des opportunités d'amélioration de **performance** (en convention/événement, la **réactivité** est critique). Remonter les trouvailles avant de coder.
+- **En début de chaque session**, lorsqu'une étape de développement est identifiée : indiquer quel modèle Claude est le plus adapté (Haiku / Sonnet / Opus) avec une justification courte.
+- **À chaque livraison de fichier** : bumper systématiquement la version avant de présenter le fichier. Ne jamais livrer deux fichiers successifs avec le même numéro. Quand deux apps sont modifiées ensemble pour une même fonctionnalité, elles partagent le même numéro (mapping cohérent Sales↔Master). **Règle de versioning** : **patch** (x.x.+1) = fix mineur / UX / cosmétique · **minor** (x.+1.0) = nouvelle feature ou fix fonctionnel significatif · **major** (+1.0.0) = refonte d'architecture ou breaking change.
+- **À la fin de chaque session, AVANT de mettre à jour ce document** : toujours demander **de quel numéro de session** il s'agissait.
 - **Quand il est opportun d'ouvrir une nouvelle discussion** (contexte trop long, session de travail cohérente terminée) : prévenir, mettre à jour ce document une dernière fois, puis proposer de basculer.
-- **En début de chaque session**, lorsqu'une étape du développement est identifiée : indiquer quel modèle Claude est le plus adapté pour cette étape (Haiku / Sonnet / Opus) avec une justification courte.
-- **Au début de chaque nouvelle discussion** : lire les 3 fichiers HTML (`tcg-sales.html`, `tcg-master.html`, `tcg-intake.html`) pour assimiler l'intégralité du code, puis faire une passe de revue systématique — triple-check à la recherche de bugs, repérage des incohérences et du code/variables devenus inutiles (code mort), et analyse des opportunités d'amélioration de **performance** (en convention/événement, la **réactivité** est critique). Remonter les trouvailles avant de coder.
-- **À chaque livraison de fichier** : bumper systématiquement la version (patch/minor/major selon le changement) avant de présenter le fichier. Ne jamais livrer deux fichiers successifs avec le même numéro de version. Quand les deux apps sont modifiées ensemble, elles partagent le même numéro de version pour garder un mapping cohérent entre Sales et Master.
-- **Bilan de la session #9** : revue de **sécurité** des 3 apps (OWASP 2025 + doc « Quand l'application grandit »), puis correctifs validés.
-  - **Intake 1.1.0** : ajout `esc()` (corrige XSS DOM via CSV/scraping) + `safeForSheets()` (corrige injection de formules) ; **+ correction du renommage onglet** `cartes_stock_et_transactions` (priorité #9.1 — il cassait dessus).
-  - **Option 1 (Master 1.9.0 + Sales 1.9.0)** : Master publie une vue stock **sûre** (`STOCK_PUBLIC` dans EVENTS, sans coûts/marges) ; Sales lit le stock de là et **n'accède plus du tout à CENTRAL** → les vendeurs n'ont plus besoin d'accès à CENTRAL (marges jamais exposées). Confirmé : 2 GSheets en « Restreint ».
-  - ⚠️ **Versioning** : l'Option 1 ayant modifié Sales **et** Master ensemble, ils partagent **1.9.0** (réalignement des pistes). Du coup **l'auth GIS, qui visait 1.9.0, glisse en `1.10.0`.** Versions à jour : **Sales 1.9.0 / Master 1.9.0 / Intake 1.1.0**.
-  - ✅ **Test E2E #9 concluant** : Option 1 validée de bout en bout (Master 1.9.0 publie `STOCK_PUBLIC`, Sales 1.9.0 lit le stock sans accès CENTRAL, ventes carte + scellé, sync Master) **jusqu'à la clôture d'événement** 🏁 (archive + **vidage des buffers** `ventes_detail`/`anomalies`) — la clôture était en attente depuis #8, elle est désormais validée. **Option 1 prête à la mise en ligne.**
-- **Au début de la prochaine session** :
-  - **Priorité 1 — auth Google Identity Services (v1.12.0, Sales + Master)** : fin de la déconnexion ~1 h ; jeton en mémoire seule (plus en `localStorage`). ⚠️ Config GCP : origine `https://legardiendutcg.github.io`. *(couvre R4 ; recalé de 1.10.0 → 1.11.0 → 1.12.0, les minors étant consommés par les paliers #11 et #18.)*
-  - **Priorité 2 — module commun `tcg-common.js`** (#24) : extraire les helpers dupliqués (`esc`, `safeForSheets`, `a1`, formateurs, `HttpError`…) dans un fichier partagé. ⚠️ **Décision à valider** : passe de **3 fichiers autonomes à 4 fichiers interdépendants** (le commun doit être déployé à côté). Diff des 3 copies de chaque helper avant fusion + re-test navigateur. *(Distinct de l'Option 3, qui est de la sécurité, pas du rangement.)*
-  - **Priorité 3 — passe Master (suite)** : colonnes cartes dynamiques côté **écriture** (#19) ; refonte **centimes** entiers complète (#20, le gros reste après l'acompte #10).
-  - **Priorité 4 — roll-back de vente (Sales + Master, jalon coordonné, #27)** : écriture compensatoire append-only (`txId` `-RB`, négatifs) ; **spécifier Master d'abord**.
-  - **Puis** : cartes gradées / articles manuels ; **Option 3 — passerelle Apps Script** (#25, gros chantier d'architecture, **à faire APRÈS l'auth GIS** car ils interagissent) ; R5 (scope `drive.file`+Picker) ; SRI (seulement si un jour une lib via CDN).
-  - 🧪 **À TESTER EN NAVIGATEUR — livraisons Session #13 (RIEN n'a encore été testé)** · *déployer Sales 1.14.0 + Master 1.14.0 ENSEMBLE, Ctrl+Shift+R* :
-    - **A. Auth GIS + CSP (1.12.0)** — (1) connexion Google sur **Sales** (tap pastille G) + une **vente réelle** ; (2) connexion **Master** + un **tick de sync réel** ; (3) **console F12 = AUCUN blocage CSP** (`script-src`/`frame-src accounts.google.com`) ; (4) **reload** → la popup ne s'auto-déclenche plus, connexion **au tap** ; (5) **app ouverte > 1 h** → **refresh silencieux**, pas de déconnexion ni popup intempestive ; (6) **popup bloquée** → message actionnable, pas d'échec silencieux ; (7) **Master compte non autorisé** → « accès refusé » + « Changer de compte ».
-    - **B. Panier (1.13.0)** — (8) reload **< 30 min** → panier restauré, **> 30 min** → vide ; (9) **nouvelle version** déployée → panier vidé au reload ; (10) **changer le nom d'event** côté Master pendant qu'un panier est rempli → panier **vidé** (snapshot 60 s restaurable) ; (11) **logout** → panier vide.
-    - **C. Panneau comptoir Master (1.13.0)** — (12) Master **AVEC** nom d'event → « Faits marquants » ; **effacer** le nom d'event → « 🏠 Récap comptoir » + **swipe** Articles du jour ⇄ Clients du jour (points cliquables).
-    - **D. Roll-back (1.14.0)** — (13) **vente carte** → ↶ → carte de nouveau dispo, **Q = prix listé d'origine** (PAS le prix remisé), AF « pas vendu » ; (14) **vente scellée** → ↶ → ligne de transaction **supprimée** + **qty du lot remontée** ; (15) **↶ AVANT sync Master** → **paire neutralisée**, CENTRAL intact (anomalies `RB_CANCELLED`, **pas** de `ROLLBACK_APPLIED`) ; (16) **même article scellé vendu 2×** au même event dont **une remisée** → annuler la remisée → la **BONNE ligne** part (txId estampillé en `AA`) ; (17) **confirmer que la colonne `AA`** de `Scelle_Transactions` n'est pas lue par la compta (sinon changer la constante `SEALED_TX_TXID_COL`).
-    - **E. Reliquats #12 (jamais testés)** — (18) **dédup txId** : dupliquer une ligne `ventes_detail` (même txId+clé) → `DUP_SKIPPED` + anomalie `DUPLICATE_TXID` ; (19) **acheteur imposé** : event rempli → champ verrouillé pour tous, vide → champ libre obligatoire ; (20) **Intake 1.2.1** : un import test écrit bien dans `cartes_stock_et_transactions` ; (21) **verrou 2 appareils** : Master sur 2 appareils → lease/TTL, « Forcer la reprise », anti-ping-pong.
-  - 🔧 **Hardening recommandé (n'affecte pas le fonctionnement)** : protéger l'onglet `STOCK_PUBLIC` (Données > Protéger → seul le propriétaire édite) et ajouter les vendeurs avec leur **propre compte Google** (Éditeur EVENTS, aucun accès CENTRAL) plutôt qu'un login master partagé.
-- 🧪🏠 **Test de simulation maison — samedi 13 juin 2026 (répétition générale, AVANT conditions réelles)** :
-  - **Cadre** : test « pour du beurre » à domicile avec **2 amis** → **3 appareils, plusieurs vendeurs connectés en même temps**, **ventes fictives**, sur un **fichier de stock DÉDIÉ** (surtout PAS la GSheet officielle dont dépend toute l'activité) → on peut tout casser sans risque. Objectif : éprouver le **process complet** en conditions réalistes et se mettre volontairement dans un maximum de situations différentes. **C'est de fait la première validation navigateur des livraisons #13** (checklist A–E ci-dessus) → s'appuyer dessus.
-  - **Prérequis & smoke-test** : base EVENTS nette (`ventes_detail` + `anomalies` vidés, `STOCK_PUBLIC` à jour via un refresh cache Master, `app_state` prêt) ; **déployer Sales 1.14.0 + Master 1.14.0 ENSEMBLE** ; **la veille ou le matin** (à froid) : connexion Google **au tap** sur chacun des 3 appareils + une première vente simple qui atterrit, après `Ctrl+Shift+R`. Si ça passe sur les 3 téléphones, le gros du risque #13 est levé avant l'arrivée des testeurs.
-  - **⚠️ À NE PAS prendre pour des bugs (conflits attendus)** : le stock vendeur vient du cache `STOCK_PUBLIC`, rafraîchi seulement quand Master republie (~5 min, ou après un roll-back). Donc 2 vendeurs **peuvent** scanner la même carte unique / le même dernier scellé depuis leurs caches respectifs ; c'est **le Master qui tranche à la sync** (1er gagne, le perdant tombe en anomalie `P_NON_BLANK` pour une carte / `SEALED_OVERDRAW` pour un scellé). **Comportement anti-survente voulu** → à provoquer exprès, c'est le meilleur test du filet anti-doublon.
-  - **Scénarios à provoquer délibérément** (couvrent pile A–E) :
-    - **Conflits concurrents** — 2 vendeurs vendent la même carte unique ; 2 vendeurs vident la dernière unité d'un même scellé → on doit voir **1 vente OK + 1 anomalie visible** côté Master.
-    - **Roll-back, ses 4 états** — ↶ **AVANT** sync Master (paire neutralisée, `RB_CANCELLED`, CENTRAL intact, **pas** de `ROLLBACK_APPLIED`) ET ↶ **APRÈS** sync (inversion réelle, `ROLLBACK_APPLIED`, article de nouveau vendable) ; **une fois carte, une fois scellé** → valide aussi l'estampille txId en col `AA`. *(items 13–16)*
-    - **Verrou d'instance** — ouvrir le Master sur **2 appareils** → le 2nd passe en lecture seule + overlay, « Forcer la reprise » bascule proprement (piège classique : dashboard ouvert sur téléphone *et* iPad). *(item 21)*
-    - **Cycle de vie panier + acheteur** — logout → panier vidé ; changer/effacer le nom d'event pendant un panier rempli → panier **vidé** (snapshot 60 s restaurable) ; tester les **deux modes** : event rempli (acheteur **imposé**, identique aux 3) **vs** event vide (chacun saisit son client + panneau **« 🏠 Récap comptoir »** au lieu des « Faits marquants »). *(items 8–12, 19)*
-    - **Réseau dégradé** — couper le wifi d'un téléphone en pleine vente → la vente part en **file offline** et se **flushe au retour**, **sans perte ni doublon** (relecture par txId pour le cas « envoyé mais réponse perdue »).
-  - **Convention réelle (1res vraies ventes) prévue les 21 et 22 juin 2026** → le 13 juin est la répétition générale ; tout 🔴/🟠 **bloquant** repéré le 13 doit être corrigé dans la fenêtre du 14 au 20 juin.
-  - **Priorité produit actuelle** : les améliorations restantes (priorités 2–4 ci-dessus, refactor perf `applySealedSale`, bug cosmétique de l'icône du journal des ventes #18/#27, code mort) sont **EN PAUSE** au profit de l'**ouverture du canal CardMarket** (canal de lancement : 3 % frais pro, audience EU dominante). Le dev reprendra après le lancement et/ou selon les retours du test du 13 juin.
-- **Vigilance sur les caracteres speciaux** lors du traitement de donnees provenant des Google Sheets (locale belge) : les virgules (separateur decimal vs separateur de milliers), les apostrophes (droite ' U+0027 vs courbe ' U+2019 que Google Sheets insere souvent automatiquement), et les accents (e/E vs e/E, etc.) sont des sources frequentes de bugs silencieux (find() qui renvoie -1, parseFloat qui interprete mal le format, etc.). Toujours considerer ces cas lors des comparaisons de strings ou du parsing de nombres.
-- Ces instructions permanentes s'appliquent automatiquement dans chaque session — inutile de les rappeler.
+- **Vigilance caractères spéciaux** (locale belge) lors du traitement des données Google Sheets : virgules (séparateur décimal vs milliers), apostrophes (droite `'` U+0027 vs courbe `'` U+2019 insérée souvent par Sheets), accents — sources fréquentes de bugs silencieux (`find()` qui renvoie -1, `parseFloat` qui interprète mal). Toujours considérer ces cas lors des comparaisons de strings et du parsing de nombres.
+- Ces instructions s'appliquent automatiquement à chaque session — inutile de les rappeler.
 
 ---
 
-## 1. Qui & Pourquoi
+## 1. À faire / En attente
+
+### 🥇 Priorité #1 prochaine session — Refresh GIS non silencieux
+L'auth Google Identity Services (#13, 1.12.0) **a été testée** : la connexion et le fonctionnement nominal sont **OK**. **MAIS** le **refresh au bout d'~1 h n'est PAS silencieux** : un **popup s'ouvre et demande de se reconnecter**. Le `requestAccessToken({prompt:''})` programmé avant expiration ne renouvelle pas le jeton de façon transparente comme prévu. → **À corriger en priorité** (Sales + Master) : objectif = renouvellement réellement silencieux, sans interruption de session en convention. *(Analyse #20 : sur iPhone le refresh silencieux GIS est structurellement peu fiable — iframe cookies tiers bloquée par WebKit. Pistes : reconnexion maîtrisée au tap plutôt que refresh proactif ; à terme passerelle Apps Script #25.)*
+
+### 🎨 Améliorations esthétiques (toutes apps — PENDING, décidées en #21)
+À faire en prochaine(s) session(s) ; cosmétiques pures, aucun impact métier.
+
+| App | Amélioration |
+|-----|-------------|
+| **tcg-master** | Panneaux « Journal des ventes » et « Anomalies » → bouton hide/show, **défaut = caché** |
+| **tcg-master** | Logo plus grand, pleine hauteur du panneau du haut |
+| **tcg-sales** | « TCG SALES » plus gros, prend toute la place jusqu'à droite ; version dessous alignée à droite |
+| **tcg-intake** | Ajouter logo société ; version collée à droite du titre « TCG INTAKE » ; supprimer « by cassius » |
+| **tcg-integrator** | Ajouter logo société ; version collée à droite du titre *(actuellement intitulé « TCG INTAKE » dans le code — à corriger en même temps)* ; supprimer « by cassius » |
+
+### 🎯 Résolution de scan à 3 branches (cas 1 / cas 2)
+Objectif : quand un vendeur scan un code, distinguer **3 issues** au lieu de « trouvé / non trouvé ».
+- ✅ **Cas 2 — code totalement inconnu → ajout forcé (FAIT en #20, Sales+Master 1.15.0).** Modale « ❓ Code non reconnu » : libellé = code brut (modifiable), **prix obligatoire** → article ajouté en `source='inconnu'` (contour ambré + ❓). Part dans `ventes_detail` via l'outbox ; Master l'enregistre (`OK_UNKNOWN`) **et** écrit une anomalie **`SCAN_INCONNU`** (réconciliation le soir). Roll-back d'un inconnu = no-op stock.
+- ⏳ **Cas 1 — article reconnu MAIS déjà vendu sur un autre canal → info + blocage (À FAIRE, jalon coordonné).** Aujourd'hui Sales ne peut pas distinguer « vendu ailleurs » de « inconnu » : `STOCK_PUBLIC` ne contient que le stock **disponible** → l'article vendu sur CardMarket en est simplement absent. **Décision de périmètre (validée #20)** : Master publiera dans `STOCK_PUBLIC` les **clés connues-mais-indisponibles qui portent un `idProduct`** (= cross-listées CardMarket : col L cartes / « CM » scellés) avec un **statut + nom de canal générique** (`CM` d'abord, extensible Vinted/Whatnot/FB plus tard sans réécrire Sales). Sales affichera alors « déjà vendu — listé sur : CardMarket → vente bloquée ». ⚠️ Ne PAS republier les ~7 757 cartes vendues : se limiter aux cross-listées indisponibles (ensemble borné). **Spec courte à rédiger avant de toucher Master.** *(À planifier après les améliorations esthétiques.)*
+
+
+### 🟠 Backlog améliorations (items ouverts)
+| # | Amélioration | Contexte |
+|---|---|---|
+| 1 | Auto-reload cache slave à la reconnexion | Cache à 0 après re-auth — à revérifier depuis l'auth GIS (#13) |
+| 3 | Toggle « Sync actif sur ce device » | Risque double-sync si 2 masters ouverts (le verrou d'instance #11 couvre déjà l'essentiel) |
+| 5 | Auto-création des onglets manquants | Master affiche une erreur si un onglet est absent |
+| 8 | Table fournisseurs/vendeurs pros | Auto-déterminer TVA_Achat selon le vendeur |
+| 11 | Uniformisation acheteurs (Levenshtein) | Descopé en #6 (modèle Master-autoritaire suffit). À ressortir si saisie acheteur libre multi-vendeurs un jour |
+| 15 | [Master] Sections repliables + bandeau sync sticky | Replier les sections, garder le bandeau sync/heartbeat visible au scroll |
+| 19 | [Master] Colonnes cartes dynamiques côté **écriture** | Transposer la détection par nom d'en-tête aux écritures (P/P:T/AF par lettre détectée) — chemin d'écriture, à faire avec test |
+| 20 | [Sales+Master] Refonte « centimes entiers » | Acompte #10 fait (col K arrondie 2 déc.). Reste le gros : calculs internes en centimes-entiers partout (pervasif) |
+| 22 | [Sécu R5] Réduire le scope OAuth | `auth/spreadsheets` = accès à TOUTES les Sheets → envisager `drive.file` + Google Picker (moindre privilège) |
+| 24 | [Archi] Module commun `tcg-common.js` | Helpers dupliqués (`esc`, `safeForSheets`, `a1`, formateurs, `HttpError`…) → une source de vérité. ⚠️ passe de 3→4 fichiers (commun déployé à côté) ; diff des copies avant fusion. **Rangement de code, ≠ Option 3.** |
+| 25 | [Archi] Option 3 — passerelle Apps Script | Web app Apps Script (exécute en tant que propriétaire) sert le stock filtré + reçoit les paniers → vendeurs sans jeton plein scope ni accès Drive. Ferait tomber R4/R5 côté vendeur. **Gros chantier.** |
+| 26 | [Perf] Republier `STOCK_PUBLIC` après vente | Actuellement au rythme du cache Master (~5 min) ; republier juste après une vente appliquée pour une dispo quasi temps réel |
+
+> **Faits (détail en §8/§9)** : #2 refresh token (auth GIS #13, ⚠️ voir Priorité #1) · #4 scanner caméra (#10) · #9 pastille cache (#10) · #10 boutons quantité (#10) · #12 rendu incrémental panier (#10) · #13 barres d'état (#10) · #14 feedback scan (#10) · #17 renommage onglet Intake (#12) · #18 dédup txId (#12) · #21 OAuth GIS (#13) · #23 CSP (#12) · #27 roll-back (#14) · #28 acheteur imposé (#12). **SRI : N/A** (aucun `<script src>` tiers).
+
+### ⏳ Autres tâches ouvertes
+- **Mode vacances CardMarket (convention)** : processus opérationnel validé en #21 — **Manuel uniquement** (API CM fermée). Ordre obligatoire : ① mettre CM en mode vacances, ② reporter les dernières ventes CM non saisies dans la GSheet, ③ rafraîchir le cache Master. Master 1.16.0 embarque un popup checklist à l'activation de l'event + un rappel à la clôture. L'automatisation via l'API CM est dans le backlog #25 (passerelle Apps Script).
+- **Write-back idProduct scellé** — non branché (l'intégrateur ne matche que les singles). Cible prête : onglet `stock_scelle`, **Key col B**, idProduct **col I « CM »**. ⚠️ **Bloqué** : confirmer la **casse exacte du nom de l'onglet scellé** côté GSheet live avant de câbler.
+- **Confirmer que la colonne `AA`** de `Scelle_Transactions` n'est **pas lue par la compta** (sinon changer `SEALED_TX_TXID_COL`).
+- **Durcissement Option 1** : protéger les onglets `STOCK_PUBLIC` et `app_state` (seul le propriétaire édite) ; donner aux vendeurs leurs **propres comptes Google** sur EVENTS (Éditeur), pas un login master partagé.
+
+### 🗓️ Jalons à venir
+- **Simu maison — samedi 13 juin 2026 (répétition générale)** : test « pour du beurre » à domicile avec **2 amis** → **3 appareils, plusieurs vendeurs en même temps**, **ventes fictives**, sur un **fichier de stock DÉDIÉ** (surtout PAS la GSheet officielle). Objectif : éprouver le **process complet** en conditions réalistes. Scénarios à provoquer : conflits concurrents (2 vendeurs même carte / dernier scellé → 1 vente OK + 1 anomalie) ; roll-back dans ses 4 états (avant/après sync, carte + scellé) ; verrou d'instance (Master sur 2 appareils → « Forcer la reprise ») ; cycle de vie panier + acheteur ; réseau dégradé (couper le wifi en pleine vente → file offline → flush au retour, sans perte ni doublon). ⚠️ **Conflits attendus (pas des bugs)** : le stock vendeur vient du cache `STOCK_PUBLIC` (~5 min de fraîcheur) → 2 vendeurs peuvent scanner le même article ; c'est le Master qui tranche à la sync (anomalie `P_NON_BLANK` / `SEALED_OVERDRAW`).
+- **Convention réelle (1res vraies ventes) : 21–22 juin 2026.** Tout 🔴/🟠 bloquant repéré le 13 doit être corrigé entre le 14 et le 20 juin.
+
+### 🔑 Douchettes en attente
+- À la réception : séance de scan pour associer un vrai EAN à chaque article en stock.
+- Même procédure à chaque nouvel article entrant en stock.
+
+> ⚠️ **Savoir terrain iOS (établi en #20)** : quand la douchette **Netum CS7501 est appairée en Bluetooth** sur l'iPhone, iOS la voit comme un **clavier physique** et **masque le clavier logiciel** sur TOUS les champs de saisie. Ce n'est pas un bug applicatif — aucun correctif code ne le change. Pour saisir un prix (édition de ligne, ± total, article inconnu) douchette connectée : **double-clic rapide sur la gâchette** du scanner → le clavier iOS réapparaît (fonction native du CS7501, spécifique à l'appairage BLE iOS). Quand la douchette est éteinte/déconnectée, le clavier s'affiche normalement. *(Piste d'amélioration future, non bloquante : pavé numérique intégré dans les modales prix/qté/total, rendu par l'app → saisie indépendante du clavier iOS, douchette connectée ou non.)*
+
+---
+
+## 2. Qui & Pourquoi
 
 Vendeur TCG (Trading Card Game) en Belgique (Wallonie), sous le nom **Le Gardien du TCG**.
 
@@ -65,7 +87,7 @@ Vendeur TCG (Trading Card Game) en Belgique (Wallonie), sous le nom **Le Gardien
 - Conventions (événements ponctuels, plusieurs vendeurs sur le stand)
 - Boutique / vente comptoir (à venir — workflow dédié à construire)
 - Ventes à domicile / RMP (rendez-vous privés, client nommé)
-- **Canaux externes via `tcg-integrator`** (voir §6bis) : **CardMarket** (priorité 1, ~3 % frais pro, modèle catalogue+`idProduct`), puis envisagés **Whatnot** (enchères live), **Vinted** et **Marketplace Facebook** (annonces texte libre, pas de catalogue/ID produit → modèle de publication différent — cf. §6bis).
+- **Canaux externes via `tcg-integrator`** (voir §6) : **CardMarket** (priorité 1, ~3 % frais pro, modèle catalogue+`idProduct`), puis envisagés **Whatnot** (enchères live), **Vinted** et **Marketplace Facebook** (annonces texte libre, pas de catalogue/ID produit → modèle de publication différent — cf. §6).
 
 **Comptabilité belge :**
 - Articles achetés chez un **pro** → TVA classique (Régime normal)
@@ -74,62 +96,45 @@ Vendeur TCG (Trading Card Game) en Belgique (Wallonie), sous le nom **Le Gardien
 
 ---
 
-## 2. Architecture Technique
+## 3. Architecture Technique
 
-### Constantes clés (présentes dans les deux apps HTML)
+### Constantes clés
 ```javascript
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const EVENTS_GSHEET_ID   = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
-const SHEET_CARDS        = 'cartes_stock_et_transactions'; // ⚠️ renommé en #8 (était 'Cartes_Stock_&_Transactions')
+const SHEET_CARDS        = 'cartes_stock_et_transactions'; // renommé en #8 (était 'Cartes_Stock_&_Transactions')
 const SHEET_SEALED       = 'Scelle_Stock';
 const SHEET_SEALED_TX    = 'Scelle_Transactions';
 const SHEET_STOCK_PUBLIC = 'STOCK_PUBLIC';   // (#9) vue stock sûre publiée par Master dans EVENTS, lue par Sales
 ```
-> **Helper `a1(sheet, rng)` (depuis #8, Sales + Master)** : encadre TOUJOURS le nom d'onglet de quotes simples (échappement A1). Toutes les plages passent par lui → robuste à un futur renommage avec caractère spécial. C'est le renommage de `SHEET_CARDS` qui a corrigé le `400 "Unable to parse range"` apparu après modification du nom d'onglet dans la GSheet.
-> ✅ **`tcg-intake.html` corrigé en #12** — ⚠️ et **non en #9** comme l'indiquait par erreur ce document : le renommage (priorité #9.1) avait été **documenté comme livré mais jamais appliqué au fichier**, qui restait sur `Cartes_Stock_&_Transactions` → l'Intake était **cassé** (400 « Unable to parse range »). Réparé en **1.2.0** : `SHEET_NAME` → `cartes_stock_et_transactions` **et** helper `a1()` porté à **toutes** les plages (cartes + onglets LOG/BACKUP), comme Sales/Master.
+> **Helper `a1(sheet, rng)` (Sales + Master + Intake)** : encadre TOUJOURS le nom d'onglet de quotes simples (échappement A1). Toutes les plages passent par lui → robuste à un futur renommage avec caractère spécial.
 > **(#9, Option 1)** Sales ne lit **plus** CENTRAL : Master y reste seul et publie un sous-ensemble sûr du stock dans `EVENTS › STOCK_PUBLIC`, que Sales consomme (voir « Communication inter-apps »).
 
-### Google Sheets (base de données centrale — CENTRAL_GSHEET_ID)
-- `cartes_stock_et_transactions` — stock + transactions cartes (renommé en #8 ; structure inchangée)
-- `Scelle_Stock` — état du stock scellé actuel (header dynamique : ligne 26 actuellement, mais le code détecte automatiquement la première ligne dont col C = "Key")
+### Google Sheets — base centrale (CENTRAL_GSHEET_ID)
+- `cartes_stock_et_transactions` — stock + transactions cartes *(structure détaillée en Annexe A)*
+- `Scelle_Stock` — état du stock scellé actuel *(structure détaillée en Annexe A)*
 - `Scelle_Transactions` — historique de toutes les ventes/mouvements scellés
 - Onglet compta — agrège toutes transactions, calcule TVA et marges (formules pointent vers `cartes_stock_et_transactions` et `Scelle_Transactions`)
-- `anomalies` (EVENTS_GSHEET_ID) — **schéma 11 colonnes A:K** : `Timestamp · TX_ID · Vendeur · Clé/Barcode · Nom article · Source · Type anomalie · Détails · Synced_From_Row · Resolved · Notes`. Écrit par Master (anomalies de réconciliation) **et** par Sales depuis #8 (échec de vente : une ligne/article, `Type anomalie = SALES_NOT_SYNCED`, payload JSON complet dans `Notes` de la 1ʳᵉ ligne pour rejeu manuel).
 
-### Google Sheets événements (EVENTS_GSHEET_ID)
-- Onglets temporaires créés à chaque convention : `ventes_detail`, `heartbeat`, etc.
-- Archivés et vidés à la clôture de l'événement (bouton 🏁)
-- **`STOCK_PUBLIC` (#9, permanent)** — vue stock **sûre** publiée par Master (cartes + scellés disponibles, **sans coûts/marges**) : `Key · Kind(card/sealed) · CodeSerie · NomSerie · Nom · Type · Etat · PrixVente · Qty · Reserved` (A:J) + liste TVA_Vente brute en col L. **Source du stock côté Sales.** À **protéger** (seul le propriétaire édite — les vendeurs sont Éditeurs sur EVENTS).
+### Google Sheets — événements (EVENTS_GSHEET_ID)
+- Onglets temporaires créés à chaque convention : `ventes_detail`, `heartbeat`, etc. — archivés et vidés à la clôture (bouton 🏁).
+- **`STOCK_PUBLIC` (#9, permanent)** — vue stock **sûre** publiée par Master (cartes + scellés dispo, **sans coûts/marges**) : `Key · Kind(card/sealed) · CodeSerie · NomSerie · Nom · Type · Etat · PrixVente · Qty · Reserved` (A:J) + liste TVA_Vente brute en col L. **Source du stock côté Sales.** À **protéger** (seul le propriétaire édite).
+- **`anomalies`** — schéma 11 colonnes A:K : `Timestamp · TX_ID · Vendeur · Clé/Barcode · Nom article · Source · Type anomalie · Détails · Synced_From_Row · Resolved · Notes`. Écrit par Master (réconciliation) et par Sales (échec de vente : `SALES_NOT_SYNCED`, payload JSON dans `Notes`).
 
-### Hébergement & déploiement
-- **GitHub Pages** (gratuit, déploiements illimités, HTTPS natif)
-- Repo public : `https://github.com/legardiendutcg/Automation`
-- URLs des apps :
-  - `https://legardiendutcg.github.io/Automation/tcg-sales.html`
-  - `https://legardiendutcg.github.io/Automation/tcg-master.html`
-  - `https://legardiendutcg.github.io/Automation/tcg-intake.html`  *(ex-`tcg-converter.html`)*
-  - `https://legardiendutcg.github.io/Automation/tcg-integrator.html`  *(NOUVELLE app de publication multi-canal — à construire, voir §6bis)*
-- Workflow de mise à jour : Add file → Upload files → écrase l'ancien → Commit. Rebuild auto ~1 min. **Ctrl+Shift+R** sur l'app pour bypass cache navigateur.
+### Les apps
+**TCG Sales** (`tcg-sales.html`) — app **vendeur**, ouverte sur le **téléphone** de chaque vendeur en convention (UI smartphone). Flow : OAuth → cache stock **depuis `STOCK_PUBLIC`** → scan barcode → panier → validation → **outbox idempotent** → écriture `ventes_detail`. **(#9)** N'accède **plus** à CENTRAL. **Outbox** : toute vente passe en file (`pending`) puis est envoyée ; idempotence par relecture de `ventes_detail!D` (txId) avant tout renvoi → ni doublon ni perte (« ≈ exactement une fois ») ; échec → `anomalies` puis dead-letter local.
 
-### TCG Sales (app slave — vendeurs)
-- Fichier : `tcg-sales.html`
-- Usage : ouvert sur le **téléphone** de chaque vendeur pendant une convention (UI optimisée smartphone depuis #8 ; zoom autorisé)
-- **(#10, refonte UI 1.9.2→1.9.5)** Interface **3 zones tenant dans un écran sans scroll global** (`100dvh`, `overflow:hidden`) : **HAUT** = logo carré (PNG embarqué) + titre « TCG SALES » (version collée dessous, alignée à droite) + pastilles rondes d'état **G** (Google) / **📦** (stock) cerclées vert/rouge/ambre (toucher = (dé)connexion / refresh ; détail en info-bulle) ; **MILIEU** (seule zone scrollable) = **carrousel swipe panier ⇄ caméra** (2 points), barre de scan fine, lignes article = 🗑 + quantité tappable (à gauche) + nom + **prix unitaire tappable** ; doublon = même ligne ×N, contour orange (carte ancienne clé) / **rouge bloquant** (carte clé neuve) ; **BAS** = client + type de vente (placeholders), **total tappable**, gros bouton « Valider la vente » épinglé (police Syne, identique au titre). **Saisie au clavier** (plus de rouleaux) pour quantité / prix unitaire d'un article / total panier (`inputmode` numeric/decimal). Le **prix unitaire** est éditable par ligne (corrige une côte GSheet périmée sans toucher les autres articles) ; le total reste éditable à part (répartition proportionnelle au centime). Icônes = emojis. *(Le roll-back de vente, esquissé puis retiré, est reporté en jalon coordonné — backlog #27.)*
-- Flow : connexion OAuth → chargement cache **depuis `EVENTS › STOCK_PUBLIC`** → scan barcode → panier → validation → **outbox** → écriture `ventes_detail`
-- **(#9, Option 1) N'accède plus à CENTRAL** (ni lecture ni écriture) : le stock est lu dans `STOCK_PUBLIC` (une lecture `A2:L`), publié par Master. Le vendeur n'a besoin que d'EVENTS. Le verrou « réservée » et le filtre TVA sont conservés (flag `Reserved` publié par Master).
-- **Outbox idempotent (depuis #8)** : toute vente est d'abord mise en **file** (`pending`), puis envoyée ; l'entrée n'est retirée que sur **confirmation**. Avant de renvoyer une entrée dont l'issue est inconnue (`sent`), on **relit `ventes_detail!D` (colonne `txId`)** pour savoir si l'envoi a abouti → pas de doublon si la réponse réseau s'est perdue, pas de perte si l'envoi a échoué (≈ « exactement une fois »). Échec 4xx ou après `MAX_SALE_RETRIES` (5) → bascule `anomalies` ; si même ça échoue → **dead-letter localStorage** + bandeau rouge « Réessayer ». `txId` (col D de `ventes_detail`) = **clé d'idempotence** (Master devra la dédupliquer).
+**TCG Master** (`tcg-master.html`) — app **gérant**, ouverte sur iPad/ordi en convention. Flow : lit CENTRAL → **publie `STOCK_PUBLIC`** → écoute `ventes_detail` (heartbeat) → synchronise le stock CENTRAL → gère l'événement. Verrou d'instance lease/TTL (anti-double-master) + dashboard (KPI, donuts, faits marquants, CA/heure). `publishStockView()` republie la vue sûre à chaque `loadStockCache`.
 
-### TCG Master (app maître — gérant)
-- Fichier : `tcg-master.html`
-- Usage : ouvert sur l'iPad ou ordinateur du gérant pendant la convention
-- Flow : lit CENTRAL (stock) → **publie `STOCK_PUBLIC`** (#9) → écoute `ventes_detail` (heartbeat) → synchronise le stock CENTRAL → gère l'événement
-- **(#9) `publishStockView()`** : projette la vue sûre dans `STOCK_PUBLIC` à chaque `loadStockCache` (bootstrap, auto ~5 min, refresh manuel) ; capture le flag `reserved` (TVA_Vente : scellé AG / carte AF) ; non bloquant (un échec n'affecte pas le cache).
+**TCG Intake** (`tcg-intake.html`, ex-`tcg-converter.html`) — app **back-office d'entrée de stock**. Importe des CSV (catalogue / scraping), normalise (parser FR, locale belge, `esc()`/`safeForSheets()`) et **injecte dans CENTRAL** (`cartes_stock_et_transactions`) avec aperçu, backup (`SAFETY_GSHEET_ID`) et journal. Depuis #14, porte aussi le **write-back de l'`idProduct` CardMarket** (onglet « idProduct CM ») : charge le fichier `assignations_cm` produit par l'Integrator et réinjecte les idProduct dans le stock singles (aperçu obligatoire, backup, journal).
+
+**TCG Integrator** (`tcg-integrator.html`) — app **back-office de sortie / publication multi-canal**. Lecture seule du stock CENTRAL. Matche les singles vers CardMarket **par numéro de collection** (catalogue TCG Power Tools) et produit deux fichiers : `assignations_cm` (→ Intake, write-back) et `cardmarket_upload_pt` (→ TCG PowerTools → CardMarket). Détail complet en §6.
 
 ### Communication inter-apps
-Les deux apps ne se parlent **pas directement** — elles communiquent via Google Sheets :
-- **Stock (Master → vendeurs)** : Master lit CENTRAL et publie une vue **sûre** dans `EVENTS › STOCK_PUBLIC` ; Sales la lit. Aucune donnée de coût n'atteint les vendeurs.
-- **Ventes (vendeurs → Master)** : Sales écrit dans `ventes_detail` (EVENTS) ; Master lit `ventes_detail`, résout par clé/`txId` et met à jour le stock CENTRAL.
+Les apps ne se parlent **pas directement** — elles communiquent via Google Sheets :
+- **Stock (Master → vendeurs)** : Master lit CENTRAL et publie une vue **sûre** dans `STOCK_PUBLIC` ; Sales la lit. Aucune donnée de coût n'atteint les vendeurs.
+- **Ventes (vendeurs → Master)** : Sales écrit dans `ventes_detail` ; Master lit, résout par clé/`txId` et met à jour le stock CENTRAL.
 
 ### Modèle d'accès Google Drive (#9)
 | | CENTRAL | EVENTS |
@@ -137,55 +142,22 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 | Master (`legardiendutcg`) | Éditeur | Éditeur |
 | Chaque vendeur (compte propre) | **Aucun accès** | **Éditeur** (dépose ses ventes ; lit `STOCK_PUBLIC`) |
 
-> 2 GSheets en « Restreint » (vérifié #9). `STOCK_PUBLIC` à **protéger** (seul le propriétaire édite) ; la vue se ré-aligne de toute façon à chaque publication. Vendeurs à ajouter avec leur **propre compte** (pas le login master partagé → sinon jeton plein scope sur chaque appareil, cf. R4/R5 du bilan).
+> 2 GSheets en « Restreint ». `STOCK_PUBLIC` à **protéger** (la vue se ré-aligne à chaque publication). Vendeurs à ajouter avec leur **propre compte** (pas le login master partagé).
 
----
+### Hébergement, OAuth & infrastructure
+| Élément | Détail |
+|---------|--------|
+| Hébergement | **GitHub Pages** — déploiements illimités, gratuit, HTTPS natif, repo `legardiendutcg/Automation` (public) |
+| URLs | `…/tcg-sales.html` · `…/tcg-master.html` · `…/tcg-intake.html` · `…/tcg-integrator.html` (base `https://legardiendutcg.github.io/Automation/`) |
+| Déploiement | Add file → Upload files → écrase l'ancien → Commit. Rebuild auto ~1 min. **Ctrl+Shift+R** pour bypass cache navigateur. |
+| OAuth | Projet GCP `774473792747` (libellé GCP historique « TCG Integrator »), client `774473792747-…rj96`, type Application Web. Auth = **flux GIS token** (popup, refresh — ⚠️ refresh non silencieux, cf. §1 Priorité #1) sur les 4 apps. |
+| Scopes | `https://www.googleapis.com/auth/spreadsheets` (sensible, à déclarer dans Data Access) |
+| URIs OAuth | Origine JS = `https://legardiendutcg.github.io` (les apps GIS n'ont plus besoin des redirect URIs de l'ancien flux implicite) |
+| Audience | Mode **Testing** avec emails listés comme utilisateurs de test (évite la vérif Google complète) |
+| APIs activées | Google Sheets API (à activer manuellement dans tout nouveau projet GCP) |
+| Appareils | Sales sur téléphones vendeurs, Master sur iPad/ordi du gérant |
 
-## 3. Structure des Onglets Scellés
-
-### Scelle_Stock (état courant)
-**Header dynamique** : actuellement en ligne 26 (lignes 1–25 = autre contenu type sections/totaux). Le code scanne automatiquement la première ligne dont col C = "Key" et démarre l'itération à la ligne suivante.
-
-| Col | Contenu | Note |
-|-----|---------|------|
-| A | Origine | Sous-compte (Stock_Pro, Collection_Privée, etc.) |
-| B | Code Série | |
-| C | **Key** | Barcode EAN — clé primaire scan (vide jusqu'à séance scan douchette) |
-| D | Nom Série | |
-| E | Type_Item | |
-| F | Nom_Item | |
-| G | **Quantité** | Qty disponible (gérée manuellement) |
-| H | Etat | NM, GD, etc. |
-| I–K | CM / Vinted / Ebay | Cotes marché |
-| L | **Côte/u** | Prix de vente affiché |
-| M | Côte Totale | |
-| N | Statut | Vide pour les articles en stock |
-| O | Prix de vente | |
-| P | Acheteur | |
-| Q | Source | |
-| R | Date_Transaction | |
-| S | **Facture d'achat** | Clé du lot (ex: DMA25-A-BE-0018) |
-| T | Facture de vente | |
-| U | Commentaire | |
-| V | Type_Vente | |
-| W | **Prix d'achat** | Total Pa du lot restant (proportionnel aux unités restantes) |
-| X | Marge | |
-| Y | % Marge | |
-| Z | (vide) | |
-| AA | Code Technique | Ancien identifiant (buyer\|\|date) |
-| AB | Date_Vente | |
-| AC | Facture_Vente | (référence session/event) |
-| AD | Pays_Vente | |
-| AE | TVA_Achat | (position historique de cette table — à confirmer, voir note) |
-| AF | — | (à confirmer contre le sheet live) |
-| AG | **TVA_Vente** | Régime normal / vente intracommunautaire / cadeau / **réservée** (= verrou, §4). Liste curée des valeurs : `Scelle_Transactions!AG8:AG23` |
-
-> ⚠️ **À revérifier (session #6)** — cette table (Scelle_Stock) est antérieure aux corrections et présente un décalage. Faits **vérifiés** : `TVA_Vente` est en **AG** sur les onglets scellés (liste autorisée en `Scelle_Transactions!AG8:AG23`), et en **AF** sur `cartes_stock_et_transactions`. La ligne de **transaction** écrite par Master a une colonne **A = « x »** en tête, et son ordre exact (différent de cette table : Key/Code Série notamment) est défini par `txRow` dans `applySealedSale` — **le code fait foi**. Les positions A→AF de cette table restent à confirmer contre le sheet live.
-
-### Scelle_Transactions (historique, même structure de colonnes)
-- Même colonnes que Scelle_Stock
-- 1 ligne par mouvement : vente (Statut=vendu), vol, ouverture, échange, transfert, cadeau
-- Alimenté manuellement (historique) + automatiquement par TCG Master à chaque vente convention
+**Pièges OAuth à se rappeler** : *403 « insufficient authentication scopes »* → scope manquant OU token caché côté Google → ajouter le scope + révoquer l'app sur `myaccount.google.com/permissions` → re-consentement · *403 « API has not been used / disabled »* → activer Google Sheets API dans le projet · *« Access blocked: …has not completed the Google verification process »* → compte absent des Test users · *OAuth client supprimé* → Google supprime auto les clients inactifs 6 mois (restaurables 30 j via « Deleted credentials »).
 
 ---
 
@@ -215,7 +187,195 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 
 ---
 
-## 5. État Actuel — Session #13 (31/05/2026)
+## 5. État Actuel des Apps
+
+- **Sales 1.15.0** — stable, déployé en #20. Aucun changement en #21.
+- **Master 1.16.0** — livré en #21. Popup checklist « mode vacances » à l'activation d'un event (transition vide→nom rempli uniquement) : ① mettre CM en mode vacances, ② reporter les ventes CM non saisies, ③ rafraîchir le cache Master — le nom d'event n'est activé qu'après validation humaine de la checklist. Rappel « réactiver les canaux » affiché après chaque clôture 🏁 réussie. Correction des étiquettes changelog (#14→#20 dans les entrées 1.15.0 et 1.14.x). ⚠️ **À déployer** (Sales reste en 1.15.0, pas de jalon coordonné).
+- **Intake 1.4.4 / Integrator 0.4.2** — stables, déployés et **validés en navigateur de bout en bout** pour la chaîne CardMarket (06/06/2026) : matching par numéro → write-back de l'`idProduct` dans CENTRAL → export TCG PowerTools → **upload réel sur CardMarket réussi**. Détail en §6.
+
+### 🟠 Points ouverts (non bloquants)
+- Cache scellé indexé **par clé** (1 ligne / code-barres) alors que le modèle autorise **plusieurs lignes-lots** par code-barres (limitation pré-existante signalée).
+- Clôture event 🏁 : chemin nominal **validé E2E (#9, réaffirmé #13)**. Les 2 cas-limites #12 (vidage si drain échoue ; archive limitée aux colonnes A→G) sont des durcissements **optionnels**, pas des bugs.
+
+---
+
+## 6. `tcg-integrator` — CardMarket & multi-canal 🎯
+
+App de **sortie** (publication du stock vers des canaux externes), distincte de `tcg-intake` (entrée de stock). CardMarket est le 1ᵉʳ canal ; l'ossature est pensée pour accueillir Whatnot, Vinted, Marketplace Facebook. **Livré & opérationnel (session #14).**
+
+### ✅ Stratégie de matching RETENUE — par NUMÉRO de collection
+Le matching se fait par **numéro**, pas par nom → la barrière FR↔EN disparaît (le numéro est agnostique à la langue). *(L'ancien pont nom→EN via Poképédia/TCGdex est **abandonné** — voir §9 Archive.)*
+- **Catalogue** = export **TCG Power Tools** (`cm-catalogue.csv`, **82 615 lignes** : `cardmarketId · name · collectorNumber · rarity · expansion · expansionCode · scryfallId · tcgplayerId`). Il **contient** le numéro de collection.
+- **Pont série→extension AUTOMATIQUE** : const embarquée `SERIE_BRIDGE` (**194 entrées**, copie « slim » du MAPPING de l'intake) résout `code_série → expansionCode` ; ambiguïté des sets éclatés levée par `nom_série` (Foudre Noire→BLK, Flamme Blanche→WHT) + préférence du code canonique. Japonais filtrés par `rarity === 'Fixed'`. **~90 % résolus uniques** (auto-remplis, statut « ✓ auto », modifiables), **~10 % collisions** → panneau candidats + **deep-link fiche CM** `?idProduct=<id>`.
+- **Variantes** (shadowless / oversized / stamps) **indistinguables dans le texte du catalogue** (seul l'`idProduct` les sépare) → stockées en **col O « Variantes »** du stock singles ; jointure write-back par **Key** → variante respectée implicitement.
+
+### Deux fichiers produits par l'intégrateur
+1. **`assignations_cm`** (Key + idProduct + contexte, `;`) → vers tcg-intake pour le **write-back**.
+2. **`cardmarket_upload_pt`** (`Quantity · Cardmarket ID · Language · Condition · Price · Name`, virgule) → vers **TCG PowerTools → « Publish to Cardmarket »** = **la voie de publication retenue** (API CM fermée). Langue & état recopiés tels quels depuis CENTRAL ; quantité = 1/single.
+
+### Write-back de l'`idProduct` (dans tcg-intake)
+- L'intégrateur reste **lecture seule** ; l'écriture vit dans l'intake (scope écriture + filet `SAFETY_GSHEET_ID`).
+- Charge `assignations_cm`, **résout les colonnes par ENTÊTE**, **aperçu obligatoire** (dry-run : à écrire / écrasements / identiques / introuvables), **backup** + **journal**, écriture par lots `values:batchUpdate`. Cible singles : onglet `cartes_stock_et_transactions`, jointure **Key col D**, idProduct **col L**.
+- **Auto-détection du format déposé** : `Key + idProduct` → write-back ; sinon export PT → mode ajout. Parsing **agnostique au délimiteur** (`;`/`,`).
+- **Scellé : non branché** (pas de source d'`idProduct` scellé). Cible prête : onglet `stock_scelle`, **Key col B**, idProduct **col I « CM »** (⚠️ casse du nom d'onglet à confirmer — cf. §1).
+
+### Vignette CM — abandonnée (lien seul)
+Tentative d'afficher le scan CM (`og:image`) : **impossible côté client** (proxies CORS bloqués + mur Cloudflare). Désactivée (`CM_IMG_PROXIES=[]`), mécanique conservée ; ré-activable via un proxy maîtrisé ou le **gateway #25**. Le lien fiche CM suffit à trancher.
+
+### Corrections notables (session #14)
+- **Table MAPPING (intake = source de vérité)** : `LG→LC` (Legendary Collection), `UL=Déchaînement` (HGSS2.0, length 95), `UD=Indomptable` (HGSS3.0), `CL2` retiré.
+- **Auth intake** migrée vers le **flux GIS token** (identique à l'intégrateur) → basée sur l'origine JS déjà autorisée, **aucune modif console Google** (corrige l'`Error 400 redirect_uri_mismatch` de l'ancien flux implicite).
+- **`SAFETY_GSHEET_ID`** repointé sur une **Google Sheet NATIVE** (`1axA5pJeu2PLzrBnd_HLox3AEck5AjbCkFpx19rRtmJg`) — l'ancien `.xlsx` importé était refusé par l'API (`FAILED_PRECONDITION`).
+- **Badge de version à l'écran** ajouté à l'intake (`APP_VERSION`).
+
+### Architecture multi-canal — ne pas sur-spécialiser sur CardMarket
+Les canaux ne fonctionnent **pas** pareil :
+- **CardMarket (et TCGplayer plus tard)** = **catalogue + identifiant produit** (`idProduct`). Travail dur = résoudre quel `idProduct` correspond à ma carte (matching).
+- **Vinted / Marketplace Facebook** = **annonces texte libre**. Pas de catalogue ni d'ID : on génère titre + description + photos + prix (**génération d'annonce**).
+- **Whatnot** = **enchères/lots en live**. Logique de lots + présence caméra.
+
+👉 **Ossature réutilisable** : `sélectionner un lot → PRÉPARER le payload spécifique au canal → revue humaine → submit (humain tant qu'il n'y a pas d'API) → marquer « publié sur <canal> » + stocker la référence canal`. La résolution d'`idProduct` n'est QUE l'impl. "préparer" de CardMarket ; Vinted/FB auront une impl. "préparer" = génération d'annonce.
+
+### CardMarket — contrainte API
+- **Pas d'API CardMarket** (candidatures fermées) → remplacée par les **fichiers publics** (catalogue + price guide, MAJ quotidienne, libres d'usage) en lecture ; **écriture derrière l'API fermée** → on publie sans API, via TCG PowerTools, **submit humain**.
+
+### Périmètre
+- **Phase 1 = Pokémon singles uniquement.** ~79 cartes (1,9 %) du stock sont du **One Piece** → l'intégrateur segmente par jeu et écarte le non-Pokémon (catalogue One Piece = fichier séparé, même ossature, plus tard).
+- **Scellés = piste parallèle** (catalogue sealed CM séparé), après les singles.
+- **Qualité de données** : 198 cartes ont un numéro tronqué `NNN/` (dénominateur jamais saisi) → matching OK via numérateur+série, mais à **compléter à la source (Intake)** idéalement.
+
+### QR codes — décision
+- ❌ Pas l'`idProduct` comme clé QR (timing, granularité édition≠exemplaire, spécifique canal). ✅ Le QR encode un **identifiant interne** (SKU = la **Key** col D). `idProduct` = **référence externe** sur la définition de carte, à côté des futurs `whatnot_id`, `vinted_id`, etc.
+
+### 🔑 Backlog `tcg-integrator`
+- Catalogue **One Piece** + autres jeux ; **scellés** (catalogue sealed CM + normalisation produit).
+- Canaux **Whatnot / Vinted / FB Marketplace** (impls. "préparer" = génération d'annonce).
+- **Price guide** CM pour le **repricing** (pas nécessaire pour lister).
+- **Photo par article**, notifications de vente temps réel, MAJ rapide CENTRAL anti-survente.
+- **Gateway Apps Script (#25)** : ré-active la vignette CM (lecture serveur sans CORS) + l'API CM si elle rouvre.
+
+---
+
+## 7. Notes de Session
+
+| Session | Date | Résumé |
+|---------|------|--------|
+| #1 | — | Mise en place architecture de base, flow cartes |
+| #2 | — | Corrections diverses dont message "ajouté (0€)" |
+| #3 | 28/05/2026 | Split Scelle_Stock/Scelle_Transactions, col C Key, applySealedSale, renommage sans accent (onglets), document de contexte |
+| #4 | 28/05/2026 | Migration GitHub Pages, nouveau projet OAuth Google Cloud, fix constantes SHEET_SEALED/_TX, détection dynamique header scellé, cache fonctionnel à 4155 items |
+| #5 | 28/05/2026 | Flow scellé end-to-end validé (master 1.5.10 / sales 1.5.3) ; durcissements 1.5.x (arrondi unitPa, fail explicite sheetId, UNFORMATTED_VALUE, locale parsePrix) |
+| #6 | 29/05/2026 | Challenge + implémentation features TVA_Vente & Acheteur (v1.6.0) ; fix bug AG jamais écrit (scellé) ; verrou « réservée » ; découplage session/acheteur ; correction off-by-one table §3 ; non-bug cartes (TVA_Vente=AF) confirmé. Fix v1.6.1 (Sales) : liste TVA_Vente lue dans `Scelle_Transactions` (et non `Scelle_Stock`). Mapping versions divergent assumé : **Sales 1.6.1 / Master 1.6.0** (patch Sales seul). |
+| #7 | 29/05/2026 | **Revue de code des 3 apps, PUIS correctifs livrés après validation.** Bugs corrigés : 🔴 bloquant Master `applyCardSale` (bloc `copyPaste` parasite réf. `nextTxRow` hors scope → `ReferenceError` à chaque vente carte, fausse anomalie `CARD_NOT_FOUND`) ; 🟠 régression index `Synced` (col M lu au lieu de col O dans `renderSalesLog`/`loadCloseSummary` → résumé de clôture faussé) ; 🟡 Intake (CRLF non normalisé, en-tête cartes dynamique, `parsePrix` locale). Livrés : **Master 1.6.2**, **Intake 1.0.0** (1ʳᵉ mise sous versioning). Non traités → backlog : code mort (Sales `switchTab`+CSS, constantes/fonctions inutilisées, #16) et perfs réactivité (#12). `SAFETY_GSHEET_ID` laissé en placeholder (garde-fou explicite déjà présent). Ajout instruction §0 : revue de code systématique en début de chaque discussion. Petit fix complémentaire **Sales 1.6.3** : « pas vendu » retiré du menu TVA_Vente. **Test E2E (ventes cartes + scellé) concluant** sur les nouvelles versions. Détail complet en §5. |
+| #8 | 29/05/2026 | **Revue stricte de `tcg-sales`, lot de durcissements, PUIS outbox idempotent.** Déclencheur : le renommage de l'onglet cartes en `cartes_stock_et_transactions` (côté GSheet) a cassé Master (`400 Unable to parse range`). **(a) Durcissements** — **Sales 1.7.0** (renommage `SHEET_CARDS` + helper `a1()` partout ; **colonnes cartes en détection dynamique** par nom d'en-tête avec repli sur offsets ; remise « ± Total » refaite en **plus grand reste / euros entiers** sur tous les articles, total exact ; **formateur monétaire Intl fr-BE** ; **journal `logEvent`** persistant + `exportLog()` ; reset acheteur après vente hors-convention ; purge `switchTab`/CSS morts ; **zoom + media query smartphone** ; `HEARTBEAT_POLL_MS` câblé, `SYNC_POLL_MS` retiré ; `HttpError`, `parseInt` base 10, `init().catch`, `txId` rendu unique) et **Master 1.6.3** (même renommage + `a1()` partout (lecture ET écriture) + `HttpError` + journal + Intl UI + `parseInt`/`init().catch`). NON transposé à Master : détection dynamique des colonnes (Master **écrit** par lettre fixe P/P:T/AF → trop risqué sans test) et format des nombres de l'archive de clôture. **(b) Outbox idempotent** — **Sales 1.8.0** : toute vente mise en file (`pending`) puis envoyée ; **idempotence par relecture `ventes_detail!D`** (txId) avant tout renvoi → ni doublon (réponse perdue) ni perte (envoi échoué) ; échec définitif (4xx) ou après `MAX_SALE_RETRIES` → onglet `anomalies` ; si l'écriture anomalies échoue aussi → **dead-letter localStorage** + bandeau rouge « Réessayer » (**zéro perte silencieuse**) ; **journal du cycle de vie**. Machine à états vérifiée en simulation (7 scénarios). **Sales 1.8.1** : `moveToAnomalies` aligné sur le **vrai schéma A:K** de l'onglet `anomalies` (une ligne/article, `SALES_NOT_SYNCED`, payload JSON en `Notes`). **`tcg-intake` non touché** (référence encore l'ancien nom → à corriger en #9). Mise à jour de ce document. *(NB : les changelogs internes des fichiers livrés étiquetaient l'outbox « Session #9 » ; à recaler en « #8 » si tu veux une cohérence parfaite.)* |
+| #9 | 29/05/2026 | **Revue de sécurité (OWASP 2025) + Option 1.** **Intake 1.1.0** : `esc()` (corrige XSS DOM via CSV/scraping) + `safeForSheets()` (corrige injection de formules) + **renommage onglet** `cartes_stock_et_transactions` (priorité #9.1 — il cassait dessus). **Option 1 (Master 1.9.0 + Sales 1.9.0)** : Master publie une vue stock sûre `STOCK_PUBLIC` dans EVENTS (cartes+scellés dispo, **sans coûts/marges**, + flag `Reserved` + liste TVA) ; Sales lit le stock de là et **ne lit plus CENTRAL** (fonctions mortes `findCardsHeaderRow`/`findColByName` retirées) → vendeurs sans accès CENTRAL, marges jamais exposées. Confirmé : 2 GSheets « Restreint ». **Versioning** : Option 1 modifiant les 2 apps ensemble, elles partagent **1.9.0** (Master re-tagué 1.6.3→1.9.0) ; l'auth GIS visée glisse en **1.10.0**. **Test E2E concluant** : Option 1 validée jusqu'à la **clôture d'événement** 🏁 (archive + vidage des buffers `ventes_detail`/`anomalies`) — la clôture, en attente depuis #8, est validée. **Hardening recommandé restant** : protéger `STOCK_PUBLIC` + ajouter vendeurs (comptes propres). Backlog sécurité ouvert : R4/R5, CSP/SRI, module commun, Option 3 Apps Script. Détail : `Bilan_risques_TCG.md`. |
+| #10 | 29/05/2026 | **Revue §0 d'ouverture → constat que tout le « plan » était déjà livré, PUIS lot polish Sales.** La revue a révélé que les apps étaient en **1.9.0** (doc d'ouverture périmé en #7) : l'« augmentation du panier » et les « articles manuels » discutés étaient **déjà implémentés** (Sales `± Total` bidirectionnel + `+ Manuel` / Master `applyManualSale` no-op stock), et l'arrondi #6 déjà corrigé en #8. **Vérifié par exécution** que la règle de répartition « ± Total » (proportionnelle, euros entiers, plus grand reste, total exact) marche **à la hausse comme à la baisse** ; seul résidu = micro-dérive flottante ≤ 5,7e-14 € sur col K quand qty>1 (jamais visible). **Lot livré — Sales 1.9.1** (patch, **Sales seul** ; ⚠️ **1.10.0 reste réservé à l'auth GIS** Sales+Master) : hardening arrondi col K `Math.round(x*100)/100` (#20 partiel) · feedback de scan flash ✓/✗ (#14) · `renderCart()` **incrémental** par ligne (#12) · bandeaux d'état regroupés `#statusZone` + compactage mobile (#13) · purge reliquats code mort `sheetsUpdate`/`sheetsBatch` + vars `cardHeaderRow`/`cardColIdx`/`sealedColIdx` (#16 reliquat). Master & Intake **non touchés**. Refonte centimes complète (#20) toujours ouverte. **PUIS refonte UI Sales complète (1.9.2 → 1.9.5, patch Sales seul, itérée sur maquettes)** : interface **3 zones** tenant dans un écran smartphone sans scroll global ; en-tête (logo PNG embarqué + titre « TCG SALES » entier + version collée dessous à droite + **pastilles rondes d'état** G/📦 cerclées vert/rouge/ambre, détail en info-bulle) ; milieu = **carrousel swipe panier ⇄ caméra** avec **scan caméra natif `BarcodeDetector`** (codes-barres + QR, repli gracieux — **#4 fait**, à valider sur téléphone) ; lignes article = 🗑 + **chip quantité tappable à gauche** (position fixe — **#10 fait/dépassé**) + nom + **prix unitaire éditable par ligne** (corrige une côte périmée sans toucher les autres) ; **doublon = même ligne ×N** (contour orange ancienne clé / **rouge bloquant** clé neuve) ; bas = client/type/total/**bouton Valider épinglé en Syne** (= police du titre). **Rouleaux remplacés par saisie clavier** (quantité/prix/total, `inputmode`). Pastille cache = anneau coloré (**#9 résolu**). **Roll-back de vente esquissé puis RETIRÉ** (bouton ↶/modale/styles) pour livrer une **1.9.5 propre** : il touche aux données déjà chez Master → **reporté en jalon coordonné (backlog #27)**, à spécifier côté Master d'abord. ⚠️ Caméra/swipe/claviers **non testés** (pas de navigateur en atelier). Aucune logique métier touchée. |
+| #11 | 30/05/2026 | **Palier coordonné 1.10.0 (Sales+Master) + dashboard Master 1.10.1.** **Master 1.10.0** : refonte en-tête (logo, titre, 1240px, panneaux stock/Google), page floutée tant que Google non connecté + overlay accès refusé · **verrou d'instance lease/TTL** (`app_state` C/D = `lock_uuid`/`lock_label`, acquisition écrire→jitter→relire, éviction détectée au battement, « Forcer la reprise », reprise auto si bail >35 s, anti-ping-pong, migration purge C2/D2) · sync gated sur le bail (plus sur l'event) · champs « acheteur défaut »/« label » retirés · cleanup écritures mortes U/AD (scellé). **Sales 1.10.0** : statut master par détection de changement d'horodatage (warning non bloquant, ventes toujours envoyées) · arrêt lecture `app_state` col D comme acheteur. ⚠️ déployer les 2 ensemble. Puis **dashboard Master one-screen maquette v6 (Master 1.10.1)** : 4 KPI auto-shrink, 2 donuts catégorie/licence, ⭐ faits marquants, CA/heure horizontal, aides « ? ». Reste acheteur imposé côté Sales (validé maquette). *À l'époque NON testé navigateur (l'a été depuis — cf. #12).* |
+| #12 | 31/05/2026 | **Revue systématique des 3 apps (instruction §0), PUIS livraisons.** **Trouvailles de revue** : 🔴 l'**Intake était cassé** (`SHEET_NAME` resté sur l'ancien nom — le renommage #9.1 documenté n'avait jamais été appliqué) ; 🟠 la clôture vide `ventes_detail` même si le drain échoue (pending>0 → ventes non appliquées perdues) et l'archive ne garde que les colonnes A→G des lignes brutes — *signalés ; ⚠️ **cas-limites / question de scope, PAS un dysfonctionnement** : le **chemin nominal de clôture (drain OK → archive + vidage des buffers) est testé et validé E2E** (cf. #9 — voir aussi §5ter et §6, « Clôture événement 🏁 ✅ validée en #9 » ; **réaffirmé en #13**). Le durcissement éventuel (refuser le vidage si pending>0 ; archiver les colonnes complètes au-delà de A→G) reste un item **backlog optionnel, non bloquant**.* ; CSS mort `.stat-*`/`.split-*`/`.lb-*` (Master) confirmé. **Livraisons** : **Master 1.11.0** — #18 dédup `txId` à la sync (signature `txId\|clé\|source`, `Set` reconstruit par tick, `DUP_SKIPPED` + anomalie `DUPLICATE_TXID`, cartes/scellés ; scellé devient idempotent ; « ignorer SALES_NOT_SYNCED » déjà satisfait ; **filet, pas mutex** ; vérifié par simulation 5 scénarios). **Sales 1.10.1** — acheteur **imposé** (event rempli → lecture seule pour tous ; vide → éditable obligatoire). **Intake 1.2.0** — réparation : `SHEET_NAME` → `cartes_stock_et_transactions` + helper `a1()` partout. **Intake 1.2.1** — `SAFETY_GSHEET_ID` renseigné (feuille logs/backups) + **CSP**. **CSP sur les 3 apps** (Sales **1.10.2** / Master **1.11.1** / Intake **1.2.1**) ⚠️ à valider navigateur (seul vrai point de test). **SRI : N/A** (aucun `<script src>` tiers). **Clarifications** : module commun (#24, rangement code) ≠ Option 3 (#25, sécurité, **gros chantier reporté après l'auth GIS**). Versioning : #18 a pris Master 1.11.0 → **auth GIS glisse en 1.12.0**. Correction : l'UI #11 a depuis été **validée en navigateur** (dette de test #11 levée). Tout `node --check` OK. Mise à jour de ce document. |
+| #13–#19 | — | *(non historisées dans cette table — voir §9 Archive pour les snapshots #13/#14 ; sessions #15–#19 à reconnecter si nécessaire.)* |
+| #21 | 10/06/2026 | **Popup checklist vacances CM + rappel clôture (Master 1.16.0).** Deux fonctionnalités livrées. **(a) Popup checklist à l'activation d'un event** : déclenchée **uniquement** à la transition vide→nom rempli (pas sur re-save identique ni au reload) ; checklist ordonnée ① mettre CM en mode vacances, ② reporter les ventes CM non saisies, ③ rafraîchir le cache Master ; l'application effective du nom d'event est **différée** jusqu'à validation humaine (`confirmVacationCheck()` → `_applyEventName()`). **(b) Rappel réactivation canaux** après clôture 🏁 réussie (`openVacationReactivateModal()`). Correction des étiquettes changelog embarquées dans le fichier (« Session #14 » → « Session #20 » sur les entrées 1.15.0/1.14.x ; les 1.13.0/1.12.0 vraiment livrées en #13 restent inchangées). Tout `node --check` OK. **Décisions d'architecture** : mode vacances CardMarket = **Manuel** uniquement (API CM candidatures fermées ; apps statiques GitHub Pages incompatibles avec les secrets OAuth 1.0a) ; automatisation vraie = backlog #25. Processus opérationnel validé (ordre des 3 étapes). **Décision** : améliorations esthétiques des 4 apps planifiées (décrites en §1 — PENDING, à coder en prochaine session). Cas 1 différé après les esthétiques. |
+| #20 | 10/06/2026 | **Tests iPhone réels → 2 bugs iOS + cas 2.** **(a) Douchette** : après chaque scan, `renderCart()` déplaçait `#scanZone` → l'input HID se défocusait (WebKit) → scan suivant perdu ; corrigé par re-`focusScan()` en fin de `processScan` (**Sales 1.14.1**) puis **filet global** `focusout` qui ré-arme la douchette après toute action (**Sales 1.14.4**). **(b) Clavier iOS** : longue chasse (1.14.1→1.14.4 : focus synchrone, suppression du vol de focus, masquage opacity au lieu de `display:none`, champs modale à 16px) — **la vraie cause était externe au code** : la **douchette Bluetooth connectée = clavier physique pour iOS → clavier logiciel masqué**. Solution terrain = **double-clic gâchette** (cf. §1). Les correctifs focus/16px restent de vrais progrès. **(c) Cas 2 (jalon coordonné Sales+Master 1.15.0)** : code scanné non reconnu → modale d'ajout forcé (libellé + prix obligatoire) → `source='inconnu'` → vente via outbox + anomalie `SCAN_INCONNU` côté Master (`applyUnknownSale`, statut `OK_UNKNOWN`) ; roll-back inconnu = no-op. **Validé sur iPhone réel.** Reste : cas 1 (vendu ailleurs, cf. §1) + Priorité #1 (GIS). Tout `node --check` OK. |
+
+---
+
+## 8. Versioning des Apps
+
+> Une table par app. Quand une fonctionnalité touche deux apps lors d'une même session (jalon coordonné), elles partagent le numéro — la ligne apparaît alors dans les deux tables, décrite côté app. *(Règles de versioning : voir §0.)*
+
+### TCG Sales
+| Version | Date | Changements |
+|---------|------|-------------|
+| 1.15.0 | 10/06/2026 | **(#20, cas 2 — jalon coordonné Master 1.15.0)** Code scanné non reconnu → modale « ❓ Code non reconnu » (libellé = code brut modifiable, **prix obligatoire**) → ajout en `source='inconnu'` (pas de regroupement, contour ambré + ❓). Part dans `ventes_detail` via l'outbox ; Master l'enregistre + anomalie `SCAN_INCONNU`. *Nécessite Master ≥ 1.15.0.* |
+| 1.14.4 | 10/06/2026 | **(#20)** Champs de modale à **16px** (sous 16px, iOS zoome au focus et SUPPRIME le clavier sur focus programmatique). Filet global `focusout` → ré-arme la douchette après toute action. *(NB : le masquage clavier observé venait surtout de la douchette Bluetooth connectée — cf. §1.)* |
+| 1.14.3 | 10/06/2026 | **(#20)** Retrait des animations d'entrée des modales (l'input était à opacity 0 à l'instant du focus). + fichier `diagnostic-clavier-ios.html` (révèle que la cause était externe : douchette connectée). |
+| 1.14.2 | 10/06/2026 | **(#20)** Anti-vol de focus (stopPropagation prix/qté + garde « modale ouverte ») ; modales masquées via opacity (pas `display:none`). |
+| 1.14.1 | 10/06/2026 | **(#20)** Douchette : re-`focusScan()` en fin de `processScan` (enchaînement des scans) ; focus synchrone des modales (sans `setTimeout`). |
+| 1.14.0 | 31/05/2026 | **(#27, roll-back)** Bouton ↶ Annuler pendant 90 s ; annulation directe si la vente est encore dans l'outbox non envoyée, sinon ligne compensatoire `-RB` (qty négative ; col K = `prixOriginal` pour les cartes) via le même outbox idempotent. *Déployer avec Master 1.14.0.* |
+| 1.13.0 | 31/05/2026 | **(#13)** Vidage du panier persistant (`{items,savedAt,version,eventName}`, jeté au boot si >30 min / version ≠ / event différent ; vidé au logout et au changement/clôture d'event ; snapshot restaurable 60 s) · durcissement auth (plus de demande de jeton auto au boot → connexion au tap ; popup bloquée + échec de refresh rendus visibles). |
+| 1.12.0 | 31/05/2026 | **(#13, #21/R4, jalon coordonné)** Migration vers le modèle token GIS ; jeton **en mémoire seule** ; refresh programmé avant expiration ; connexion popup au tap. CSP +`accounts.google.com`. ⚠️ refresh non silencieux constaté (cf. §1). |
+| 1.10.2 | 31/05/2026 | **(#12)** En-tête CSP `<meta>` (connect-src Sheets + OAuth Google). |
+| 1.10.1 | 31/05/2026 | **(#12)** Acheteur **imposé** : event rempli → champ lecture seule (`#buyerLocked`) = nom d'event pour tous ; vide → éditable + obligatoire. |
+| 1.10.0 | 30/05/2026 | **(#11, jalon coordonné)** Statut master par détection de changement d'horodatage (warning non bloquant, ventes toujours envoyées) · arrêt lecture `app_state` col D comme acheteur. *Déployer avec Master 1.10.0.* |
+| 1.9.4 | 29/05/2026 | **(#10)** En-tête compact : titre non tronqué, connexions en **pastilles rondes** G/📦 cerclées vert/rouge/ambre. |
+| 1.9.3 | 29/05/2026 | **(#10)** Rouleaux → **saisie clavier** (quantité/prix/total) · prix unitaire éditable par ligne · 🗑 à gauche de chaque ligne. |
+| 1.9.2 | 29/05/2026 | **(#10)** Refonte UI 3 zones (écran sans scroll global) · carrousel swipe panier ⇄ caméra + scan `BarcodeDetector` · doublon = même ligne ×N. |
+| 1.9.1 | 29/05/2026 | **(#10)** Lot polish : arrondi col K 2 déc. (#20 partiel) · feedback scan ✓/✗ (#14) · `renderCart()` incrémental (#12) · `#statusZone` (#13) · purge code mort. |
+| 1.9.0 | 29/05/2026 | **(#9, Option 1, jalon coordonné)** Lit le stock depuis `STOCK_PUBLIC` (une lecture `A2:L`) et **n'accède plus à CENTRAL** ; retrait code mort `findCardsHeaderRow`/`findColByName`. |
+| 1.8.1 | 29/05/2026 | `moveToAnomalies` aligné sur le vrai schéma `anomalies` A:K. |
+| 1.8.0 | 29/05/2026 | **Outbox idempotent** : file → envoi → confirmation par relecture `ventes_detail!D` (txId) · échec → `anomalies` puis dead-letter local · zéro perte silencieuse. |
+| 1.7.0 | 29/05/2026 | Renommage onglet + `a1()` · colonnes cartes dynamiques · remise « plus grand reste » euros entiers · formateur Intl fr-BE · journal `logEvent` · purge code mort · `HttpError`. |
+| 1.6.3 | 29/05/2026 | « pas vendu » exclu du menu TVA_Vente (`isNotForSaleStatus()`). |
+| 1.6.1 | 29/05/2026 | Liste TVA_Vente lue dans `Scelle_Transactions!AG8:AG23` (corrige le menu réduit). |
+| 1.6.0 | 29/05/2026 | **(jalon coordonné)** Sélecteur TVA_Vente · verrou « réservée » au scan · acheteur Sales↔Master · `ventes_detail` → A:N. |
+| 1.5.1 | 28/05/2026 | Panneau de scan : retrait du prix (affiché uniquement dans le panier). |
+| 1.5.0 | 28/05/2026 | **(jalon coordonné)** sealedColIdx dynamique · iPrix = Côte/u · retry ×3 · badge version UI. |
+| 1.4.0 | 28/05/2026 | **(jalon coordonné)** Migration GitHub Pages · nouveau projet OAuth · détection dynamique header scellé. |
+| 1.3.0 | 28/05/2026 | **(jalon coordonné)** Split Scelle_Stock/Scelle_Transactions · col C Key · cache scellé indexé par Key. |
+| 1.2.0 | — | **(jalon coordonné)** Fix message « ajouté (0€) » · corrections diverses. |
+| 1.1.0 | — | **(jalon coordonné)** Architecture de base · flow cartes. |
+
+### TCG Master
+| Version | Date | Changements |
+|---------|------|-------------|
+| 1.16.0 | 10/06/2026 | **(#21)** Popup checklist activation event : déclenchée **uniquement** à la transition vide→nom rempli (pas sur re-save identique, pas au reload) ; liste ordonnée ① CM mode vacances, ② reporter ventes CM, ③ rafraîchir cache Master ; nom d'event **différé** jusqu'à `confirmVacationCheck()` → `_applyEventName()`. `saveEventConfig` refactorisé : `_applyEventName()` extraite comme noyau commun. Rappel réactivation canaux (`openVacationReactivateModal()`) après clôture 🏁 réussie. Correction étiquettes changelog embarquées (1.15.0/1.14.x : « Session #14 » → « Session #20 »). `APP_VERSION` bumpé à `1.16.0`. |
+| 1.15.0 | 10/06/2026 | **(#20, cas 2 — jalon coordonné Sales 1.15.0)** Nouvelle source `inconnu` : `applyUnknownSale()` ne touche aucun stock et écrit une anomalie `SCAN_INCONNU` (code + libellé + prix) ; statut `OK_UNKNOWN` (compté comme traité). Roll-back d'un `inconnu` = no-op stock (`OK_MANUAL_RB`). Branche isolée, aucun impact sur les flux carte/scellé/manuel. *Nécessite Sales ≥ 1.15.0.* |
+| 1.14.0 | 31/05/2026 | **(#27, roll-back)** Inversion par **modification des lignes existantes** dans CENTRAL (jamais de qty négative) : carte → vide P/R/S/T, `Q` = prix d'origine, `AF` « pas vendu » ; scellé → supprime la transaction (retrouvée par **txId estampillé en col `AA`**) + ré-incrémente la qty. Garde à 4 états ; neutralisation de la paire si undo avant sync ; trace `ROLLBACK_APPLIED`. *Master sûr seul.* |
+| 1.13.0 | 31/05/2026 | **(#13)** Panneau **« 🏠 Récap comptoir »** permutant avec « Faits marquants » quand pas de nom d'event (swipe articles ⇄ clients du jour) · même durcissement auth. |
+| 1.12.0 | 31/05/2026 | **(#13, #21/R4, jalon coordonné)** Migration GIS (jeton mémoire seule, refresh avant expiration, popup ; release du verrou avant logout ; allow-list `isAuthorizedMaster` conservée). ⚠️ refresh non silencieux (cf. §1). |
+| 1.11.1 | 31/05/2026 | **(#12)** En-tête CSP `<meta>`. |
+| 1.11.0 | 31/05/2026 | **(#12, #18)** Dédup `txId` à la sync : `saleSignature()` = `txId\|clé\|source` · `Set` des appliqués reconstruit par tick · doublon → `DUP_SKIPPED` + anomalie `DUPLICATE_TXID`. Scellé devient idempotent. *Filet, pas mutex.* |
+| 1.10.1 | 30/05/2026 | **(#11)** Dashboard maquette v6 : 4 KPI auto-shrink · 2 donuts catégorie/licence · ⭐ Faits marquants · CA/heure horizontal · aides « ? ». Données agrégées de `ventes_detail` (rien stocké). |
+| 1.10.0 | 30/05/2026 | **(#11, jalon coordonné)** Refonte en-tête + page floutée tant que Google non connecté · **verrou d'instance lease/TTL** (`app_state` C/D = uuid/label, « Forcer la reprise », anti-ping-pong) · sync gated sur le bail · cleanup écritures mortes U/AD. |
+| 1.9.0 | 29/05/2026 | **(#9, Option 1, jalon coordonné)** `publishStockView()` projette la vue sûre `STOCK_PUBLIC` à chaque `loadStockCache` ; capture le flag `reserved`. Re-tagué depuis 1.6.3. |
+| 1.6.3 | 29/05/2026 | Renommage onglet `cartes_stock_et_transactions` (corrige 400) + `a1()` partout (lecture/écriture) · `HttpError` · journal · Intl UI. |
+| 1.6.2 | 29/05/2026 | Correctifs revue #7 : 🔴 `applyCardSale` (bloc `copyPaste` parasite → `ReferenceError`) supprimé · 🟠 index `Synced` `r[12]`→`r[14]` (col O). |
+| 1.6.0 | 29/05/2026 | **(jalon coordonné)** Sélecteur TVA_Vente · fix bug AG jamais écrit (scellé) · découplage session/acheteur. |
+| 1.5.0 | 28/05/2026 | **(jalon coordonné)** sealedColIdx dynamique · txRow 33 cols · append A1 · retry ×3. |
+| 1.4.0 | 28/05/2026 | **(jalon coordonné)** Migration GitHub Pages · nouveau projet OAuth · détection dynamique header scellé. |
+| 1.3.0 | 28/05/2026 | **(jalon coordonné)** Split Scelle_Stock/Scelle_Transactions · applySealedSale. |
+| 1.2.0 | — | **(jalon coordonné)** Corrections diverses. |
+| 1.1.0 | — | **(jalon coordonné)** Architecture de base · flow cartes. |
+
+### TCG Intake
+| Version | Date | Changements |
+|---------|------|-------------|
+| 1.4.4 | 06/06/2026 | **(#14)** `SAFETY_GSHEET_ID` repointé sur une **Google Sheet native** (l'ancien `.xlsx` importé était refusé par l'API) → backup/log opérationnels. |
+| 1.4.3 | 06/06/2026 | **(#14)** Message d'erreur explicite si le classeur de backup/log ou la cible est un `.xlsx` importé (l'API Sheets refuse → `FAILED_PRECONDITION`) ; guide vers une Sheet native. |
+| 1.4.2 | 06/06/2026 | **(#14)** Badge de version à l'écran (`APP_VERSION`). |
+| 1.4.1 | 06/06/2026 | **(#14)** Fix auth (`redirect_uri_mismatch`) : migration de l'ancien flux implicite vers le **flux GIS token popup** (identique à l'Integrator) → basé sur l'origine JS déjà autorisée, **aucune modif console Google**. + lib GIS + CSP + refresh auto. |
+| 1.4.0 | 06/06/2026 | **(#14)** Auto-détection du format déposé (`Key + idProduct` → write-back ; sinon export PT → mode ajout) + parsing **agnostique au délimiteur** (`;`/`,`) + strip BOM (corrige la lecture de `assignations_cm`). |
+| 1.3.0 | 06/06/2026 | **(#14)** **Write-back des idProduct CardMarket** (onglet « idProduct CM ») : charge `assignations_cm`, cible résolue par ENTÊTE (Key col D / idProduct col L), aperçu obligatoire (dry-run), backup + journal. |
+| 1.2.1 | 31/05/2026 | **(#12)** `SAFETY_GSHEET_ID` renseigné (feuille logs/backups) + **CSP**. |
+| 1.2.0 | 31/05/2026 | **(#12, RÉPARATION 🔴)** L'Intake était **cassé** (`SHEET_NAME` resté sur `Cartes_Stock_&_Transactions`, jamais renommé) → 400 partout. Corrigé → `cartes_stock_et_transactions` + `a1()` partout. |
+| 1.1.0 | 29/05/2026 | **(#9)** Garde-fous : `esc()` (XSS DOM) + `safeForSheets()` (injection de formules). ⚠️ le renommage annoncé ici n'avait **pas** été appliqué (resté cassé jusqu'à 1.2.0). |
+| 1.0.0 | 29/05/2026 | Premier stamp formel (revue #7) : `parseCSV` normalise CRLF/CR · détection dynamique de l'en-tête cartes · `parsePrix` locale belge. |
+
+### TCG Integrator
+| Version | Date | Changements |
+|---------|------|-------------|
+| 0.4.2 | 06/06/2026 | **UX matching** : pont série→extension éditable **inline** dans la colonne de chaque carte (datalist, surcharge → applique à toute la série) ; colonnes resserrées (1 carte/ligne) ; code couleur vert=résolu auto / bleu=surcharge / orange=ambigu. *(version réelle du fichier déployé)* |
+| 0.4.1 | 06/06/2026 | UX : correspondances **uniques pré-remplies auto** (« ✓ auto », modifiables ; un champ vidé à la main n'est pas re-rempli). Seules les collisions restent à choisir. |
+| 0.4.0 | 06/06/2026 | **Second export** : fichier d'import **TCG PowerTools** (`cardmarket_upload_pt` : Quantity · Cardmarket ID · Language · Condition · Price · Name). L'intégrateur produit donc 2 fichiers (`assignations_cm` + `cardmarket_upload_pt`). Lecture seule. |
+| 0.3.2 | 06/06/2026 | Vignette CM **désactivée** par défaut (`CM_IMG_PROXIES=[]`) : proxies publics bloqués (CORS + mur Cloudflare). Retour au lien « fiche CM » seul ; mécanique conservée (ré-activable via proxy maîtrisé / gateway #25). |
+| 0.3.1 | 06/06/2026 | Vignette CM : robustesse (chaîne de proxies de secours, état visible par candidat ⏳/∅/photo). |
+| 0.3.0 | 06/06/2026 | Vignette CardMarket par candidat (og:image via proxy CORS configurable) pour désambiguïser visuellement les variantes. |
+| 0.2.4 | 06/06/2026 | Lien « fiche CM » par candidat (désambiguïsation des variantes). |
+| 0.2.3 | 06/06/2026 | **Pont série→extension AUTOMATIQUE** via table de correspondance (`SERIE_BRIDGE`). |
+| 0.2.2 | 04/06/2026 | **Matching par NUMÉRO** (stratégie locale, sans réseau ni TCGdex) — supersède l'approche nom→EN. |
+| 0.2.1 | 04/06/2026 | Candidats enrichis (idMetacard, nom d'extension connu). |
+| 0.2.0 | 04/06/2026 | Matching CM (catalogue JSON + atelier manuel). |
+| 0.1.x | 04/06/2026 | Sélection + filtres (cascade) + pagination. |
+| 0.1.0 | 04/06/2026 | Coquille mono-page : **auth GIS** + lecture stock CENTRAL (lecture seule) + **parser FR validé** (99,9 %). |
+
+---
+
+## 9. Archive (historique narratif)
+
+> Contenu sorti du flux principal mais conservé pour référence. **La mémoire canonique reste §9 (Notes de Session) et §10 (Versioning).** Ces sections décrivent des états passés ou des approches abandonnées — ne pas les traiter comme l'état courant.
+
+### A. Snapshots « État Actuel » par session (du plus récent au plus ancien)
+
+### Session #13 (31/05/2026)
 
 > ⚠️ **Toutes les livraisons #13 passent `node --check` mais AUCUNE n'a été testée en navigateur.** Checklist de test complète en **§0** (à faire avant prod). 🧪 Validation prévue via le **test de simulation maison du samedi 13 juin 2026** (multi-vendeurs, stock dédié) — plan détaillé en **§0** ; convention réelle les **21–22 juin 2026**. Le backlog d'améliorations est **en pause** au profit du lancement **CardMarket**.
 
@@ -233,8 +393,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 - Durcissement à finir : protéger les onglets `STOCK_PUBLIC` / `app_state` ; donner aux vendeurs leurs **propres comptes Google** sur EVENTS.
 - Limitation **pré-existante** (signalée, non traitée) : le cache scellé indexe le stock **par clé** (1 ligne par code-barres) alors que le modèle mental autorise **plusieurs lignes-lots** par code-barres.
 
-
-## 5bis. État Actuel — Session #12 (31/05/2026)
+### Session #12 (31/05/2026)
 
 > Session de revue + livraisons. **Tout `node --check` OK ; aucun fichier encore testé en navigateur** (l'utilisateur teste lui-même ses déploiements — l'UI #11 a, elle, déjà été validée en navigateur, cf. correction ci-dessous).
 
@@ -253,9 +412,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 - **Module commun (#24) ≠ Option 3 (#25)** — deux chantiers **distincts et indépendants** : le module commun = **rangement du code** (dédupliquer les helpers dans `tcg-common.js`, refactor modéré) ; l'Option 3 = **architecture de sécurité** (passerelle Apps Script côté serveur). Module commun = candidat prochaine session ; **Option 3 = gros chantier, à faire après l'auth GIS**.
 - **Versioning** : #18 a pris **Master 1.11.0** (minor, fix fonctionnel significatif, Master seul) → l'**auth GIS glisse en 1.12.0** (jalon coordonné). Patches CSP : Sales 1.10.2 / Master 1.11.1 / Intake 1.2.1.
 
----
-
-## 5ter. État Actuel — Session #11 (30/05/2026)
+### Session #11 (30/05/2026)
 > *Snapshot figé au #11. MAJ #12 : l'UI Master/Sales décrite ici a depuis été **validée en navigateur** ; l'acheteur imposé et #18, notés « à coder » ci-dessous, sont **livrés** (voir §5 #12).*
 
 > ⚠️ **Versions : Sales 1.10.0 / Master 1.10.0** (palier coordonné, numéro partagé). Le numéro 1.10.0, initialement réservé à l'auth GIS, a finalement été **consommé par ce palier** (refonte UI Master + verrou d'instance + sémantique acheteur). **L'auth GIS passe en 1.11.0.**
@@ -284,9 +441,7 @@ Les deux apps ne se parlent **pas directement** — elles communiquent via Googl
 - **#18 dédup `txId` = PRÉ-REQUIS BLOQUANT avant tout event réel** : seul filet couvrant la fenêtre de split-brain (~10 s) lors d'une reprise de verrou. Ne pas utiliser « Forcer la reprise » en prod tant que #18 n'est pas livré.
 - **Aucun fichier testé en navigateur** : valider le scénario **2 appareils** (verrou + reprise) et le comportement **acheteur** côté Sales.
 
----
-
-## 5quater. État Actuel — Fin Session #9 (29/05/2026)
+### Session #9 (29/05/2026)
 
 ### ✅ Terminé en session #9 (sécurité + Option 1)
 Revue de sécurité (OWASP 2025) des 3 apps puis correctifs validés. Bilan détaillé : `Bilan_risques_TCG.md` (réorganisé : risques ouverts d'abord, puis couverts).
@@ -304,9 +459,7 @@ Revue de sécurité (OWASP 2025) des 3 apps puis correctifs validés. Bilan dét
 ### Backlog sécurité ouvert (bilan §A)
 R4 (OAuth implicite + jeton `localStorage` → PKCE/GIS) · R5 (scope `spreadsheets` trop large → `drive.file`+Picker) · CSP/SRI · module commun (helpers dupliqués) · Option 3 (passerelle Apps Script, ferait tomber R4/R5 côté vendeur).
 
----
-
-## 5quinquies. État Actuel — Fin Session #6 (29/05/2026)
+### Sessions #6–#7 (29/05/2026)
 
 ### ✅ Terminé en session #6 (apps en v1.6.0)
 - **[Feature] Sélecteur TVA_Vente côté Sales** : liste lue dans `Scelle_Transactions!AG8:AG23` (source curée, « réservée » exclue du menu), défaut "Régime normal", valeur jointe à chaque vente via `ventes_detail` col M, écrite par Master en **AG (scellé) / AF (carte)**.
@@ -363,9 +516,8 @@ Un bloc `copyPaste` avait été copié par erreur depuis `applySealedSale` ; il 
 - À la réception : séance de scan pour associer un vrai EAN à chaque article en stock
 - Même procédure à chaque nouvel article entrant en stock
 
----
 
-## 6. Prochaines Étapes (dans l'ordre)
+### B. Blocs « Livré en session… » (ex-§6 Prochaines Étapes)
 
 ### ✅ Livré en session #6 (v1.6.0)
 1. ~~**[Sales] Choix du type de vente (TVA_Vente)**~~ — fait. Source = `Scelle_Transactions!AG8:AG23`, écrit en AG (scellé) / AF (carte).
@@ -406,37 +558,10 @@ Un bloc `copyPaste` avait été copié par erreur depuis `applySealedSale` ; il 
 - ~~**Cleanup cols U/AD (scellé)**~~ — fait (Master 1.10.0).
 - ~~**Dashboard Master one-screen (maquette v6)**~~ — fait (**Master 1.10.1**) : KPI auto-shrink, 2 donuts catégorie/licence, faits marquants, CA/heure horizontal, aides « ? ». Voir §5.
 
-### 🔥 Priorités suivantes (à challenger en début de session)
-1. ~~**🟡 Acheteur IMPOSÉ côté Sales**~~ ✅ **fait en #12 (Sales 1.10.1)** — lecture seule quand le nom d'event est rempli (`#buyerLocked`, `getResolvedBuyer()` = nom d'event) ; vide → éditable + obligatoire.
-2. ~~**#18 dédup `txId` (Master)**~~ ✅ **fait en #12 (Master 1.11.0)** — signature `txId|clé|source`, `DUP_SKIPPED` + anomalie `DUPLICATE_TXID`, cartes/scellés. *Filet, pas mutex (le bail reste la défense primaire). « Ignorer `SALES_NOT_SYNCED` » déjà satisfait par l'archi.*
-3. ~~**Auth Google Identity Services (v1.12.0, Sales + Master)**~~ ✅ **fait en #13** — migration flux implicite → modèle token GIS ; jeton en mémoire seule (couvre R4) ; refresh silencieux 5 min avant expiration (fin de la déconnexion ~1 h) ; popup au lieu de redirection ; allow-list master + overlays + release verrou conservés. CSP : +`accounts.google.com` (script-src/frame-src). **⚠️ à valider navigateur** (connexion + refresh + 2 appareils). *(backlog #1, #2, #21 ; recalé 1.10.0 → 1.11.0 → 1.12.0.)*
-4. **Module commun `tcg-common.js`** (#24) — extraire les helpers dupliqués. ⚠️ 3 → 4 fichiers (décision à valider) ; diff des copies avant fusion. *(Refactor, ≠ Option 3.)*
-5. **Passe Master (suite)** : colonnes cartes dynamiques côté écriture (#19) ; refonte centimes (#20).
-6. **Roll-back de vente (Sales + Master, backlog #27)** — append-only (`txId` `-RB`, négatifs) ; spécifier Master d'abord.
-7. **Cartes gradées / articles manuels.** Puis **Option 3 — passerelle Apps Script** (#25, gros chantier, **après l'auth GIS**) ; R5 (scope `drive.file`+Picker) ; SRI si lib CDN un jour. 🔧 **Hardening Option 1** (protéger `STOCK_PUBLIC` + `app_state` ; vendeurs en comptes propres). *Cleanup mineur : CSS mort `.stat-*`/`.stats-grid`/`.split-*`/`.lb-*` dans Master (panneaux retirés en 1.10.1).*
-> ✅ **#23 CSP** : faite en #12 sur les 3 apps (à valider navigateur). **SRI** : N/A (aucun `<script src>` tiers).
 
-### Reste du backlog ordonné
-9. **Workflow boutique / vente comptoir** (après convention)
-10. **Nettoyage code mort + perfs réactivité** (backlog #12-16) — purge CSS/constantes mortes, rendu panier incrémental, lecture O(n) `Scelle_Transactions!B:B`.
+### C. CardMarket — approche de matching par NOM (abandonnée le 06/06/2026)
 
----
-
-## 6bis. `tcg-integrator` — Publication multi-canal (CardMarket en premier) 🎯
-
-> 🎯 **Priorité du moment.** Construire **`tcg-integrator`** : l'app de **sortie** qui pousse les articles du stock vers des **canaux de vente externes**. **CardMarket** est le 1ᵉʳ canal ; l'ossature est pensée pour accueillir ensuite **Whatnot**, **Vinted**, **Marketplace Facebook**. App distincte de `tcg-intake` (entrée de stock) — on ne mélange pas entrée et sortie. Cadrage technique fait sur **fichiers réels** le 04/06/2026 ; **aucun code livré à ce stade**.
-
-### Architecture multi-canal — ne pas sur-spécialiser sur CardMarket
-Les canaux ne fonctionnent **pas** pareil, et ça structure tout le design :
-- **CardMarket (et TCGplayer plus tard)** = **catalogue + identifiant produit** (`idProduct`). Le travail dur = **résoudre quel `idProduct` correspond à ma carte** (problème de matching, voir plus bas).
-- **Vinted / Marketplace Facebook** = **annonces en texte libre**. Pas de catalogue, pas d'ID produit : on génère un **titre + description + photos + prix**. Aucune résolution d'ID — c'est de la **génération d'annonce**.
-- **Whatnot** = **enchères/lots en live**. Pas de mapping article→catalogue ; logique de **lots** et présence caméra.
-
-👉 **Ossature réutilisable (commune à tous les canaux)** : `sélectionner un lot du stock → PRÉPARER le payload spécifique au canal → revue humaine → submit (humain tant qu'il n'y a pas d'API) → marquer « publié sur <canal> » + stocker la référence canal`. La **résolution d'`idProduct` n'est QUE l'implémentation "préparer" de CardMarket** ; Vinted/FB auront une impl. "préparer" = génération d'annonce. Le publisher expose une **interface de canal** (prepare / generate / mark-published), les impls. changent.
-
-### CardMarket — contexte & contrainte API
-- **Pas d'API CardMarket.** Candidatures fermées → remplacées par des **fichiers publics** (catalogue produits + price guide), téléchargeables par tous, MAJ quotidienne, libres d'usage.
-- **Lecture publique** (catalogue, prix) mais **écriture derrière l'API fermée** → **on publie sans API**, via l'interface CardMarket, avec **submit humain**.
+> Remplacée par le matching **par numéro** (cf. §6). Conservé pour comprendre la genèse : analyse du catalogue `products_singles_6.json`, barrière de langue FR↔EN, et le pipeline Poképédia/TCGdex qui devait traduire les noms.
 
 ### Catalogue public CM (analysé le 04/06/2026 — `products_singles_6.json`)
 - idGame **6 = Pokémon**, **70 144 produits** (singles uniquement), daté 03/06/2026. Schéma : `idProduct · name · idCategory(51=Pokémon Single) · categoryName · idExpansion · idMetacard · dateAdded`.
@@ -460,22 +585,11 @@ Parser `(série + numéro + base)` testé sur les **4 015 cartes Pokémon en sto
 - **Qualité de données (chez LGT) :** **198 cartes** ont un numéro tronqué `NNN/` (dénominateur jamais saisi). Matching OK via numérateur+série, mais à **compléter à la source (Intake)** idéalement.
 - Parsing du numéro à gérer : `NNN/NNNN`, `NNNa/NNNN` (lettre, ex. `21a/145`), `NNN/` (partiel), promo `XY163`, numéro nu (`Artikodin ex 032`). Crochets `[Attaque | Attaque]` à retirer avant extraction.
 
-### Périmètre — à acter
-- **Multi-jeux dans le stock.** ~**79 cartes (1,9 %)** en stock sont du **One Piece** (codes `OP06-023`, `ST02-004`, `PRB01`, `EB03`…). Le fichier `products_singles_6.json` est **Pokémon only**. ⇒ **Phase 1 = Pokémon singles uniquement** ; `tcg-integrator` doit **segmenter par jeu** et écarter le non-Pokémon (catalogue One Piece = fichier séparé, même ossature, plus tard).
-- **Scellés ≠ singles.** L'utilisateur veut aussi publier des **items scellés**. ⚠️ Le catalogue singles ne les couvre pas (catalogue **sealed** CM séparé) **et** Poképédia/TCGdex indexent des **cartes**, pas des boosters/displays/ETB. ⇒ **Scellés = piste parallèle** (catalogue sealed CM + normalisation set+type de produit), **après** les singles.
-- **216 codes série internes** à mapper vers les 753 `idExpansion` (table `série interne → idExpansion`, grain set). Buckets pénibles : **« Promos » (565 cartes)** et **WOTC**.
-
-### Structure de l'onglet cartes (stock) — relevé le 04/06/2026
-- En-tête dynamique **ligne 143** (le code la détecte). Colonnes utiles : **D = Key** (SKU interne, ex. `___STutankaferEx076182NM1.5`) · **G = Code Série** (`EV4.0`, `WOTC1.0`, `Promos`…) · **H = Nom de la série** · **I = Nom de la Carte** (numéro inclus, FR) · **J = Type_Carte** · **K = Etat** (NM/EXC/GD…) · **P = Statut Carte** (**vide = en stock**) · **Q = Prix de vente** · **V = Prix d'achat (Pa)**.
-- Volumétrie stock dispo : **4 095 cartes** (statut vide) ; vendues 7 757 ; échangées 228 ; volées 111.
-
-### QR codes — décision (inchangée)
-- ❌ **Pas l'`idProduct` comme clé QR** (timing : résolu plus tard ; granularité : édition ≠ exemplaire ; spécifique canal). ✅ Le QR encode un **identifiant interne** (unité de stock / SKU = la **Key** col D). `idProduct` = **référence externe** sur la définition de carte, à côté des futurs `whatnot_id`, `vinted_id`, etc.
-
 ### Résolution de l'`idProduct` (matching CardMarket)
 - **Une fois par ÉDITION** (cache sur la définition de carte), pas par exemplaire → effort borné et décroissant.
 - **Pipeline** : segmenter Pokémon → résoudre identité canonique via **série+numéro → Poképédia/TCGdex** → obtenir **nom EN** → filtrer `idExpansion` → match nom EN → **auto-lien si unique**, sinon **désambiguïsation humaine**, sinon **file d'exceptions** (extension non mappée, set récent, libellé divergent, jeu non Pokémon).
 - Persistance sur la définition de carte : **`cardmarket_idProduct`** (nullable, backfill au fil de l'eau) + flag **`verified`** (auto-lié vs confirmé humain).
+- **Politique de validation (décidée 04/06/2026) :** l'`idProduct` est **TOUJOURS affiché et modifiable**, même quand le moteur a trouvé un match certain à 100 %. L'override propose la **liste des `idProduct` CM encore disponibles**. ⚠️ Nuance à cadrer : « disponible » = **non encore assigné à une AUTRE édition** du stock LGT (éviter qu'une même clé serve à deux cartes différentes) — mais **plusieurs exemplaires d'une même édition partagent légitimement le même `idProduct`** (l'assignation est au grain ÉDITION, pas exemplaire). La liste de candidats à l'override doit donc se restreindre au bon `idExpansion` et exclure les `idProduct` déjà liés à d'autres éditions, pas les exemplaires.
 
 ### Interface de désambiguïsation (texte, sans images)
 - **Gauche = ta carte** (stock) : bloc, code+nom série, **numéro**, variante/type, état, qté, **prix de vente**. **Droite = candidats** (catalogue) : `name` EN avec crochets + nom d'extension CM + `idProduct`.
@@ -501,136 +615,72 @@ Parser `(série + numéro + base)` testé sur les **4 015 cartes Pokémon en sto
 4. **Génération du formulaire** de publication par `idExpansion`.
 5. *(Futur)* passerelle / API CM si elle rouvre → publication programmatique (`POST stock` par `idProduct`), le cache d'`idProduct` rend le basculement instantané. **L'effort d'aujourd'hui n'est jamais perdu.**
 
-### 🔑 À garder pour plus tard (backlog `tcg-integrator`)
-- Catalogue **One Piece** (autre fichier) + autres jeux ; **scellés** (catalogue sealed CM + normalisation produit).
-- Canaux **Whatnot / Vinted / FB Marketplace** (impls. "préparer" = génération d'annonce, pas de matching ID).
-- **Price guide** CM pour le **repricing** des annonces (pas nécessaire pour lister).
-- **Photo par article** (recto/verso collage), notifications de vente temps réel, MAJ rapide CENTRAL anti-survente en convention.
-
 ---
 
-## 7. Backlog Améliorations
+## Annexe A — Structure des onglets GSheet
 
-| # | Amélioration | Contexte |
-|---|---|---|
-| 1 | Auto-reload cache slave à la reconnexion | Cache à 0 après re-auth OAuth — *sera adressé avec l’auth GIS (#9)* |
-| 2 | Refresh silencieux token OAuth | Token expire ~1h → **planifié v1.10.0 (auth GIS)** *(recalé de 1.9.0, pris par l'Option 1 #9)* |
-| 3 | Toggle "Sync actif sur ce device" | Risque double-sync si 2 masters ouverts |
-| 4 | ~~Scanner caméra 📷 en fallback~~ ✅ | **Fait en #10 (Sales 1.9.2)** : carrousel swipe panier ⇄ caméra, décodage natif `BarcodeDetector` (codes-barres + QR), repli gracieux. *À valider sur le téléphone (non testable hors navigateur).* |
-| 5 | Auto-création des onglets manquants | Master affiche erreur si onglet absent |
-| 8 | Table fournisseurs/vendeurs pros | Auto-déterminer TVA_Achat selon le vendeur |
-| 10 | ~~**[Sales] Boutons +/- quantité panier**~~ ✅ | **Fait/dépassé en #10 (Sales 1.9.2→1.9.3)** : les +/- sont remplacés par un **chip quantité tappable à gauche** (position fixe, → saisie clavier) + une **🗑** de suppression à gauche. Plus de décalage quand le prix change de largeur. |
-| 9 | ~~Pill `📦 N` reste affiché sur état erreur~~ ✅ | **Résolu/obsolète en #10 (Sales 1.9.4)** : la pilule texte est remplacée par une **pastille ronde 📦** dont l'**anneau** porte l'état (vert/ambre/rouge) et le détail passe en info-bulle → plus d'artefact « ✗ Cache HS » écrasé par le timer. |
-| 11 | Uniformisation acheteurs (Levenshtein) | Descopé en #6 (modèle Master-autoritaire suffit). À ressortir seulement si saisie acheteur libre multi-vendeurs un jour |
-| 12 | ~~**[GUI/Sales] Rendu incrémental du panier**~~ ✅ | **Fait en #10 (Sales 1.9.1)** : maj DOM par ligne (clé `uid` + signature anti-réécriture), réordonnancement `appendChild` → préserve focus/scroll. |
-| 13 | ~~**[GUI/Sales] Consolider les barres d'état empilées**~~ ✅ | **Fait en #10 (Sales 1.9.1)** : regroupées dans `#statusZone`, spacing géré par la zone (barres masquées = 0 hauteur) + compactage mobile. |
-| 14 | ~~**[GUI/Sales] Feedback de scan plus visuel**~~ ✅ | **Fait en #10 (Sales 1.9.1)** : flash vert/rouge + bascule éphémère de l'icône ✓/✗ sur la zone de scan. |
-| 15 | **[GUI/Master] Sections repliables + bandeau sync sticky** | Replier les sections et garder le bandeau sync/heartbeat visible (sticky) pendant le scroll |
-| 17 | ~~**[Intake] Renommage onglet cartes + `a1()`**~~ ✅ | **Fait en #12 (1.2.0)** — ⚠️ et **non en #9** comme indiqué auparavant (jamais appliqué → l'Intake était cassé). `SHEET_NAME` → `cartes_stock_et_transactions` **et** `a1()` porté à toutes les plages. |
-| 18 | ~~**[Master] Dédup `txId` + ignorer `SALES_NOT_SYNCED`**~~ ✅ | **Fait en #12 (Master 1.11.0)** : signature `txId\|clé\|source`, `Set` des appliqués reconstruit par tick, doublon → `DUP_SKIPPED` + anomalie `DUPLICATE_TXID` (cartes/scellés). « Ignorer `SALES_NOT_SYNCED` » déjà satisfait (ces lignes sont dans l'onglet `anomalies`, pas `ventes_detail`). *Filet, pas mutex — le bail reste primaire.* |
-| 19 | **[Master] Colonnes cartes dynamiques** | Transposer la détection par nom d'en-tête à Master, **y compris les écritures** (P/P:T/AF par lettre détectée) — chemin d'écriture, à faire avec test |
-| 20 | **[Sales+Master] Refonte « centimes entiers »** *(partiel #10)* | **Acompte #10 (Sales 1.9.1)** : col K `ventes_detail` arrondie 2 déc. à l'écriture (`Math.round(x*100)/100`). Reste le **gros** : calculs internes en centimes-entiers partout (pervasif → étape dédiée). |
-| 21 | **[Sécu R4] OAuth GIS + PKCE** | Flux implicite (déprécié) + jeton en `localStorage` (Master/Sales) → vol possible via XSS. Migrer vers Google Identity Services / Authorization Code + PKCE ; jeton hors `localStorage`. **= priorité #1 prochaine session (v1.12.0).** *(bilan §A)* |
-| 22 | **[Sécu R5] Réduire le scope OAuth** | `auth/spreadsheets` = accès à TOUTES les Sheets du compte → envisager `drive.file` + Google Picker (moindre privilège). *(bilan §A)* |
-| 23 | ~~**[Sécu] CSP**~~ ✅ / **SRI N/A** | **CSP faite en #12** sur les 3 apps (`<meta>`, `default-src 'self'`, `connect-src` restreint, inline autorisé car apps mono-fichier). ⚠️ **à valider en navigateur** (OAuth + scraping). **SRI : N/A** — aucun `<script src>` tiers (à ressortir si lib via CDN un jour). |
-| 24 | **[Archi] Module commun** *(candidat prochaine session)* | Helpers (`esc`, `safeForSheets`, `a1`, formateurs, `HttpError`…) dupliqués dans les 3 fichiers → extraire `tcg-common.js` (une seule source de vérité). ⚠️ Passe de **3 → 4 fichiers** (le commun doit être déployé à côté) ; **diff des copies avant fusion**. **= rangement du code, distinct de l'Option 3 (#25, sécurité).** *(bilan §A)* |
-| 25 | **[Archi] Option 3 — passerelle Apps Script** | Évolution « propre » : web app Apps Script (exécute en tant que propriétaire) sert le stock filtré + reçoit les paniers → vendeurs sans jeton plein scope ni accès Drive. Ferait tomber R4/R5 côté vendeur. *(bilan §A)* |
-| 26 | **[Perf] Republier `STOCK_PUBLIC` après vente** | Actuellement republié au rythme du cache Master (~5 min). Pour une dispo quasi temps réel côté vendeur, republier juste après l'application d'une vente. *(#9)* |
-| 27 | **[Sales+Master] Roll-back de vente** *(jalon coordonné)* | Annuler une vente déjà validée/envoyée (acheteur qui repart). Approche **append-only** retenue (on n'efface jamais une ligne partie chez Master) : écriture **compensatoire** dans `ventes_detail` — `txId` suffixé **`-RB`**, **quantités et total négatifs**, mêmes articles/acheteur — poussée via le **même outbox idempotent**. ⚠️ **Conséquence Master** : doit reconnaître les `txId` `-RB` / quantités négatives (re-créditer le stock, annuler le total, tracer). **Spécifier Master d'abord, puis câbler le bouton côté Sales** (état « vente validée » vert + bouton ↶, fenêtre de rétractation). *Ébauche commencée puis **retirée** en #10 pour livrer une 1.9.5 cosmétique propre (rien d'actif livré).* |
+> ⚠️ **À vérifier régulièrement** contre le sheet live, **surtout après une session où une colonne a été créée/déplacée**. Les apps ciblent les colonnes par **nom d'en-tête** quand c'est possible (robuste au décalage) ; les positions ci-dessous sont un relevé, pas une garantie. En cas de doute, **le code fait foi**.
 
-| 28 | ~~**[Sales] Acheteur imposé**~~ ✅ | **Fait en #12 (Sales 1.10.1)** : lecture seule quand le nom d'event est rempli (`app_state` col B → `getResolvedBuyer()` = nom d'event, pastille `#buyerLocked`) ; vide → éditable + obligatoire. Uniformité multi-vendeurs. |
+### A.1 — `cartes_stock_et_transactions` (onglet cartes, CENTRAL)
+**En-tête dynamique** : actuellement **ligne 143** (le code la détecte via `findCardsHeaderRow`, ne pas coder en dur). Colonnes utiles relevées le 04/06/2026 :
 
-### ✅ Sorti du backlog
-- ~~Migration Netlify → GitHub Pages~~ (#4)
-- ~~#6 Correction arrondi 1¢ sur « Ajuster total »~~ → fait en **#8** (méthode du plus grand reste, euros entiers, total exact)
-- ~~#7 Capture des toasts / log~~ → **journal `logEvent` persistant + `exportLog()`** livré en #8 (Sales) / #8 (Master). *Reste optionnel : un panneau de log pliable dans l'UI.*
-- ~~#16 Purge code mort (Sales)~~ → fait en **#8** : `switchTab()` + CSS d'onglets/stats/leaderboard retirés, `SYNC_POLL_MS` retiré, `HEARTBEAT_POLL_MS` câblé, `SHEET_ANOMALIES` désormais **utilisé** (dead-letter). *Restent : `sheetsUpdate`/`sheetsBatch` non appelés, quelques champs `sealedColIdx` non lus — purge mineure si besoin.*
+| Col | Contenu | Note |
+|-----|---------|------|
+| D | **Key** | SKU interne / clé de jointure (ex. `___STutankaferEx076182NM1.5`) ; clé du write-back idProduct |
+| G | **Code Série** | `EV4.0`, `WOTC1.0`, `Promos`… |
+| H | Nom de la série | |
+| I | **Nom de la Carte** | numéro de collection inclus (FR) |
+| J | Type_Carte | |
+| K | Etat | NM / EXC / GD… |
+| L | **idProduct CM** | cible du write-back CardMarket (résolu par en-tête, repli col L) |
+| O | **Variantes** | shadowless / oversized / stamps… (indistinguables au catalogue, départagés ici) |
+| P | **Statut Carte** | **vide = en stock** |
+| Q | **Prix de vente** | lu par l'Integrator (figé au chargement) |
+| V | **Prix d'achat (Pa)** | plancher de prix / repricing |
+| AF | **TVA_Vente** | régime fiscal côté cartes (≠ AG des scellés) |
 
----
+> Volumétrie (04/06/2026) : **4 095 cartes dispo** (statut vide) ; vendues 7 757 ; échangées 228 ; volées 111. Colonnes A→C, E→F, M→N, R→AE non documentées ici → à relever si besoin.
 
-## 8. Infrastructure
+### A.2 — `Scelle_Stock` (état courant, CENTRAL)
+**Header dynamique** : actuellement en ligne 26 (lignes 1–25 = sections/totaux). Le code scanne la première ligne dont col C = "Key" et itère à la suivante.
 
-| Élément | Détail |
-|---------|--------|
-| Hébergement | **GitHub Pages** — déploiements illimités, gratuit, HTTPS natif, repo `legardiendutcg/Automation` (public) |
-| OAuth | Projet GCP `774473792747` (nom GCP historique : « TCG Integrator » — non renommé côté Google, c'est juste un libellé), client `774473792747-...rj96`, type Application Web. ⚠️ `tcg-integrator` (nouvelle app) pourra réutiliser ce client OU avoir le sien — à décider au moment de l'auth GIS du publisher. |
-| Scopes | `https://www.googleapis.com/auth/spreadsheets` (sensible, doit être déclaré dans Data Access du Google Auth Platform) |
-| URIs OAuth | Redirect URIs = les 3 URLs github.io complètes (sales/master/converter), origine JS = `https://legardiendutcg.github.io` |
-| Audience | Mode **Testing** avec emails listés comme utilisateurs de test (évite la vérif Google complète) |
-| APIs activées | Google Sheets API (à activer manuellement dans tout nouveau projet GCP — non activé par défaut) |
-| Appareils | Sales sur téléphones vendeurs, Master sur iPad/ordi du gérant |
+| Col | Contenu | Note |
+|-----|---------|------|
+| A | Origine | Sous-compte (Stock_Pro, Collection_Privée, etc.) |
+| B | Code Série | |
+| C | **Key** | Barcode EAN — clé primaire scan (vide jusqu'à séance scan douchette) |
+| D | Nom Série | |
+| E | Type_Item | |
+| F | Nom_Item | |
+| G | **Quantité** | Qty disponible (gérée manuellement) |
+| H | Etat | NM, GD, etc. |
+| I–K | CM / Vinted / Ebay | Cotes marché |
+| L | **Côte/u** | Prix de vente affiché |
+| M | Côte Totale | |
+| N | Statut | Vide pour les articles en stock |
+| O | Prix de vente | |
+| P | Acheteur | |
+| Q | Source | |
+| R | Date_Transaction | |
+| S | **Facture d'achat** | Clé du lot (ex: DMA25-A-BE-0018) |
+| T | Facture de vente | |
+| U | Commentaire | |
+| V | Type_Vente | |
+| W | **Prix d'achat** | Total Pa du lot restant (proportionnel aux unités restantes) |
+| X | Marge | |
+| Y | % Marge | |
+| Z | (vide) | |
+| AA | Code Technique | Ancien identifiant (buyer\|\|date) ; ⚠️ utilisé par le roll-back (`SEALED_TX_TXID_COL`) côté `Scelle_Transactions` |
+| AB | Date_Vente | |
+| AC | Facture_Vente | (référence session/event) |
+| AD | Pays_Vente | |
+| AE | TVA_Achat | (position historique — à confirmer) |
+| AF | — | (à confirmer contre le sheet live) |
+| AG | **TVA_Vente** | Régime normal / intracommunautaire / cadeau / **réservée** (= verrou). Liste curée : `Scelle_Transactions!AG8:AG23` |
 
-### Pièges OAuth rencontrés (à se rappeler)
-- **403 "insufficient authentication scopes"** : scope manquant dans Data Access OU token cached côté Google avec ancien grant → solution : ajouter le scope + révoquer l'app sur `myaccount.google.com/permissions` → re-consentement frais
-- **403 "API has not been used... or it is disabled"** : Google Sheets API à activer dans le nouveau projet (APIs & Services → Bibliothèque)
-- **Access blocked: ... has not completed the Google verification process** : compte de connexion absent de la liste des Test users en mode Testing
-- **OAuth client supprimé** : Google supprime auto les clients inactifs 6 mois ; restaurables 30j via la page "Deleted credentials"
+> ⚠️ Table antérieure aux corrections, **décalage possible A→AF**. **Vérifié** : `TVA_Vente` est en **AG** (scellés) et en **AF** (cartes). La ligne de transaction écrite par Master a **A = « x »** en tête ; son ordre exact est défini par `txRow` dans `applySealedSale` — **le code fait foi**.
 
----
-
-## 9. Notes de Session
-
-| Session | Date | Résumé |
-|---------|------|--------|
-| #1 | — | Mise en place architecture de base, flow cartes |
-| #2 | — | Corrections diverses dont message "ajouté (0€)" |
-| #3 | 28/05/2026 | Split Scelle_Stock/Scelle_Transactions, col C Key, applySealedSale, renommage sans accent (onglets), document de contexte |
-| #4 | 28/05/2026 | Migration GitHub Pages, nouveau projet OAuth Google Cloud, fix constantes SHEET_SEALED/_TX, détection dynamique header scellé, cache fonctionnel à 4155 items |
-| #5 | 28/05/2026 | Flow scellé end-to-end validé (master 1.5.10 / sales 1.5.3) ; durcissements 1.5.x (arrondi unitPa, fail explicite sheetId, UNFORMATTED_VALUE, locale parsePrix) |
-| #6 | 29/05/2026 | Challenge + implémentation features TVA_Vente & Acheteur (v1.6.0) ; fix bug AG jamais écrit (scellé) ; verrou « réservée » ; découplage session/acheteur ; correction off-by-one table §3 ; non-bug cartes (TVA_Vente=AF) confirmé. Fix v1.6.1 (Sales) : liste TVA_Vente lue dans `Scelle_Transactions` (et non `Scelle_Stock`). Mapping versions divergent assumé : **Sales 1.6.1 / Master 1.6.0** (patch Sales seul). |
-| #7 | 29/05/2026 | **Revue de code des 3 apps, PUIS correctifs livrés après validation.** Bugs corrigés : 🔴 bloquant Master `applyCardSale` (bloc `copyPaste` parasite réf. `nextTxRow` hors scope → `ReferenceError` à chaque vente carte, fausse anomalie `CARD_NOT_FOUND`) ; 🟠 régression index `Synced` (col M lu au lieu de col O dans `renderSalesLog`/`loadCloseSummary` → résumé de clôture faussé) ; 🟡 Intake (CRLF non normalisé, en-tête cartes dynamique, `parsePrix` locale). Livrés : **Master 1.6.2**, **Intake 1.0.0** (1ʳᵉ mise sous versioning). Non traités → backlog : code mort (Sales `switchTab`+CSS, constantes/fonctions inutilisées, #16) et perfs réactivité (#12). `SAFETY_GSHEET_ID` laissé en placeholder (garde-fou explicite déjà présent). Ajout instruction §0 : revue de code systématique en début de chaque discussion. Petit fix complémentaire **Sales 1.6.3** : « pas vendu » retiré du menu TVA_Vente. **Test E2E (ventes cartes + scellé) concluant** sur les nouvelles versions. Détail complet en §5. |
-| #8 | 29/05/2026 | **Revue stricte de `tcg-sales`, lot de durcissements, PUIS outbox idempotent.** Déclencheur : le renommage de l'onglet cartes en `cartes_stock_et_transactions` (côté GSheet) a cassé Master (`400 Unable to parse range`). **(a) Durcissements** — **Sales 1.7.0** (renommage `SHEET_CARDS` + helper `a1()` partout ; **colonnes cartes en détection dynamique** par nom d'en-tête avec repli sur offsets ; remise « ± Total » refaite en **plus grand reste / euros entiers** sur tous les articles, total exact ; **formateur monétaire Intl fr-BE** ; **journal `logEvent`** persistant + `exportLog()` ; reset acheteur après vente hors-convention ; purge `switchTab`/CSS morts ; **zoom + media query smartphone** ; `HEARTBEAT_POLL_MS` câblé, `SYNC_POLL_MS` retiré ; `HttpError`, `parseInt` base 10, `init().catch`, `txId` rendu unique) et **Master 1.6.3** (même renommage + `a1()` partout (lecture ET écriture) + `HttpError` + journal + Intl UI + `parseInt`/`init().catch`). NON transposé à Master : détection dynamique des colonnes (Master **écrit** par lettre fixe P/P:T/AF → trop risqué sans test) et format des nombres de l'archive de clôture. **(b) Outbox idempotent** — **Sales 1.8.0** : toute vente mise en file (`pending`) puis envoyée ; **idempotence par relecture `ventes_detail!D`** (txId) avant tout renvoi → ni doublon (réponse perdue) ni perte (envoi échoué) ; échec définitif (4xx) ou après `MAX_SALE_RETRIES` → onglet `anomalies` ; si l'écriture anomalies échoue aussi → **dead-letter localStorage** + bandeau rouge « Réessayer » (**zéro perte silencieuse**) ; **journal du cycle de vie**. Machine à états vérifiée en simulation (7 scénarios). **Sales 1.8.1** : `moveToAnomalies` aligné sur le **vrai schéma A:K** de l'onglet `anomalies` (une ligne/article, `SALES_NOT_SYNCED`, payload JSON en `Notes`). **`tcg-intake` non touché** (référence encore l'ancien nom → à corriger en #9). Mise à jour de ce document. *(NB : les changelogs internes des fichiers livrés étiquetaient l'outbox « Session #9 » ; à recaler en « #8 » si tu veux une cohérence parfaite.)* |
-| #9 | 29/05/2026 | **Revue de sécurité (OWASP 2025) + Option 1.** **Intake 1.1.0** : `esc()` (corrige XSS DOM via CSV/scraping) + `safeForSheets()` (corrige injection de formules) + **renommage onglet** `cartes_stock_et_transactions` (priorité #9.1 — il cassait dessus). **Option 1 (Master 1.9.0 + Sales 1.9.0)** : Master publie une vue stock sûre `STOCK_PUBLIC` dans EVENTS (cartes+scellés dispo, **sans coûts/marges**, + flag `Reserved` + liste TVA) ; Sales lit le stock de là et **ne lit plus CENTRAL** (fonctions mortes `findCardsHeaderRow`/`findColByName` retirées) → vendeurs sans accès CENTRAL, marges jamais exposées. Confirmé : 2 GSheets « Restreint ». **Versioning** : Option 1 modifiant les 2 apps ensemble, elles partagent **1.9.0** (Master re-tagué 1.6.3→1.9.0) ; l'auth GIS visée glisse en **1.10.0**. **Test E2E concluant** : Option 1 validée jusqu'à la **clôture d'événement** 🏁 (archive + vidage des buffers `ventes_detail`/`anomalies`) — la clôture, en attente depuis #8, est validée. **Hardening recommandé restant** : protéger `STOCK_PUBLIC` + ajouter vendeurs (comptes propres). Backlog sécurité ouvert : R4/R5, CSP/SRI, module commun, Option 3 Apps Script. Détail : `Bilan_risques_TCG.md`. |
-| #10 | 29/05/2026 | **Revue §0 d'ouverture → constat que tout le « plan » était déjà livré, PUIS lot polish Sales.** La revue a révélé que les apps étaient en **1.9.0** (doc d'ouverture périmé en #7) : l'« augmentation du panier » et les « articles manuels » discutés étaient **déjà implémentés** (Sales `± Total` bidirectionnel + `+ Manuel` / Master `applyManualSale` no-op stock), et l'arrondi #6 déjà corrigé en #8. **Vérifié par exécution** que la règle de répartition « ± Total » (proportionnelle, euros entiers, plus grand reste, total exact) marche **à la hausse comme à la baisse** ; seul résidu = micro-dérive flottante ≤ 5,7e-14 € sur col K quand qty>1 (jamais visible). **Lot livré — Sales 1.9.1** (patch, **Sales seul** ; ⚠️ **1.10.0 reste réservé à l'auth GIS** Sales+Master) : hardening arrondi col K `Math.round(x*100)/100` (#20 partiel) · feedback de scan flash ✓/✗ (#14) · `renderCart()` **incrémental** par ligne (#12) · bandeaux d'état regroupés `#statusZone` + compactage mobile (#13) · purge reliquats code mort `sheetsUpdate`/`sheetsBatch` + vars `cardHeaderRow`/`cardColIdx`/`sealedColIdx` (#16 reliquat). Master & Intake **non touchés**. Refonte centimes complète (#20) toujours ouverte. **PUIS refonte UI Sales complète (1.9.2 → 1.9.5, patch Sales seul, itérée sur maquettes)** : interface **3 zones** tenant dans un écran smartphone sans scroll global ; en-tête (logo PNG embarqué + titre « TCG SALES » entier + version collée dessous à droite + **pastilles rondes d'état** G/📦 cerclées vert/rouge/ambre, détail en info-bulle) ; milieu = **carrousel swipe panier ⇄ caméra** avec **scan caméra natif `BarcodeDetector`** (codes-barres + QR, repli gracieux — **#4 fait**, à valider sur téléphone) ; lignes article = 🗑 + **chip quantité tappable à gauche** (position fixe — **#10 fait/dépassé**) + nom + **prix unitaire éditable par ligne** (corrige une côte périmée sans toucher les autres) ; **doublon = même ligne ×N** (contour orange ancienne clé / **rouge bloquant** clé neuve) ; bas = client/type/total/**bouton Valider épinglé en Syne** (= police du titre). **Rouleaux remplacés par saisie clavier** (quantité/prix/total, `inputmode`). Pastille cache = anneau coloré (**#9 résolu**). **Roll-back de vente esquissé puis RETIRÉ** (bouton ↶/modale/styles) pour livrer une **1.9.5 propre** : il touche aux données déjà chez Master → **reporté en jalon coordonné (backlog #27)**, à spécifier côté Master d'abord. ⚠️ Caméra/swipe/claviers **non testés** (pas de navigateur en atelier). Aucune logique métier touchée. |
-| #11 | 30/05/2026 | **Palier coordonné 1.10.0 (Sales+Master) + dashboard Master 1.10.1.** **Master 1.10.0** : refonte en-tête (logo, titre, 1240px, panneaux stock/Google), page floutée tant que Google non connecté + overlay accès refusé · **verrou d'instance lease/TTL** (`app_state` C/D = `lock_uuid`/`lock_label`, acquisition écrire→jitter→relire, éviction détectée au battement, « Forcer la reprise », reprise auto si bail >35 s, anti-ping-pong, migration purge C2/D2) · sync gated sur le bail (plus sur l'event) · champs « acheteur défaut »/« label » retirés · cleanup écritures mortes U/AD (scellé). **Sales 1.10.0** : statut master par détection de changement d'horodatage (warning non bloquant, ventes toujours envoyées) · arrêt lecture `app_state` col D comme acheteur. ⚠️ déployer les 2 ensemble. Puis **dashboard Master one-screen maquette v6 (Master 1.10.1)** : 4 KPI auto-shrink, 2 donuts catégorie/licence, ⭐ faits marquants, CA/heure horizontal, aides « ? ». Reste acheteur imposé côté Sales (validé maquette). *À l'époque NON testé navigateur (l'a été depuis — cf. #12).* |
-| #12 | 31/05/2026 | **Revue systématique des 3 apps (instruction §0), PUIS livraisons.** **Trouvailles de revue** : 🔴 l'**Intake était cassé** (`SHEET_NAME` resté sur l'ancien nom — le renommage #9.1 documenté n'avait jamais été appliqué) ; 🟠 la clôture vide `ventes_detail` même si le drain échoue (pending>0 → ventes non appliquées perdues) et l'archive ne garde que les colonnes A→G des lignes brutes — *signalés ; ⚠️ **cas-limites / question de scope, PAS un dysfonctionnement** : le **chemin nominal de clôture (drain OK → archive + vidage des buffers) est testé et validé E2E** (cf. #9 — voir aussi §5ter et §6, « Clôture événement 🏁 ✅ validée en #9 » ; **réaffirmé en #13**). Le durcissement éventuel (refuser le vidage si pending>0 ; archiver les colonnes complètes au-delà de A→G) reste un item **backlog optionnel, non bloquant**.* ; CSS mort `.stat-*`/`.split-*`/`.lb-*` (Master) confirmé. **Livraisons** : **Master 1.11.0** — #18 dédup `txId` à la sync (signature `txId\|clé\|source`, `Set` reconstruit par tick, `DUP_SKIPPED` + anomalie `DUPLICATE_TXID`, cartes/scellés ; scellé devient idempotent ; « ignorer SALES_NOT_SYNCED » déjà satisfait ; **filet, pas mutex** ; vérifié par simulation 5 scénarios). **Sales 1.10.1** — acheteur **imposé** (event rempli → lecture seule pour tous ; vide → éditable obligatoire). **Intake 1.2.0** — réparation : `SHEET_NAME` → `cartes_stock_et_transactions` + helper `a1()` partout. **Intake 1.2.1** — `SAFETY_GSHEET_ID` renseigné (feuille logs/backups) + **CSP**. **CSP sur les 3 apps** (Sales **1.10.2** / Master **1.11.1** / Intake **1.2.1**) ⚠️ à valider navigateur (seul vrai point de test). **SRI : N/A** (aucun `<script src>` tiers). **Clarifications** : module commun (#24, rangement code) ≠ Option 3 (#25, sécurité, **gros chantier reporté après l'auth GIS**). Versioning : #18 a pris Master 1.11.0 → **auth GIS glisse en 1.12.0**. Correction : l'UI #11 a depuis été **validée en navigateur** (dette de test #11 levée). Tout `node --check` OK. Mise à jour de ce document. |
-
----
-
-## 10. Versioning des Apps
-
-| Version | Date | App(s) | Changements |
-|---------|------|--------|-------------|
-| 1.14.0 | 31/05/2026 | Sales + Master | **(#27, roll-back d'une vente — jalon coordonné)** **Sales** : bouton ↶ Annuler pendant 90 s ; annulation directe si la vente est encore dans l'outbox non envoyée, sinon ligne compensatoire `-RB` (qty négative ; col K = `prixOriginal` pour les cartes) via le même outbox idempotent. **Master** : **(#27, roll-back d'une vente — côté Master)** Inversion d'une vente appliquée par **modification des lignes existantes** dans CENTRAL (jamais de qty négative) : **carte** → vide P/R/S/T, remet `Q` = prix d'origine (porté par Sales en col K de la ligne `-RB`), `AF` = « pas vendu » ; **scellé** → supprime la ligne de transaction (retrouvée par **txId estampillé en col `AA`**) + ré-incrémente la qty du lot dans `Scelle_Stock`. `masterSyncTick` reconnaît les lignes `ventes_detail` à txId `…-RB`, **garde à 4 états** (inverse seulement si l'originale fut appliquée ; en attente → **neutralisation de la paire**, CENTRAL intact ; en échec → no-op ; introuvable → anomalie). `applySealedSale` estampille le txId en `AA`. Dédup #18 étendue aux `-RB`. Trace `ROLLBACK_APPLIED` dans `anomalies`. **NON testé navigateur ; déployer avec Sales 1.14.0** (Master 1.14.0 sûr seul : estampille inoffensive, gestion `-RB` dormante). |
-| 1.13.0 | 31/05/2026 | Sales + Master | **(#13, jalon coordonné)** **Sales** : (a) **vidage du panier persistant** — panier estampillé `{items, savedAt, version, eventName}`, **jeté au boot** si âge > 30 min OU version ≠ app OU (1ère confirmation Master) event différent ; vidé aussi au **logout** et au **changement/clôture d'event** détecté via heartbeat (lecture confirmée seulement → immunisé aux blips) ; tout vidage auto garde un **snapshot restaurable 60 s**. (b) **Auth** : plus de demande de jeton **auto au boot** (évite la popup bloquée = échec silencieux) → connexion au **tap** ; `onAuthError` rend visibles popup bloquée + échec de refresh. **Master** : (a) **panneau « 🏠 Récap comptoir »** permutant avec « Faits marquants » quand **pas de nom d'event** (carrousel swipe : articles du jour ⇄ clients du jour ; source `ventes_detail`). (b) même durcissement auth (pas d'auto-popup, erreurs visibles). **Déployer les 2 ensemble. `node --check` OK ; NON testé navigateur.** |
-| 1.12.0 | 31/05/2026 | Sales + Master | **(#13, auth Google Identity Services — #21/R4, jalon coordonné)** Migration du flux **OAuth implicite codé main** (redirection pleine page, `response_type=token`, jeton en `localStorage`, aucun refresh) vers le **modèle token de GIS** : chargement de `accounts.google.com/gsi/client` + `initTokenClient()`. **Jeton EN MÉMOIRE SEULE** (`persistToken()`/restauration LS retirés ; purge proactive de l'ancien jeton disque au boot → couvre **R4**). **Refresh silencieux** programmé 5 min avant expiration (`requestAccessToken({prompt:''})`) → **fin de la déconnexion ~1 h**. Connexion = **popup** (au tap) ; au reload, tentative silencieuse (transparente si session active, sinon bouton/overlay de connexion). `logout()` → `revoke()` + clear mémoire (Master : release du verrou d'abord, allow-list `isAuthorizedMaster` + overlays conservés). **CSP** : `script-src` + `https://accounts.google.com`, ajout `frame-src https://accounts.google.com`. **SRI** : N/A — le script GIS ne doit pas être épinglé. ⚠️ Prérequis GCP (origine `https://legardiendutcg.github.io`) déjà en place. **Déployer les 2 ensemble. `node --check` OK ; NON testé navigateur.** |
-| 1.11.1 | 31/05/2026 | Master | **(#12, CSP — Master seul)** En-tête CSP `<meta>` : `default-src 'self'`, inline script/style autorisés, `connect-src` = Sheets + OAuth Google, `object-src 'none'`, `base-uri 'self'`. ⚠️ à valider navigateur. SRI N/A. |
-| 1.11.0 | 31/05/2026 | Master | **(#12, dédup `txId` à la sync — #18, Master seul, PRÉ-REQUIS event réel)** `masterSyncTick` : `saleSignature()` = `txId\|clé\|source` (cartes/scellés ; `''` pour manuel/sans clé) · `Set` des appliqués (Synced ∈ {OK,OK_MANUAL}) reconstruit par tick depuis la feuille + complété au fil du tick · doublon → `DUP_SKIPPED` + anomalie `DUPLICATE_TXID` (non ré-appliqué). Scellé devient idempotent ; carte l'était déjà (pré-check `P_NON_BLANK`). « Ignorer `SALES_NOT_SYNCED` » déjà satisfait (onglet `anomalies`). *Filet, pas mutex (bail = défense primaire). Vérifié par simulation (5 scénarios). Sales inchangé.* |
-| 1.10.2 | 31/05/2026 | Sales | **(#12, CSP — Sales seul)** En-tête CSP `<meta>` identique à Master (connect-src Sheets + OAuth Google). ⚠️ à valider navigateur. SRI N/A. |
-| 1.10.1 | 31/05/2026 | Sales | **(#12, acheteur IMPOSÉ — Sales seul)** Nom d'event publié par Master (`app_state` col B) → champ acheteur **lecture seule** (pastille `#buyerLocked`), valeur = nom d'event pour tous les vendeurs (uniformité multi-vendeurs) ; vide → éditable + obligatoire. `getResolvedBuyer()` priorise le nom d'event ; `updateBuyerField()` bascule input ⇄ pastille. Fin du défaut écrasable de la 1.10.0. *Master inchangé (besoin Master ≥1.10.0).* |
-| 1.10.1 | 30/05/2026 | Master | **(#11, dashboard maquette v6 — Master seul)** En-tête : sous-titre retiré, **version à droite du titre**. Bandeau event compact `.event-strip` + **aide « ? »**. Ligne 2 col. : **« Synchronisation des ventes »** (Sync now / Pause auto à droite) | **« Clôture »** (aide « ? »). Titre « Stats… » retiré. **`.dash-grid`** : 4 KPI compacts **auto-shrink** (`fitKpis`/`data-fit`) · 2 **donuts** catégorie+licence (`pathLength=100`, **% en légende**, `CAT_COLORS`/`LIC_COLORS`+fallback, clé normalisée) · **⭐ Faits marquants** (`computeFacts`, 9 lignes) · **CA/heure horizontal** (`computeHours`/`renderHours`, 10h→17h, montant dans la barre, vides hachurés). Données agrégées de `ventes_detail` au refresh (rien stocké). `renderSplit`/`renderLeaderboard` retirés ; **Journal + Anomalies conservés** dessous. `toggleHelp()` (ferme au clic extérieur). *Sales inchangé (1.10.0). CSS mort `.stat-*`/`.split-*`/`.lb-*` laissé (cleanup mineur). NON testé navigateur.* |
-| 1.10.0 | 30/05/2026 | Sales + Master | **(#11, palier coordonné)** **Master** : refonte en-tête (logo embarqué, titre, largeur 1240px, panneaux stock/Google), **page floutée tant que Google non connecté** + overlay accès refusé · **verrou d'instance lease/TTL** (`app_state` C/D = `lock_uuid`/`lock_label` ; acquisition écrire→jitter→relire ; éviction détectée au battement ; « Forcer la reprise » ; reprise auto si bail >35 s ; anti-ping-pong ; migration purge C2/D2) · **sync gated sur le bail** (plus sur l'event) · champs « acheteur défaut »/« label appareil » retirés · cleanup écritures mortes U/AD (scellé). **Sales** : statut master par **détection de changement** d'horodatage (warning **non bloquant**, ventes toujours envoyées) · arrêt lecture `app_state` col D comme acheteur. ⚠️ **Déployer les 2 ensemble.** **NON testé navigateur.** 🟡 **Reste à coder** (validé maquette v6) : **acheteur imposé** côté Sales (le dashboard Master est fait en 1.10.1). | Version collée sous le titre, **alignée à droite** (bord droit = celui du titre) · bouton « Valider » en **police du titre** (Syne 800, `-.05em`), alertes en Syne aussi (plus de Space Mono) · **retrait de l'ébauche de roll-back** (bouton ↶/modale/styles) → reporté en jalon coordonné (#27). Purement cosmétique. *Master & Intake inchangés.* |
-| 1.9.4 | 29/05/2026 | Sales | **(#10, en-tête compact — patch Sales seul)** Titre « TCG SALES » **non tronqué** (ligne dédiée) · connexions en **pastilles rondes** : `G` (Google) + `📦` (stock) cerclées **vert/rouge/ambre** (toucher = (dé)connexion / refresh ; détail compte/réf./âge en info-bulle) · version lisible. `updateAuthUI`/`updateCachePill` pilotent les anneaux (pilules texte conservées masquées pour compat). |
-| 1.9.3 | 29/05/2026 | Sales | **(#10, ergonomie saisie — patch Sales seul)** **Rouleaux supprimés → saisie clavier** (`inputmode`) pour **quantité**, **prix unitaire** et **total** · **prix unitaire éditable par ligne** (corrige une côte GSheet périmée sans répartir sur tout le panier ; affiché « modifié ») · **🗑 à gauche** de chaque ligne (suppression directe ; qty 0 reste possible) · prix affiché = **prix unitaire** · bouton « Valider » agrandi (police Syne). |
-| 1.9.2 | 29/05/2026 | Sales | **(#10, refonte UI 3 zones — patch Sales seul)** Écran smartphone **sans scroll global** (`100dvh`/`overflow:hidden`) ; HAUT logo PNG + titre ; MILIEU **carrousel swipe panier ⇄ caméra** (2 points) + **scan caméra `BarcodeDetector`** (codes-barres + QR, repli gracieux) + barre de scan fine ; lignes = chip quantité à gauche, nom pleine largeur, prix flotté ; **doublon = même ligne ×N**, contour orange (carte ancienne clé) / **rouge bloquant** (carte clé neuve) ; BAS champs sans libellés + total tappable + bouton Valider épinglé. Icônes = emojis ; logo client embarqué (base64). *Caméra/swipe non testés hors navigateur.* |
-| 1.9.1 | 29/05/2026 | Sales | **(#10, lot polish — patch Sales seul ; 1.10.0 réservé à l'auth GIS)** Arrondi col K `ventes_detail` à 2 déc. `Math.round(x*100)/100` (#20 **partiel**) · feedback de scan flash ✓/✗ + pulse vert/rouge (#14) · `renderCart()` **incrémental** par ligne (clé `uid`, signature anti-réécriture, réordonnancement `appendChild`) → préserve focus/scroll (#12) · bandeaux d'état regroupés dans `#statusZone`, spacing géré par la zone + compactage mobile (#13) · purge code mort `sheetsUpdate`/`sheetsBatch` + vars `cardHeaderRow`/`cardColIdx`/`sealedColIdx` (#16 reliquat). *Master & Intake inchangés ; nécessite toujours Master 1.9.0 (`STOCK_PUBLIC`).* |
-| 1.9.0 | 29/05/2026 | Sales + Master | **(#9, Option 1)** Master `publishStockView()` projette une vue stock **sûre** dans `EVENTS › STOCK_PUBLIC` (Key/Kind/Code/Nom série/Nom/Type/Etat/PrixVente/Qty/Reserved + liste TVA, **sans coûts/marges**) à chaque `loadStockCache` ; capture du flag `reserved` (lecture scellés `A:AF`→`A:AG`, +`iTvaVente`) ; helpers `normAccent`/`isReservedValue` portés · **Sales** lit le stock depuis `STOCK_PUBLIC` (une lecture `A2:L`) et **n'accède plus à CENTRAL** ; retrait code mort `findCardsHeaderRow`/`findColByName`. **Numéro partagé** (les 2 apps modifiées ensemble) — Master re-tagué depuis 1.6.3 ; l'auth GIS visée passe à 1.10.0. *Nécessite onglet `STOCK_PUBLIC` publié + protégé. Test E2E requis avant prod.* |
-| 1.8.1 | 29/05/2026 | Sales | Fix : `moveToAnomalies` écrit dans le vrai schéma `anomalies` A:K (1 ligne/article, `SALES_NOT_SYNCED`, payload JSON en `Notes`) |
-| 1.8.0 | 29/05/2026 | Sales | **Outbox idempotent** : file → envoi → confirmation par relecture `ventes_detail!D` (txId) · échec → `anomalies` puis dead-letter local · zéro perte silencieuse · journal du cycle de vie |
-| 1.7.0 | 29/05/2026 | Sales | Renommage onglet + helper `a1()` · colonnes cartes dynamiques · remise « plus grand reste » euros entiers · formateur Intl fr-BE · journal `logEvent` · purge code mort (`switchTab`/CSS) · zoom + optim. smartphone · `HEARTBEAT_POLL_MS` câblé · `HttpError` · `parseInt`/`init().catch`/`txId` unique |
-| 1.6.3 | 29/05/2026 | Master | Renommage onglet `cartes_stock_et_transactions` (corrige `400`) + helper `a1()` partout (lecture/écriture) · `HttpError` · journal `logEvent` · formateur Intl UI · `parseInt`/`init().catch`. **NON transposé** : colonnes dynamiques (écritures par lettre fixe) et format archive clôture |
-| 1.6.3 | 29/05/2026 | Sales | Fix : « pas vendu » exclu du menu déroulant TVA_Vente (statut, pas un régime) — `isNotForSaleStatus()`, à côté de l'exclusion existante « réservée » |
-| 1.6.2 | 29/05/2026 | Master | Correctifs revue #7 : 🔴 `applyCardSale` (bloc `copyPaste` parasite réf. `nextTxRow` hors scope → `ReferenceError` à chaque vente carte) supprimé · 🟠 index `Synced` `r[12]`→`r[14]` (col O) dans `renderSalesLog` + `loadCloseSummary` · commentaires A:AF→A:AG |
-| 1.6.1 | 29/05/2026 | Sales | Fix : liste TVA_Vente lue dans `Scelle_Transactions!AG8:AG23` (pointait par erreur sur `Scelle_Stock`, d'où le menu réduit à « Régime normal ») |
-| 1.6.0 | 29/05/2026 | Sales + Master | Sélecteur TVA_Vente (source `Scelle_Transactions!AG8:AG23`, écrit AG scellé / AF carte) · fix bug AG jamais écrit (scellé) · verrou « réservée » au scan · acheteur Sales↔Master (`app_state` col D) avec découplage session/acheteur · `ventes_detail` → A:N (M=TVA_Vente, N=Acheteur) |
-| 1.5.1 | 28/05/2026 | Sales | Panneau de scan : retrait du prix (affiché uniquement dans le panier) |
-| 1.5.0 | 28/05/2026 | Sales + Master | sealedColIdx entièrement dynamique · iPrix = Côte/u (col M) · txRow 33 cols (col A = "x") · append A1 · retry ×3 avant anomalie · version badge dans UI |
-| 1.4.0 | 28/05/2026 | Sales + Master | Migration GitHub Pages · nouveau projet OAuth · fix constantes SHEET_SEALED/_TX · détection dynamique header scellé |
-| 1.3.0 | 28/05/2026 | Sales + Master | Split Scelle_Stock/Scelle_Transactions · col C Key · applySealedSale · cache scellé indexé par Key |
-| 1.2.0 | — | Sales + Master | Fix message "ajouté (0€)" · corrections diverses |
-| 1.1.0 | — | Sales + Master | Architecture de base · flow cartes |
-
-**Règle de versioning :**
-- **Patch (x.x.+1)** : fix mineur, UX, cosmétique
-- **Minor (x.+1.0)** : nouvelle feature ou fix fonctionnel significatif
-- **Major (+1.0.0)** : refonte architecture ou breaking change
-
-### Versioning de l'Intake (piste distincte, back-office)
-L'outil `tcg-intake.html` (TCG Intake) est désormais versionné séparément de la paire Sales/Master.
-
-| Version | Date | Changements |
-|---------|------|-------------|
-| 1.2.1 | 31/05/2026 | **(#12)** `SAFETY_GSHEET_ID` **renseigné** (feuille dédiée logs/backups d'injection → journal + backups opérationnels) · **CSP** ajoutée (`<meta>`, `default-src 'self'`, `connect-src` = Sheets/OAuth Google + les 5 proxies de scraping, inline autorisé). ⚠️ CSP à valider navigateur. SRI N/A. |
-| 1.2.0 | 31/05/2026 | **(#12, RÉPARATION 🔴)** L'Intake était **cassé** : `SHEET_NAME` était resté sur `Cartes_Stock_&_Transactions` (le renommage #9.1 documenté n'avait **jamais** été appliqué au fichier) → 400 « Unable to parse range » partout. Corrigé → `cartes_stock_et_transactions` · **+ helper `a1()`** porté à **toutes** les plages (cartes + onglets LOG/BACKUP ; références d'onglet aussi quotées dans les formules `COUNTIF`/`SUMIF`). Comportement inchangé pour des données normales. |
-| 1.1.0 | 29/05/2026 | **(#9)** Portage des garde-fous de Sales/Master : `esc()` sur tous les `innerHTML` (corrige XSS DOM via CSV importé / valeurs scrapées) · `safeForSheets()` sur les colonnes texte du CSV dans `buildCardRow` (corrige injection de formules) · `buildLotRow` double les guillemets dans `COUNTIF`/`SUMIF`. ⚠️ **Le renommage `SHEET_NAME` annoncé ici n'a en réalité pas été appliqué** (l'Intake est resté cassé jusqu'au correctif #12 — voir 1.2.0). |
-| 1.0.0 | 29/05/2026 | Premier stamp formel. Correctifs revue #7 : 🟡 `parseCSV` normalise CRLF/CR → LF · 🟡 détection dynamique de l'en-tête cartes (`findCardsHeaderRow`/`ensureCardHeaderRow`) au lieu de `143` codé en dur · `parsePrix` locale belge. `SAFETY_GSHEET_ID` reste un placeholder à renseigner (garde-fou explicite déjà en place). |
+### A.3 — `Scelle_Transactions` (historique, CENTRAL)
+- Même colonnes que `Scelle_Stock`. 1 ligne par mouvement : vente (Statut=vendu), vol, ouverture, échange, transfert, cadeau.
+- Alimenté manuellement (historique) + automatiquement par TCG Master à chaque vente convention.
+- ⚠️ **col `AA`** porte l'estampille `txId` du roll-back (`SEALED_TX_TXID_COL`) — confirmer qu'elle n'est pas lue par la compta (cf. §1).

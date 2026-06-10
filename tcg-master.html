@@ -1,9 +1,19 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.15.0 (Session #14 — 2026-06-10)
+  Version : 1.16.0 (Session #21 — 2026-06-10)
 =============================================================
-  1.15.0 2026-06-10  Session #14 (cas 2 — vente d'un code non reconnu ; JALON COORDONNÉ avec Sales 1.15.0)
+  1.16.0 2026-06-10  Session #21 (popup checklist vacances — activation event + rappel clôture ; Master seul)
+         - [Feature] saveEventConfig() : quand on passe d'un event vide à un event rempli (ou qu'on
+           change d'event), affiche une modale-checklist rappelant d'activer le mode vacances sur CM
+           (et futurs canaux) AVANT de charger le stock, puis de mettre la GSheet à jour, puis de
+           rafraîchir le cache. Validation = assertion humaine « c'est fait ». Pas de popup sur
+           re-save identique ni sur reload (currentEventName déjà rempli au boot).
+         - [Feature] confirmCloseEvent() : après archivage réussi, affiche une modale de rappel pour
+           RÉACTIVER la vente sur CM (sortir du mode vacances).
+         - [Correction] Étiquettes changelog « Session #14 » → « Session #20 » sur les entrées
+           1.15.0 et 1.14.0 (pointeur de session corrigé, cf. note §0 du contexte projet).
+  1.15.0 2026-06-10  Session #20 (cas 2 — vente d'un code non reconnu ; JALON COORDONNÉ avec Sales 1.15.0)
          - [Feature cas 2] Nouvelle source 'inconnu' (poussée par Sales pour un code scanné non
            reconnu, ajouté de force avec un prix). applyUnknownSale() : ne touche AUCUN stock
            (le code n'est pas au catalogue) et écrit une anomalie SCAN_INCONNU (code + libellé +
@@ -11,7 +21,7 @@
          - [#27] Roll-back d'une vente 'inconnu' = no-op stock (comme 'manuel') → OK_MANUAL_RB.
          - Branche isolée : AUCUN impact sur les flux carte/scellé/manuel existants. NÉCESSITE
            Sales ≥ 1.15.0 — déployer ensemble.
-  1.14.0 2026-05-31  Session #13 (roll-back d'une vente — #27, côté Master ; Sales suit en 1.14.0)
+  1.14.0 2026-05-31  Session #20 (roll-back d'une vente — #27, côté Master ; Sales suit en 1.14.0)
          - [Feature #27] Inversion d'une vente déjà appliquée, par MODIFICATION des lignes
            existantes dans CENTRAL (jamais de ligne à quantité négative) :
            · Carte : vide P/R/S/T, remet Q = prix d'origine (porté par Sales en col K de la ligne
@@ -238,17 +248,17 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 
 /* Marque : logo + grand titre */
 .brand{display:flex;align-items:center;gap:16px;min-width:0;}
-.logo-mark{width:54px;height:54px;border-radius:13px;flex-shrink:0;object-fit:cover;
+.logo-mark{width:84px;height:84px;border-radius:17px;flex-shrink:0;object-fit:cover;
   background:linear-gradient(135deg,var(--accent) 0%,#bfe000 100%);
   display:flex;align-items:center;justify-content:center;
-  font-family:'Syne',sans-serif;font-weight:800;font-size:1.5rem;color:#0a0c10;
+  font-family:'Syne',sans-serif;font-weight:800;font-size:2.2rem;color:#0a0c10;
   box-shadow:0 6px 18px rgba(232,255,71,.18);letter-spacing:-.04em;}
 .brand-text h1{font-size:2.4rem;font-weight:800;letter-spacing:-.045em;line-height:.95;}
 .brand-text h1 span{color:var(--danger);}
 .brand-text .sub{font-family:'Space Mono',monospace;font-size:.56rem;color:var(--muted);
   text-transform:uppercase;letter-spacing:.18em;margin-top:7px;}
 .brand-text .sub b{color:var(--dim);font-weight:400;}
-@media(max-width:520px){.brand-text h1{font-size:1.8rem;}.logo-mark{width:44px;height:44px;font-size:1.2rem;}}
+@media(max-width:520px){.brand-text h1{font-size:1.8rem;}.logo-mark{width:60px;height:60px;font-size:1.6rem;}}
 
 .header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;}
 
@@ -327,6 +337,13 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
   display:flex;justify-content:space-between;align-items:center;}
 .card-title{font-size:.95rem;font-weight:700;letter-spacing:-.02em;}
 .card-body{padding:16px;}
+/* Panneaux repliables (Journal / Anomalies) — masqués par défaut */
+.toggle-details{background:var(--surface2,rgba(255,255,255,.04));border:1px solid var(--border);
+  color:var(--dim);font-family:'Space Mono',monospace;font-size:.6rem;font-weight:700;
+  letter-spacing:.04em;padding:4px 10px;border-radius:7px;cursor:pointer;white-space:nowrap;
+  transition:border-color .15s,color .15s;}
+.toggle-details:hover{border-color:var(--muted);color:var(--text);}
+.card-body.collapsed{display:none;}
 
 .badge{font-family:'Space Mono',monospace;font-size:.55rem;padding:3px 8px;border-radius:10px;
   background:var(--surface2);border:1px solid var(--border);color:var(--dim);white-space:nowrap;}
@@ -658,9 +675,12 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
     <div class="card">
       <div class="card-header">
         <span class="card-title">📜 Journal des ventes (50 dernières)</span>
-        <span class="badge" id="salesLogBadge">—</span>
+        <span style="display:flex;align-items:center;gap:10px;">
+          <span class="badge" id="salesLogBadge">—</span>
+          <button type="button" class="toggle-details" aria-expanded="false" onclick="toggleCardDetails(this)">▸ Détails</button>
+        </span>
       </div>
-      <div class="card-body">
+      <div class="card-body collapsed">
         <div class="sales-log" id="salesLog">
           <div style="font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);">—</div>
         </div>
@@ -671,9 +691,12 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
     <div class="card">
       <div class="card-header">
         <span class="card-title">⚠ Anomalies</span>
-        <span class="badge" id="anomBadge">—</span>
+        <span style="display:flex;align-items:center;gap:10px;">
+          <span class="badge" id="anomBadge">—</span>
+          <button type="button" class="toggle-details" aria-expanded="false" onclick="toggleCardDetails(this)">▸ Détails</button>
+        </span>
       </div>
-      <div class="card-body" id="anomalies">
+      <div class="card-body collapsed" id="anomalies">
         <div style="font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);">—</div>
       </div>
     </div>
@@ -718,6 +741,46 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
   </div>
 </div>
 
+<!-- Modal: Checklist vacances — activation event (1.16.0) -->
+<div class="modal-backdrop hidden" id="vacationCheckModal">
+  <div class="modal-panel">
+    <div class="modal-title">🏖️ Event activé — canaux parallèles</div>
+    <div class="modal-subtitle">À faire AVANT de rafraîchir le stock</div>
+    <div class="modal-info">
+      <p style="margin:0 0 12px;color:var(--fg);">Pendant l'event, tu ne pourras pas surveiller tes canaux de vente en ligne. Effectue ces 3 étapes dans l'ordre&nbsp;:</p>
+      <ol style="margin:0;padding-left:1.3em;line-height:2;">
+        <li><strong>Mettre en pause les canaux de vente parallèles :</strong><br>
+          <span style="color:var(--accent);">CardMarket</span> → Menu compte → Mode vacances : <strong>ON</strong><br>
+          <span style="color:var(--muted);">Vinted · Whatnot · Facebook</span> <em style="font-size:.75rem;">(à venir)</em>
+        </li>
+        <li><strong>Reporter dans la GSheet les dernières ventes CM</strong> non encore enregistrées.</li>
+        <li><strong>Rafraîchir le cache Master</strong> (bouton 🔄) pour publier le stock à jour.</li>
+      </ol>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="confirmVacationCheck()">✅ C'est fait — canaux en pause</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Rappel réactivation canaux — clôture event (1.16.0) -->
+<div class="modal-backdrop hidden" id="vacationReactivateModal">
+  <div class="modal-panel">
+    <div class="modal-title">🔔 Event clôturé — pense à réactiver</div>
+    <div class="modal-subtitle">Tes canaux en ligne sont toujours en pause</div>
+    <div class="modal-info">
+      <p style="margin:0 0 10px;color:var(--fg);">L'event est archivé. Pense à <strong>sortir du mode vacances</strong> sur tes canaux de vente&nbsp;:</p>
+      <ul style="margin:0;padding-left:1.3em;line-height:2;">
+        <li><span style="color:var(--accent);">CardMarket</span> → Menu compte → Mode vacances : <strong>OFF</strong></li>
+        <li><span style="color:var(--muted);">Vinted · Whatnot · Facebook</span> <em style="font-size:.75rem;">(à venir)</em></li>
+      </ul>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="closeVacationReactivateModal()">✅ Canaux réactivés</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Close event confirm -->
 <div class="modal-backdrop hidden" id="closeEventModal" onclick="if(event.target===this)closeCloseEventModal()">
   <div class="modal-panel">
@@ -747,7 +810,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.15.0';
+const APP_VERSION      = '1.16.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1647,11 +1710,55 @@ function renderLockUI() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// CHECKLIST VACANCES — activation event (1.16.0)
+// Affiché quand on passe d'un event vide à un event rempli (ou changement de nom).
+// Pas de popup sur re-save identique ; pas de popup au reload (boot ne passe pas par saveEventConfig).
+// ═══════════════════════════════════════════════════════════════
+let _vacationCheckPendingName = '';   // nom en attente de validation
+
+function openVacationCheckModal(name) {
+  _vacationCheckPendingName = name;
+  document.getElementById('vacationCheckModal').classList.remove('hidden');
+}
+async function confirmVacationCheck() {
+  document.getElementById('vacationCheckModal').classList.add('hidden');
+  // On applique réellement le nom d'event maintenant que la checklist est acquittée
+  await _applyEventName(_vacationCheckPendingName);
+  _vacationCheckPendingName = '';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RAPPEL RÉACTIVATION CANAUX — après clôture réussie (1.16.0)
+// ═══════════════════════════════════════════════════════════════
+function openVacationReactivateModal() {
+  document.getElementById('vacationReactivateModal').classList.remove('hidden');
+}
+function closeVacationReactivateModal() {
+  document.getElementById('vacationReactivateModal').classList.add('hidden');
+}
+
+// ═══════════════════════════════════════════════════════════════
 // EVENT CONTROL — nom d'event optionnel (= acheteur par défaut), publié dans app_state
 // ═══════════════════════════════════════════════════════════════
 async function saveEventConfig() {
   if (!lockHeld) { showToast('⚠ Session inactive sur cet appareil', true); return; }
   const newName = document.getElementById('eventNameInput').value.trim();
+
+  // (1.16.0) Checklist vacances : afficher le popup si on active un event (ou change de nom).
+  // Ne s'affiche PAS si on re-sauve le même nom, ni si on efface le nom (pas de canaux à pauser).
+  // Au reload, currentEventName est déjà rempli par readLockCell → saveEventConfig n'est pas appelée → pas de faux déclenchement.
+  if (newName && newName !== currentEventName) {
+    openVacationCheckModal(newName);
+    return; // l'application réelle se fait dans confirmVacationCheck() → _applyEventName()
+  }
+
+  await _applyEventName(newName);
+}
+
+// Noyau commun : écrit le nom d'event dans app_state, met à jour bannière et UI.
+// Appelé directement (effacement ou re-save identique) ou via confirmVacationCheck().
+async function _applyEventName(newName) {
   try {
     currentEventName = newName;
     await writeLockCell(); // [ts, eventName, uuid, label]
@@ -2738,6 +2845,8 @@ async function confirmCloseEvent() {
 
     closeCloseEventModal();
     showToast(`✓ Event archivé dans "${actualTabName}"`);
+    // (1.16.0) Rappel de réactivation des canaux de vente en ligne
+    openVacationReactivateModal();
   } catch (e) {
     showToast('✗ Clôture : ' + e.message, true);
     console.error('confirmCloseEvent failed:', e);
@@ -2897,6 +3006,13 @@ async function bootstrap() {
 // ═══════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════
+function toggleCardDetails(btn) {
+  const body = btn.closest('.card').querySelector('.card-body');
+  if (!body) return;
+  const collapsed = body.classList.toggle('collapsed');
+  btn.setAttribute('aria-expanded', String(!collapsed));
+  btn.textContent = collapsed ? '▸ Détails' : '▾ Masquer';
+}
 async function init() {
   const vb = document.getElementById('versionBadge'); if(vb) vb.textContent = 'v' + APP_VERSION;
   eventLog = lsLoad(LS_LOG, []);

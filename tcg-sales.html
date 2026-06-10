@@ -375,9 +375,9 @@ body::before{content:'';position:fixed;inset:0;
 .brand-logo{height:76px;width:76px;flex:0 0 auto;border-radius:15px;object-fit:cover;
   background:#b81e1e;border:1px solid var(--border);}
 .brand-right{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:6px;}
-/* Bloc titre : largeur = celle du titre ; la version se cale sous le titre, à droite */
-.brand-title-block{display:inline-flex;flex-direction:column;align-items:stretch;width:max-content;max-width:100%;}
-.brand-title-block h1{font-size:clamp(1.55rem,8vw,2.15rem);font-weight:800;letter-spacing:-.05em;
+/* Bloc titre : occupe toute la largeur jusqu'au bord droit ; la version se cale sous le titre, à droite */
+.brand-title-block{display:flex;flex-direction:column;align-items:stretch;width:100%;min-width:0;}
+.brand-title-block h1{font-size:clamp(2rem,12vw,3.2rem);font-weight:800;letter-spacing:-.05em;
   line-height:.9;white-space:nowrap;}
 .brand-title-block h1 span{color:var(--accent);}
 .version-tag{align-self:flex-end;font-family:'Space Mono',monospace;font-size:.58rem;font-weight:700;
