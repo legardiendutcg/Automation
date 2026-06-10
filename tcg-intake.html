@@ -2,10 +2,28 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.4.5 (Session #22 — 2026-06-10)
+  Version : 1.5.0 (Session #23 — 2026-06-10)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.5.0  2026-06-10  Session #23 — NOUVELLE VUE « Scan EAN scellé » (onglet 6, spec figée #22).
+         ⚠️ NON testée navigateur (à vérifier aux tests du 13).
+         - Portée : Scelle_Stock UNIQUEMENT (scelle_transactions hors scope).
+         - En-tête + colonnes résolus par LIBELLÉ (1ʳᵉ ligne contenant « Origine » ET « Key » ;
+           jamais de lettre figée — le layout a bougé : col x en A, License en D).
+         - Stock chargé puis DÉDUPLIQUÉ par clé produit (License+Code Série+Nom Série+Nom_Item) ;
+           un objet acheté en plusieurs lots n'apparaît qu'une fois (nb lignes + qté totale).
+         - Filtres en cascade dérivés des données : License → Série → Type_Item ; Origine en filtre
+           additionnel ; recherche texte sur Nom_Item.
+         - Scan : BarcodeDetector (ean_13/8, upc, code_128) + repli douchette/saisie manuelle.
+         - Sélection de 1 ou 2 produits par EAN (misclic assumé, confirmation au-delà).
+         - Écriture DIFFÉRÉE : associations {ean, produits, lignes} accumulées en mémoire ; un seul
+           batch écrit l'EAN en col Key de toutes les lignes choisies (values:batchUpdate, RAW).
+         - Conflits : ligne portant déjà un EAN DIFFÉRENT → signalée pour arbitrage avant commit
+           (l'écriture écrase). EAN identique = pas un conflit (ignoré). L'EAN n'est JAMAIS une clé
+           d'unicité de ligne — étiquette physique apposée.
+         - Sécurité : aperçu, backup des valeurs actuelles (BACKUP_INJECTIONS), journal
+           (LOG_INJECTIONS), réutilisant les helpers existants (ensureSafetySheets, persist…).
   1.4.5  2026-06-10  Session #22 (cosmétique pure — NON testé navigateur) — logo société ajouté
          dans l'en-tête ; version (#appVer, désormais un <span>) collée à droite du titre « TCG
          INTAKE » (.logo-title-row) ; mention « by Cassius » supprimée. flex-wrap sur la ligne
@@ -660,6 +678,13 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
         <div class="step-sub" id="step5-sub">Réinjection</div>
       </div>
     </div>
+    <div class="step-btn" id="step6" onclick="goToStep(6)">
+      <div class="step-num">EAN</div>
+      <div class="step-info">
+        <div class="step-label">Scan EAN scellé</div>
+        <div class="step-sub" id="step6-sub">Cartographie</div>
+      </div>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════ -->
@@ -900,6 +925,102 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- TAB 6 — SCAN EAN SCELLÉ (cartographie code-barres)      -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="tab hidden" id="content-6">
+
+    <!-- A. Chargement du stock scellé -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📦 Stock scellé (Scelle_Stock)</span>
+        <span class="badge" id="eanStockBadge">Non chargé</span>
+      </div>
+      <div class="card-body">
+        <div class="flex-row" style="flex-wrap:wrap;gap:10px;">
+          <button class="btn btn-primary" id="eanLoadBtn" onclick="eanLoadStock()">Charger le stock scellé</button>
+          <span class="mono" id="eanStockStatus" style="color:var(--muted)"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- B. Session de scan -->
+    <div class="card hidden" id="eanWorkCard">
+      <div class="card-header">
+        <span class="card-title">🔎 Filtres en cascade</span>
+        <span class="badge" id="eanMatchBadge">0 en attente d'écriture</span>
+      </div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:14px;">
+          <div class="form-group"><label>License</label>
+            <select id="eanFLicense" onchange="eanCascade('license')"></select></div>
+          <div class="form-group"><label>Série (Code · Nom)</label>
+            <select id="eanFSerie" onchange="eanCascade('serie')"></select></div>
+          <div class="form-group"><label>Type_Item</label>
+            <select id="eanFType" onchange="eanCascade('type')"></select></div>
+          <div class="form-group"><label>Origine (optionnel)</label>
+            <select id="eanFOrigine" onchange="eanCascade('origine')"></select></div>
+        </div>
+        <div class="form-group" style="margin-bottom:14px;">
+          <label>Recherche (Nom_Item)</label>
+          <input type="text" id="eanSearch" placeholder="Filtrer la shortlist…" oninput="eanRenderShortlist()">
+        </div>
+
+        <!-- Shortlist de produits dédupliqués -->
+        <div class="table-wrap" style="margin-bottom:18px;">
+          <div class="table-toolbar">
+            <span class="mono" style="color:var(--muted)">Produits (dédupliqués)</span>
+            <div style="flex:1"></div>
+            <span class="mono" id="eanShortlistCount" style="color:var(--muted)">0</span>
+          </div>
+          <div class="table-scroll" style="max-height:34vh;">
+            <table><thead><tr>
+              <th style="width:40px"></th><th>License</th><th>Série</th>
+              <th>Type</th><th>Nom_Item</th><th>Lignes</th><th>Qté</th><th>EAN actuel(s)</th>
+            </tr></thead><tbody id="eanShortlistBody"></tbody></table>
+          </div>
+        </div>
+
+        <!-- Scan / saisie -->
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;">
+          <div class="flex-row" style="flex-wrap:wrap;gap:10px;align-items:center;">
+            <button class="btn btn-secondary" id="eanCamBtn" onclick="eanToggleCamera()">📷 Activer la caméra</button>
+            <input type="text" id="eanCode" placeholder="Code EAN (scan douchette ou saisie)" style="min-width:220px;flex:1"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();eanCommitMatch();}">
+            <button class="btn btn-primary" id="eanAddBtn" onclick="eanCommitMatch()">Associer l'EAN aux produits cochés</button>
+          </div>
+          <div id="eanScanFeedback" class="mono" style="font-size:.72rem;color:var(--muted);margin-top:10px;"></div>
+          <video id="eanVideo" playsinline style="display:none;width:100%;max-width:360px;border-radius:8px;margin-top:12px;border:1px solid var(--border);"></video>
+        </div>
+      </div>
+    </div>
+
+    <!-- C. File des associations en attente + conflits -->
+    <div class="card hidden" id="eanPendingCard">
+      <div class="card-header clickable" onclick="toggleSection('eanPendingBody','eanPendingArrow')">
+        <span class="card-title">📝 Associations en attente <span id="eanPendingArrow">▼</span></span>
+        <span class="badge green" id="eanPendingBadge">0</span>
+      </div>
+      <div id="eanPendingBody">
+        <div class="card-body">
+          <div id="eanConflictWarn" class="not-ready-banner hidden" style="margin-bottom:14px;"></div>
+          <div class="table-scroll" style="max-height:34vh;">
+            <table><thead><tr>
+              <th>EAN</th><th>Produit(s)</th><th>Lignes</th><th>Statut</th><th></th>
+            </tr></thead><tbody id="eanPendingTableBody"></tbody></table>
+          </div>
+          <div class="flex-row" style="margin-top:16px;flex-wrap:wrap;gap:10px;">
+            <button class="btn btn-secondary" id="eanPreviewBtn" onclick="eanCommitBatch(true)">Aperçu de l'écriture</button>
+            <button class="btn btn-primary" id="eanWriteBtn" onclick="eanCommitBatch(false)">↑ Écrire les EAN dans Scelle_Stock</button>
+            <span class="mono" id="eanCommitStatus" style="color:var(--muted)"></span>
+          </div>
+          <div class="log hidden" id="eanLog" style="margin-top:14px;"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
 </div><!-- /app -->
 
 <div class="toast" id="toast"></div>
@@ -915,7 +1036,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.4.5';
+const APP_VERSION = '1.5.0';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';
@@ -2887,6 +3008,392 @@ async function cmWrite(){
   }
   setIntakeMode('cards');
 })();
+// ════════════════════════════════════════════════════════════
+// SCAN EAN SCELLÉ — cartographie code-barres (v1.5.0, session #23)
+// ────────────────────────────────────────────────────────────
+// Portée : Scelle_Stock UNIQUEMENT (scelle_transactions = historique, hors scope).
+// L'EAN (col « Key ») est une ÉTIQUETTE physique, JAMAIS une clé d'unicité de ligne.
+// Clé produit (regroupeur) : License + Code Série + Nom Série + Nom_Item.
+// Colonnes résolues par LIBELLÉ d'en-tête (jamais par lettre figée — le layout a bougé :
+// nouvelle col x en A, License en D). En-tête = 1ʳᵉ ligne contenant « Origine » ET « Key ».
+// Écriture DIFFÉRÉE : on accumule les associations {ean, produits, lignesCibles} en mémoire
+// puis un seul batch écrit l'EAN en col Key de toutes les lignes des produits choisis.
+// ════════════════════════════════════════════════════════════
+const SHEET_SEALED = 'Scelle_Stock';
+// Libellés acceptés par colonne (normalisés : trim + lowercase). Résolution robuste au décalage.
+const EAN_HDR = {
+  origine: ['origine'],
+  key:     ['key','clé','cle'],
+  license: ['license','licence'],
+  codeSerie:['code série','code serie','codeserie','code_série','code_serie'],
+  nomSerie:['nom série','nom serie','nomserie','nom_série','nom_serie'],
+  typeItem:['type_item','type item','typeitem','type'],
+  nomItem: ['nom_item','nom item','nomitem'],
+  quantite:['quantité','quantite','qté','qte','quantity'],
+  statut:  ['statut','status']
+};
+let eanSealedRows = [];   // { rowNum, license, codeSerie, nomSerie, typeItem, nomItem, qty, ean, statut }
+let eanCols = null;       // { origine, key, license, ... } -> 0-based col index
+let eanHeaderRow = null;
+let eanProducts = [];     // produits dédupliqués : { id, license, codeSerie, nomSerie, typeItem, nomItem, lines:[rowNum], qty, eans:Set, origines:Set }
+let eanSelected = new Set(); // ids de produits cochés
+let eanPending = [];      // associations en attente : { ean, productIds:[id], rows:[rowNum] }
+let eanFilter = { license:'', serie:'', type:'', origine:'' };
+let eanStream = null, eanDetector = null, eanScanLoop = null;
+
+function eanNorm(s){ return String(s||'').trim().toLowerCase(); }
+// Clé produit stable (n.a. = valeur légitime, pas un trou).
+function eanProductKey(r){
+  return [r.license, r.codeSerie, r.nomSerie, r.nomItem].map(v=>eanNorm(v)).join('|||');
+}
+
+// En-tête scellé : 1ʳᵉ ligne contenant Origine ET Key. Résout toutes les colonnes par libellé.
+function eanResolveHeader(rows){
+  for(let i=0;i<rows.length;i++){
+    const row=(rows[i]||[]).map(eanNorm);
+    const hasOrigine=row.some(c=>EAN_HDR.origine.includes(c));
+    const hasKey=row.some(c=>EAN_HDR.key.includes(c));
+    if(hasOrigine&&hasKey){
+      const cols={};
+      for(const field in EAN_HDR){
+        cols[field]=row.findIndex(c=>EAN_HDR[field].includes(c));
+      }
+      return { headerRow:i+1, cols };
+    }
+  }
+  return null;
+}
+
+async function eanLoadStock(){
+  if(!isAuthenticated()){ showToast('⚠ Connectez-vous à Google d\'abord'); return; }
+  const btn=document.getElementById('eanLoadBtn'); btn.disabled=true;
+  document.getElementById('eanStockStatus').textContent='Chargement…';
+  try{
+    // On lit large (A:AL) ; l'en-tête peut être autour de la ligne 26.
+    const r=await sheetsGet(a1(SHEET_SEALED, `A1:AL5000`));
+    const rows=r.values||[];
+    const h=eanResolveHeader(rows);
+    if(!h) throw new Error('En-tête introuvable (ligne contenant « Origine » et « Key »)');
+    eanHeaderRow=h.headerRow; eanCols=h.cols;
+    if(eanCols.key<0) throw new Error('Colonne « Key » non résolue');
+    const c=eanCols;
+    eanSealedRows=[];
+    for(let i=eanHeaderRow;i<rows.length;i++){   // i = index 0-based ; ligne i+1 ; on saute l'en-tête
+      const row=rows[i]||[];
+      const get=idx=>idx>=0?String(row[idx]||'').trim():'';
+      const nomItem=get(c.nomItem);
+      const statut=get(c.statut);
+      // Ligne vide / non-stock : on ignore (pas de nom d'item).
+      if(!nomItem) continue;
+      const qtyRaw=get(c.quantite).replace(',', '.');
+      const qty=parseFloat(qtyRaw)||0;
+      eanSealedRows.push({
+        rowNum:i+1,
+        origine:get(c.origine),
+        license:get(c.license),
+        codeSerie:get(c.codeSerie),
+        nomSerie:get(c.nomSerie),
+        typeItem:get(c.typeItem),
+        nomItem,
+        qty,
+        ean:get(c.key),
+        statut
+      });
+    }
+    eanBuildProducts();
+    document.getElementById('eanWorkCard').classList.remove('hidden');
+    document.getElementById('eanStockBadge').textContent=`${eanProducts.length} produit(s) · ${eanSealedRows.length} ligne(s)`;
+    document.getElementById('eanStockBadge').className='badge green';
+    const keyLetter=cmColLetter(eanCols.key);
+    document.getElementById('eanStockStatus').textContent=
+      `En-tête ligne ${eanHeaderRow} · Key = col ${keyLetter}. ${eanSealedRows.length} ligne(s) en stock chargée(s).`;
+    eanInitFilters();
+    eanRenderShortlist();
+    showToast(`✓ ${eanProducts.length} produit(s) scellé(s) chargé(s)`);
+  }catch(e){
+    document.getElementById('eanStockStatus').textContent='✗ '+(e.message||e);
+    showToast('✗ Chargement scellé : '+(e.message||e));
+  } finally { btn.disabled=false; }
+}
+
+// Dédup : un objet acheté en plusieurs lots n'apparaît qu'une fois (regroupé par clé produit).
+function eanBuildProducts(){
+  const map=new Map();
+  for(const row of eanSealedRows){
+    const k=eanProductKey(row);
+    let p=map.get(k);
+    if(!p){
+      p={ id:k, license:row.license, codeSerie:row.codeSerie, nomSerie:row.nomSerie,
+          typeItem:row.typeItem, nomItem:row.nomItem, lines:[], qty:0, eans:new Set() };
+      map.set(k,p);
+    }
+    p.lines.push(row.rowNum);
+    p.qty+=row.qty;
+    if(row.ean) p.eans.add(row.ean);
+  }
+  eanProducts=[...map.values()];
+}
+
+// ── Filtres en cascade, dérivés dynamiquement des données ──
+function eanUnique(values){ return [...new Set(values.filter(v=>v!==undefined&&v!==null))].sort((a,b)=>String(a).localeCompare(String(b),'fr')); }
+
+function eanInitFilters(){
+  eanFilter={ license:'', serie:'', type:'', origine:'' };
+  eanFillSelect('eanFLicense', eanUnique(eanProducts.map(p=>p.license)), 'Toutes les licenses');
+  eanFillSelect('eanFSerie', [], 'Toutes les séries');
+  eanFillSelect('eanFType', [], 'Tous les types');
+  eanFillSelect('eanFOrigine', eanUnique(eanSealedRows.map(r=>r.origine).filter(Boolean)), 'Toutes les origines');
+}
+function eanFillSelect(id, values, allLabel){
+  const sel=document.getElementById(id);
+  sel.innerHTML=`<option value="">${allLabel}</option>`+
+    values.map(v=>`<option value="${esc(v)}">${esc(v||'(vide)')}</option>`).join('');
+}
+
+function eanCascade(level){
+  eanFilter.license=document.getElementById('eanFLicense').value;
+  eanFilter.serie=document.getElementById('eanFSerie').value;
+  eanFilter.type=document.getElementById('eanFType').value;
+  eanFilter.origine=document.getElementById('eanFOrigine').value;
+  // License → restreint Série ; Série → restreint Type.
+  if(level==='license'){ eanFilter.serie=''; eanFilter.type=''; }
+  if(level==='serie'){ eanFilter.type=''; }
+
+  const byLicense=eanFilter.license? eanProducts.filter(p=>p.license===eanFilter.license):eanProducts;
+  const series=eanUnique(byLicense.map(p=>p.codeSerie+' · '+p.nomSerie));
+  if(level==='license'){ eanFillSelect('eanFSerie', series, 'Toutes les séries'); eanFillSelect('eanFType', [], 'Tous les types'); }
+  else document.getElementById('eanFSerie').value=eanFilter.serie;
+
+  const bySerie=eanFilter.serie? byLicense.filter(p=>(p.codeSerie+' · '+p.nomSerie)===eanFilter.serie):byLicense;
+  const types=eanUnique(bySerie.map(p=>p.typeItem));
+  if(level==='license'||level==='serie'){ eanFillSelect('eanFType', types, 'Tous les types'); }
+  else document.getElementById('eanFType').value=eanFilter.type;
+
+  eanRenderShortlist();
+}
+
+function eanFilteredProducts(){
+  const q=eanNorm(document.getElementById('eanSearch').value);
+  return eanProducts.filter(p=>{
+    if(eanFilter.license && p.license!==eanFilter.license) return false;
+    if(eanFilter.serie && (p.codeSerie+' · '+p.nomSerie)!==eanFilter.serie) return false;
+    if(eanFilter.type && p.typeItem!==eanFilter.type) return false;
+    if(eanFilter.origine && !eanProductHasOrigine(p, eanFilter.origine)) return false;
+    if(q && !eanNorm(p.nomItem).includes(q)) return false;
+    return true;
+  });
+}
+function eanProductHasOrigine(p, origine){
+  // vrai si au moins une ligne du produit porte cette origine
+  return p.lines.some(rowNum=>{
+    const r=eanSealedRows.find(x=>x.rowNum===rowNum);
+    return r && r.origine===origine;
+  });
+}
+
+function eanRenderShortlist(){
+  const list=eanFilteredProducts();
+  document.getElementById('eanShortlistCount').textContent=list.length+' produit(s)';
+  const body=document.getElementById('eanShortlistBody');
+  body.innerHTML=list.map(p=>{
+    const checked=eanSelected.has(p.id)?'checked':'';
+    const eans=[...p.eans];
+    const eanCell=eans.length? eans.map(e=>esc(e)).join(', ')
+      : '<span style="color:var(--muted)">—</span>';
+    return `<tr>
+      <td><input type="checkbox" ${checked} onchange="eanToggleSelect('${esc(p.id)}',this.checked)"></td>
+      <td>${esc(p.license||'(vide)')}</td>
+      <td class="mono" style="font-size:.66rem">${esc(p.codeSerie)} ${esc(p.nomSerie)}</td>
+      <td>${esc(p.typeItem)}</td>
+      <td style="white-space:nowrap">${esc(p.nomItem)}</td>
+      <td class="accent">${p.lines.length}</td>
+      <td class="blue">${p.qty}</td>
+      <td class="mono" style="font-size:.66rem">${eanCell}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('eanMatchBadge').textContent=`${eanSelected.size} produit(s) coché(s)`;
+}
+function eanToggleSelect(id, on){ if(on) eanSelected.add(id); else eanSelected.delete(id);
+  document.getElementById('eanMatchBadge').textContent=`${eanSelected.size} produit(s) coché(s)`; }
+
+// ── Scan caméra (BarcodeDetector) + repli douchette/saisie ──
+async function eanToggleCamera(){
+  const video=document.getElementById('eanVideo');
+  const btn=document.getElementById('eanCamBtn');
+  if(eanStream){ eanStopCamera(); return; }
+  if(!('BarcodeDetector' in window)){
+    document.getElementById('eanScanFeedback').textContent='⚠ BarcodeDetector indisponible sur ce navigateur — utilise la douchette ou la saisie manuelle.';
+    return;
+  }
+  try{
+    eanDetector=new BarcodeDetector({ formats:['ean_13','ean_8','upc_a','upc_e','code_128'] });
+    eanStream=await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
+    video.srcObject=eanStream; video.style.display='block'; await video.play();
+    btn.textContent='■ Arrêter la caméra';
+    eanScanLoop=setInterval(async()=>{
+      try{
+        const codes=await eanDetector.detect(video);
+        if(codes&&codes.length){
+          const v=String(codes[0].rawValue||'').trim();
+          if(/^\d{8,14}$/.test(v)){
+            document.getElementById('eanCode').value=v;
+            document.getElementById('eanScanFeedback').textContent='✓ Scanné : '+v+' — vérifie les produits cochés puis « Associer ».';
+          }
+        }
+      }catch(e){}
+    }, 400);
+  }catch(e){
+    document.getElementById('eanScanFeedback').textContent='⚠ Caméra : '+(e.message||e);
+    eanStopCamera();
+  }
+}
+function eanStopCamera(){
+  if(eanScanLoop){ clearInterval(eanScanLoop); eanScanLoop=null; }
+  if(eanStream){ eanStream.getTracks().forEach(t=>t.stop()); eanStream=null; }
+  const video=document.getElementById('eanVideo'); video.style.display='none'; video.srcObject=null;
+  document.getElementById('eanCamBtn').textContent='📷 Activer la caméra';
+}
+
+// Associe l'EAN saisi/scanné aux produits cochés → ajoute à la file en attente.
+function eanCommitMatch(){
+  const codeInput=document.getElementById('eanCode');
+  const code=String(codeInput.value||'').trim();
+  const fb=document.getElementById('eanScanFeedback');
+  if(!/^\d{8,14}$/.test(code)){ fb.textContent='⚠ EAN invalide (8 à 14 chiffres attendus).'; return; }
+  if(!eanSelected.size){ fb.textContent='⚠ Coche au moins un produit dans la shortlist.'; return; }
+  if(eanSelected.size>2 && !confirm(`${eanSelected.size} produits cochés pour un même EAN. Continuer ? (1 ou 2 attendus — au-delà, vérifie.)`)) return;
+  const productIds=[...eanSelected];
+  const rows=[];
+  productIds.forEach(id=>{ const p=eanProducts.find(x=>x.id===id); if(p) rows.push(...p.lines); });
+  eanPending.push({ ean:code, productIds, rows:[...new Set(rows)] });
+  // Reset pour le scan suivant
+  eanSelected.clear();
+  document.querySelectorAll('#eanShortlistBody input[type=checkbox]').forEach(c=>c.checked=false);
+  codeInput.value='';
+  fb.textContent=`✓ EAN ${code} associé à ${productIds.length} produit(s) (${rows.length} ligne(s)). Ajouté à la file.`;
+  document.getElementById('eanMatchBadge').textContent=`0 produit(s) coché(s)`;
+  eanRenderPending();
+}
+
+// Détection de conflits : ligne portant DÉJÀ un EAN DIFFÉRENT → arbitrage avant commit.
+// EAN identique déjà présent = pas un conflit (cas normal).
+function eanDetectConflicts(){
+  const conflicts=[];
+  for(const m of eanPending){
+    for(const rowNum of m.rows){
+      const r=eanSealedRows.find(x=>x.rowNum===rowNum);
+      if(r && r.ean && r.ean!==m.ean){
+        conflicts.push({ rowNum, current:r.ean, incoming:m.ean, nomItem:r.nomItem });
+      }
+    }
+  }
+  return conflicts;
+}
+
+function eanRenderPending(){
+  document.getElementById('eanPendingCard').classList.remove('hidden');
+  document.getElementById('eanPendingBadge').textContent=eanPending.length;
+  document.getElementById('eanMatchBadge').textContent=`${eanPending.length} en attente d'écriture`;
+  const body=document.getElementById('eanPendingTableBody');
+  body.innerHTML=eanPending.map((m,idx)=>{
+    const names=m.productIds.map(id=>{ const p=eanProducts.find(x=>x.id===id); return p?esc(p.nomItem):'?'; }).join(' + ');
+    // statut par association
+    let kind='écriture', col='var(--success)';
+    const hasConflict=m.rows.some(rowNum=>{ const r=eanSealedRows.find(x=>x.rowNum===rowNum); return r&&r.ean&&r.ean!==m.ean; });
+    const allIdentical=m.rows.every(rowNum=>{ const r=eanSealedRows.find(x=>x.rowNum===rowNum); return r&&r.ean===m.ean; });
+    if(hasConflict){ kind='conflit'; col='#ff6b6b'; }
+    else if(allIdentical){ kind='identique'; col='var(--muted)'; }
+    return `<tr>
+      <td class="mono">${esc(m.ean)}</td>
+      <td>${names}</td>
+      <td class="accent">${m.rows.length}</td>
+      <td class="mono" style="color:${col}">${kind}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="eanRemovePending(${idx})">✕</button></td>
+    </tr>`;
+  }).join('');
+  const conflicts=eanDetectConflicts();
+  const warn=document.getElementById('eanConflictWarn');
+  if(conflicts.length){
+    warn.classList.remove('hidden');
+    warn.innerHTML=`⚠ ${conflicts.length} ligne(s) portent déjà un EAN différent — arbitrage requis. `+
+      `L'écriture <b>écrasera</b> l'EAN existant. Lignes : `+
+      conflicts.slice(0,12).map(c=>`#${c.rowNum} (${esc(c.current)}→${esc(c.incoming)})`).join(', ')+
+      (conflicts.length>12?` … +${conflicts.length-12}`:'');
+  } else { warn.classList.add('hidden'); }
+}
+function eanRemovePending(idx){ eanPending.splice(idx,1); eanRenderPending(); }
+
+// Écriture DIFFÉRÉE : un seul batch écrit l'EAN en col Key de toutes les lignes cibles.
+// Backup des valeurs actuelles avant écriture (réutilise BACKUP_INJECTIONS + LOG_INJECTIONS).
+async function eanCommitBatch(preview){
+  if(!isAuthenticated()){ showToast('⚠ Connectez-vous à Google d\'abord'); return; }
+  if(!eanPending.length){ showToast('⚠ File vide — associe au moins un EAN'); return; }
+  if(eanCols==null||eanCols.key<0){ showToast('⚠ Recharge le stock scellé d\'abord'); return; }
+
+  // Agrège par ligne : dernière association gagne si une ligne apparaît dans plusieurs (rare).
+  const rowToEan=new Map();
+  for(const m of eanPending){ for(const rowNum of m.rows){ rowToEan.set(rowNum, m.ean); } }
+  // Filtre : on n'écrit que ce qui change réellement (skip identiques).
+  const writes=[]; let identical=0, overwrite=0;
+  for(const [rowNum, ean] of rowToEan){
+    const r=eanSealedRows.find(x=>x.rowNum===rowNum);
+    const cur=r?r.ean:'';
+    if(cur===ean){ identical++; continue; }
+    if(cur) overwrite++;
+    writes.push({ rowNum, ean, cur });
+  }
+  const keyLetter=cmColLetter(eanCols.key);
+  const status=document.getElementById('eanCommitStatus');
+
+  if(preview){
+    status.innerHTML=`<b>Aperçu</b> : ${writes.length} ligne(s) à écrire (col ${keyLetter}) · `+
+      `<span style="color:#fbbf24">${overwrite} écrasement(s)</span> · ${identical} identique(s) ignoré(s).`;
+    return;
+  }
+
+  if(!writes.length){ showToast('Rien à écrire (tout identique)'); status.textContent='Rien à écrire.'; return; }
+  if(!confirm(`Écrire ${writes.length} EAN dans « ${SHEET_SEALED} » (col ${keyLetter})`+
+     (overwrite?`, dont ${overwrite} écrasement(s)`:'')+` ?\n\nUn backup des valeurs actuelles sera créé.`)) return;
+
+  const btnW=document.getElementById('eanWriteBtn'), btnP=document.getElementById('eanPreviewBtn');
+  btnW.disabled=true; btnP.disabled=true;
+  currentInjectionId=`EAN_${getTodayStr()}_${new Date().toTimeString().slice(0,8).replace(/:/g,'')}`;
+  document.getElementById('eanLog').innerHTML='';
+  eanLogLine('info',`── ÉCRITURE EAN scellé · ${currentInjectionId} ──`);
+  try{
+    const safetyId=await ensureSafetySheets();
+    const now=new Date().toISOString();
+    const backup=writes.map(w=>[now,currentInjectionId,'EAN_SCELLE',SHEET_SEALED,String(w.rowNum),'',
+      '',JSON.stringify({col:keyLetter,old:w.cur,new:w.ean})]);
+    if(backup.length){ await sheetsAppend(a1(BACKUP_SHEET_NAME,`A:H`),backup,safetyId);
+      eanLogLine('ok',`✓ Backup créé (${backup.length} valeur(s))`); }
+    const data=writes.map(w=>({ range:a1(SHEET_SEALED, `${keyLetter}${w.rowNum}`), values:[[w.ean]] }));
+    const CHUNK=200; let done=0;
+    for(let i=0;i<data.length;i+=CHUNK){ const slice=data.slice(i,i+CHUNK); await sheetsValuesBatchUpdate(slice); done+=slice.length; eanLogLine('ok',`✓ ${done}/${data.length} écrit(s)`); }
+    await persistInjectionLogs();
+    eanLogLine('ok',`✓ Terminé : ${writes.length} EAN écrit(s) dans « ${SHEET_SEALED} » (col ${keyLetter}).`);
+    showToast(`✓ ${writes.length} EAN écrit(s)`);
+    // Mise à jour locale du cache puis reset de la file (succès).
+    for(const w of writes){ const r=eanSealedRows.find(x=>x.rowNum===w.rowNum); if(r) r.ean=w.ean; }
+    eanBuildProducts();
+    eanPending=[];
+    eanRenderPending();
+    eanRenderShortlist();
+    status.textContent=`✓ ${writes.length} EAN écrit(s).`;
+    btnW.disabled=false; btnP.disabled=false;
+  }catch(e){
+    eanLogLine('err','✗ '+cmFriendlyErr(e));
+    await persistInjectionLogs().catch(()=>{});
+    showToast('✗ Écriture EAN : '+(e.message||e));
+    btnW.disabled=false; btnP.disabled=false;
+  }
+}
+
+function eanLogLine(type,msg){
+  const box=document.getElementById('eanLog');
+  if(box){ box.classList.remove('hidden'); const d=document.createElement('div'); d.className='log-'+type; d.textContent=msg; box.appendChild(d); box.scrollTop=box.scrollHeight; }
+  currentSessionLogs.push([new Date().toISOString(), currentInjectionId||'', type, msg]);
+}
 
 </script>
 </body>
