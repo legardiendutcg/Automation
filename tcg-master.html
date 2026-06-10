@@ -1,8 +1,16 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.14.0 (Session #13 — 2026-05-31)
+  Version : 1.15.0 (Session #14 — 2026-06-10)
 =============================================================
+  1.15.0 2026-06-10  Session #14 (cas 2 — vente d'un code non reconnu ; JALON COORDONNÉ avec Sales 1.15.0)
+         - [Feature cas 2] Nouvelle source 'inconnu' (poussée par Sales pour un code scanné non
+           reconnu, ajouté de force avec un prix). applyUnknownSale() : ne touche AUCUN stock
+           (le code n'est pas au catalogue) et écrit une anomalie SCAN_INCONNU (code + libellé +
+           prix) pour réconciliation manuelle le soir. Statut OK_UNKNOWN → compté comme traité.
+         - [#27] Roll-back d'une vente 'inconnu' = no-op stock (comme 'manuel') → OK_MANUAL_RB.
+         - Branche isolée : AUCUN impact sur les flux carte/scellé/manuel existants. NÉCESSITE
+           Sales ≥ 1.15.0 — déployer ensemble.
   1.14.0 2026-05-31  Session #13 (roll-back d'une vente — #27, côté Master ; Sales suit en 1.14.0)
          - [Feature #27] Inversion d'une vente déjà appliquée, par MODIFICATION des lignes
            existantes dans CENTRAL (jamais de ligne à quantité négative) :
@@ -739,7 +747,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.14.0';
+const APP_VERSION      = '1.15.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1853,13 +1861,14 @@ async function masterSyncTick(forced = false) {
         if      (source === 'cartes') result = await applyCardSale(p.rowIdx, row);
         else if (source === 'scelle' || source === 'scellé') result = await applySealedSale(p.rowIdx, row);
         else if (source === 'manuel') result = await applyManualSale(p.rowIdx, row);
+        else if (source === 'inconnu') result = await applyUnknownSale(p.rowIdx, row); // (1.15.0, cas 2)
         else                          result = { status: 'WARN_UNKNOWN_SOURCE' };
 
         if (result.status === 'RETRY_PENDING') {
           // laissé pending — retraitement au prochain tick
         } else {
           await markSyncedRow(p.rowIdx, result.status);
-          if (result.status === 'OK' || result.status === 'OK_MANUAL') {
+          if (result.status === 'OK' || result.status === 'OK_MANUAL' || result.status === 'OK_UNKNOWN') {
             processed++;
             if (sig) appliedSig.add(sig); // (#18) couvre les doublons situés plus bas dans le même tick
           } else {
@@ -2122,6 +2131,18 @@ async function applyManualSale(rowIdx, salesRow) {
   return { status: 'OK_MANUAL' };
 }
 
+// (1.15.0, cas 2) Vente d'un article scanné NON reconnu (source='inconnu', poussé par Sales).
+// Aucun stock à toucher (le code n'est pas au catalogue). La vente est comptée (présente dans
+// ventes_detail) ; on écrit une anomalie SCAN_INCONNU pour réconciliation manuelle le soir.
+async function applyUnknownSale(rowIdx, salesRow) {
+  const key  = (salesRow[4] || '').toString().trim();
+  const name = (salesRow[5] || '').toString().trim();
+  const prix = parseFloat(salesRow[10]) || 0;
+  await writeAnomaly(rowIdx, salesRow, 'SCAN_INCONNU',
+    `Code scanné non reconnu : "${key}"${(name && name !== key) ? ' (' + name + ')' : ''} — vente ${prix}€ enregistrée, à réconcilier`);
+  return { status: 'OK_UNKNOWN' };
+}
+
 // ═══════════════════════════════════════════════════════════════
 // ROLL-BACK D'UNE VENTE (#27) — append-only côté Sales (ligne -RB), inversion par
 // MODIFICATION des lignes existantes côté CENTRAL (jamais de ligne à quantité négative).
@@ -2133,7 +2154,7 @@ async function applyRollback(rowIdx, rbRow, appliedSig, allRows, syncedColIdx0) 
   let src = (rbRow[11] || '').toString().trim().toLowerCase(); if (src === 'scellé') src = 'scelle';
   const key = (rbRow[4] || '').toString().trim();
 
-  if (src === 'manuel') return { status: 'OK_MANUAL_RB' };           // hors stock → rien à inverser
+  if (src === 'manuel' || src === 'inconnu') return { status: 'OK_MANUAL_RB' }; // hors stock → rien à inverser
   if (src !== 'cartes' && src !== 'scelle') return { status: 'WARN_UNKNOWN_SOURCE' };
 
   const origSig = origTx + '|' + key + '|' + src;

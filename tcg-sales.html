@@ -1,10 +1,19 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.14.4 (Session #14 — 2026-06-10)
+  Version : 1.15.0 (Session #14 — 2026-06-10)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.15.0 2026-06-10  Session #14 (cas 2 — code non reconnu → ajout forcé ; JALON COORDONNÉ avec Master 1.15.0)
+         - [Feature cas 2] Quand un scan ne matche aucun article du stock, une modale propose
+           désormais l'AJOUT FORCÉ : libellé = code brut (modifiable), PRIX OBLIGATOIRE. L'article
+           est ajouté en source='inconnu' (pas de regroupement, contour ambré + ❓ dans le panier).
+         - À la validation, il part dans ventes_detail comme toute vente (outbox idempotent → ni
+           perte ni doublon, CA compté). Master 1.15.0 l'enregistre ET écrit une anomalie
+           SCAN_INCONNU (réconciliation le soir). NÉCESSITE Master ≥ 1.15.0 — déployer ensemble.
+         - ⚠️ Rappel terrain : douchette Bluetooth connectée → iOS masque le clavier logiciel.
+           Double-clic sur la gâchette du scanner pour faire apparaître le clavier (saisie du prix).
   1.14.4 2026-06-10  Session #14 (clavier iOS — cause identifiée + douchette toujours prête ; patch Sales seul)
          - [Fix iOS #2 — RÉSOLU] Différence concrète trouvée entre le fichier de diagnostic (qui
            ouvrait le clavier) et l'app : les champs de modale étaient à .9rem (=14,4 px). Sur une
@@ -460,6 +469,8 @@ body::before{content:'';position:fixed;inset:0;
   padding:8px 11px;display:flex;align-items:center;gap:8px;flex:0 0 auto;}
 .cart-item.dup-orange{border:2px solid #fb923c;background:rgba(251,146,60,.06);}
 .cart-item.dup-red{border:2px solid var(--accent3);background:rgba(255,107,107,.07);}
+.cart-item.unknown{border:2px dashed #fbbf24;background:rgba(251,191,36,.06);}
+.ci-unknown{color:var(--warning);font-size:.85rem;margin-right:2px;}
 .ci-del{flex:0 0 auto;align-self:center;background:transparent;border:none;cursor:pointer;
   font-size:1.05rem;line-height:1;padding:2px;opacity:.85;}
 .ci-del:active{opacity:1;transform:scale(.92);}
@@ -866,6 +877,29 @@ body::before{content:'';position:fixed;inset:0;
   </div>
 </div>
 
+<!-- Modal: Code scanné non reconnu (ajout forcé → anomalies) [1.15.0] -->
+<div class="modal-backdrop hidden" id="unknownScanModal" onclick="if(event.target===this)closeUnknownScan()">
+  <div class="modal-panel">
+    <div class="modal-title">❓ Code non reconnu</div>
+    <div class="modal-subtitle">Ajout forcé · signalé en anomalies</div>
+    <div class="modal-info">
+      Ce code n'est pas dans le stock (article non intégré, code abîmé…). Tu peux l'ajouter au panier avec un prix : la vente est enregistrée normalement et signalée en anomalies pour réconciliation le soir.
+    </div>
+    <div class="modal-field">
+      <label>Libellé (code scanné — modifiable)</label>
+      <input id="unknownLabel" type="text" autocomplete="off">
+    </div>
+    <div class="modal-field">
+      <label>Prix de vente (€) — obligatoire</label>
+      <input id="unknownPrice" type="number" step="0.01" min="0" placeholder="0.00" inputmode="decimal">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeUnknownScan()">Annuler</button>
+      <button class="btn btn-primary" onclick="confirmUnknownScan()">Ajouter au panier</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Ajuster le total -->
 <div class="modal-backdrop hidden" id="adjustTotalModal" onclick="if(event.target===this)closeAdjustTotal()">
   <div class="modal-panel">
@@ -945,7 +979,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.14.4';
+const APP_VERSION      = '1.15.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1748,10 +1782,13 @@ async function processScan(rawValue) {
     else                       item = lookupCard(rawValue)   || lookupSealed(rawValue);
 
     if (!item) {
-      statusEl.textContent = '⚠ Article non trouvé : ' + rawValue.substring(0, 30);
-      showToast('⚠ Article non trouvé', true);
+      // (1.15.0, cas 2) Code non reconnu → on propose l'ajout forcé (libellé + prix obligatoire,
+      // source='inconnu'). La vente passe par l'outbox normal ; Master l'enregistre ET écrit une
+      // anomalie SCAN_INCONNU pour réconciliation le soir.
+      statusEl.textContent = '❓ Code non reconnu : ' + rawValue.substring(0, 30);
       scanFlash(false);
       scanZone.classList.remove('scanning');
+      openUnknownScan(rawValue);
       return;
     }
 
@@ -1842,8 +1879,9 @@ function dupStatusFor(c) {
 }
 
 function addToCart(item) {
-  if (item.source === 'manuel') {
-    // Manuel : pas de regroupement
+  if (item.source === 'manuel' || item.source === 'inconnu') {
+    // Manuel / inconnu : pas de regroupement (chaque ajout = une ligne distincte)
+    item.qty = item.qty || 1;
     cart.push(item);
     renderCart();
     return;
@@ -1989,10 +2027,12 @@ function getCartTotal() {
 // prix UNITAIRE flotté qui suit le texte (tappable → clavier, pour corriger une côte).
 function cartItemInnerHTML(c) {
   const modClass = c.priceModified ? ' modified' : '';
+  const unk = (c.source === 'inconnu')
+    ? '<span class="ci-unknown" title="Code non reconnu — ira en anomalies">❓</span>' : '';
   return `
       <button class="ci-del" data-action="del" data-uid="${esc(c.uid)}" title="Retirer l'article">🗑</button>
       <span class="ci-qty" data-action="qty" data-uid="${esc(c.uid)}" title="Modifier la quantité">×${c.qty}</span>
-      <div class="ci-name">${esc(c.name)}<span class="ci-price${modClass}" data-action="price" data-uid="${esc(c.uid)}" title="Corriger le prix unitaire">${formatPrice(c.prixUnit)}</span></div>
+      <div class="ci-name">${unk}${esc(c.name)}<span class="ci-price${modClass}" data-action="price" data-uid="${esc(c.uid)}" title="Corriger le prix unitaire">${formatPrice(c.prixUnit)}</span></div>
     `;
 }
 
@@ -2036,6 +2076,7 @@ function renderCart() {
     }
 
     let cls = 'cart-item';
+    if (c.source === 'inconnu') cls += ' unknown';
     if (c.dupStatus === 'orange') cls += ' dup-orange';
     else if (c.dupStatus === 'red') cls += ' dup-red';
     if (el.className !== cls) el.className = cls;
@@ -2146,6 +2187,56 @@ function confirmEditPrice() {
 // Enter dans l'input → valide
 document.getElementById('editPriceInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); confirmEditPrice(); }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CODE NON RECONNU — ajout forcé → anomalies (1.15.0, cas 2)
+// ═══════════════════════════════════════════════════════════════
+// Quand un scan ne matche rien, le vendeur peut ajouter l'article quand même : libellé = code
+// brut (modifiable), prix OBLIGATOIRE. L'article part en source='inconnu' (pas de regroupement) ;
+// à la sync, Master l'enregistre et écrit une anomalie SCAN_INCONNU (réconciliation le soir).
+let unknownScanCode = null;
+function openUnknownScan(rawCode) {
+  unknownScanCode = String(rawCode || '').trim();
+  const modal = document.getElementById('unknownScanModal');
+  const label = document.getElementById('unknownLabel');
+  const price = document.getElementById('unknownPrice');
+  label.value = unknownScanCode;
+  price.value = '';
+  modal.classList.remove('hidden');
+  // focus synchrone (cf. modales prix) ; douchette connectée → double-clic gâchette pour le clavier
+  void modal.offsetWidth;
+  price.focus();
+}
+function closeUnknownScan() {
+  document.getElementById('unknownScanModal').classList.add('hidden');
+  unknownScanCode = null;
+  focusScan();
+}
+function confirmUnknownScan() {
+  const code  = unknownScanCode;
+  const label = document.getElementById('unknownLabel').value.trim() || code || 'Article inconnu';
+  const price = parseFloat(document.getElementById('unknownPrice').value);
+  if (isNaN(price) || price < 0) { showToast('⚠ Prix obligatoire pour un article inconnu', true); return; }
+  const item = {
+    uid: uid(),
+    key: code || ('INCONNU_' + Date.now()),
+    name: label,
+    type: 'Inconnu',
+    category: 'Scan inconnu',
+    licence: detectLicence(label),
+    qty: 1,
+    prixUnit: price,
+    prixOriginal: price,
+    source: 'inconnu'
+  };
+  closeUnknownScan();
+  addToCart(item);
+  showToast('❓ Article inconnu ajouté (sera signalé en anomalies)');
+  logEvent('warn', 'article inconnu ajouté au panier', { code: item.key, prix: price });
+}
+document.getElementById('unknownPrice').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmUnknownScan(); }
 });
 
 // ═══════════════════════════════════════════════════════════════
