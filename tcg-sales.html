@@ -1,10 +1,22 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.14.0 (Session #13 — 2026-05-31)
+  Version : 1.14.1 (Session #14 — 2026-06-10)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.14.1 2026-06-10  Session #14 (2 bugs iOS — patch Sales seul)
+         - [Fix iOS #1] Douchette : après chaque scan, renderCart() déplace #scanZone dans le
+           DOM, ce qui défocuse l'input HID caché sur WebKit → le scan suivant n'atterrissait
+           plus (il fallait re-toucher la zone). processScan() ré-arme désormais focusScan() en
+           fin de traitement (pane 0 + onglet ventes + hors modale ; input inputmode="none" →
+           aucun clavier ne surgit).
+         - [Fix iOS #2] Clavier absent à l'ouverture des modales (prix, quantité, article
+           manuel, ± total) : le focus passait par setTimeout(...,50) → hors du geste utilisateur,
+           iOS supprimait le clavier. Focus rendu SYNCHRONE (void offsetWidth pour le reflow puis
+           input.focus()) dans openEditPrice / openQtyEdit / openManualItem / openAdjustTotal.
+         - Aucune logique métier touchée (outbox, cache, ventes_detail A:N, roll-back, heartbeat,
+           sécurité). Déployable seul ; Master reste 1.14.0.
   1.14.0 2026-05-31  Session #13 (roll-back d'une vente — #27, côté Sales ; avec Master 1.14.0)
          - [Feature #27] Bouton ↶ Annuler après chaque validation, pendant 90 s (barre verte
            « ✓ Vente validée »). Remplacé à la vente suivante ; auto-masqué après la fenêtre.
@@ -893,7 +905,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.14.0';
+const APP_VERSION      = '1.14.1';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1703,6 +1715,17 @@ async function processScan(rawValue) {
   }
 
   scanZone.classList.remove('scanning');
+
+  // (1.14.1) Bug iOS : renderCart() a déplacé #scanZone dans le DOM, ce qui DÉFOCUSE l'input
+  // HID caché sur WebKit → la douchette suivante n'avait plus de cible (il fallait re-toucher
+  // la zone). On ré-arme le focus pour enchaîner les scans sans re-tap. L'input est
+  // inputmode="none" → aucun clavier ne surgit. Garde : seulement sur le panier (pane 0),
+  // onglet ventes actif, hors modale, pour ne jamais voler le focus ailleurs.
+  if (curPane === 0
+      && document.getElementById('tab1').classList.contains('active')
+      && !document.querySelector('.modal-backdrop:not(.hidden)')) {
+    focusScan();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2029,9 +2052,15 @@ function openEditPrice(uidToEdit) {
   if (!c) return;
   editPriceTargetUid = uidToEdit;
   document.getElementById('editPriceItemName').textContent = c.name;
-  document.getElementById('editPriceInput').value = c.prixUnit;
-  document.getElementById('editPriceModal').classList.remove('hidden');
-  setTimeout(() => document.getElementById('editPriceInput').focus(), 50);
+  const modal = document.getElementById('editPriceModal');
+  const input = document.getElementById('editPriceInput');
+  input.value = c.prixUnit;
+  modal.classList.remove('hidden');
+  // (1.14.1) Bug iOS : focus SYNCHRONE dans le geste (plus de setTimeout, qui cassait la chaîne
+  // du geste → clavier supprimé). void offsetWidth force le reflow pour que l'input soit
+  // focusable immédiatement après le retrait de .hidden.
+  void modal.offsetWidth;
+  input.focus(); input.select();
 }
 function closeEditPrice() {
   document.getElementById('editPriceModal').classList.add('hidden');
@@ -2063,8 +2092,12 @@ function openManualItem() {
   document.getElementById('manualName').value = '';
   document.getElementById('manualPrice').value = '';
   document.getElementById('manualCategory').value = 'Cartes Loose';
-  document.getElementById('manualItemModal').classList.remove('hidden');
-  setTimeout(() => document.getElementById('manualName').focus(), 50);
+  const modal = document.getElementById('manualItemModal');
+  const input = document.getElementById('manualName');
+  modal.classList.remove('hidden');
+  // (1.14.1) focus SYNCHRONE dans le geste → clavier iOS (voir openEditPrice).
+  void modal.offsetWidth;
+  input.focus();
 }
 function closeManualItem() {
   document.getElementById('manualItemModal').classList.add('hidden');
@@ -2123,12 +2156,13 @@ function openAdjustTotal() {
   if (cart.length === 0) { showToast('⚠ Panier vide — rien à modifier', true); return; }
   const cur = getCartTotal();
   document.getElementById('adjustCurrentTotal').textContent = formatPrice(cur);
-  document.getElementById('adjustNewTotal').value = cur.toFixed(2);
-  document.getElementById('adjustTotalModal').classList.remove('hidden');
-  setTimeout(() => {
-    const i = document.getElementById('adjustNewTotal');
-    i.focus(); i.select();
-  }, 50);
+  const modal = document.getElementById('adjustTotalModal');
+  const input = document.getElementById('adjustNewTotal');
+  input.value = cur.toFixed(2);
+  modal.classList.remove('hidden');
+  // (1.14.1) focus SYNCHRONE dans le geste → clavier iOS (voir openEditPrice).
+  void modal.offsetWidth;
+  input.focus(); input.select();
 }
 function closeAdjustTotal() {
   document.getElementById('adjustTotalModal').classList.add('hidden');
@@ -2167,12 +2201,13 @@ function openQtyEdit(uidToEdit) {
   if (!c) return;
   qtyTargetUid = uidToEdit;
   document.getElementById('qtyEditItemName').textContent = c.name;
-  document.getElementById('qtyEditInput').value = c.qty;
-  document.getElementById('qtyEditModal').classList.remove('hidden');
-  setTimeout(() => {
-    const i = document.getElementById('qtyEditInput');
-    i.focus(); i.select();
-  }, 50);
+  const modal = document.getElementById('qtyEditModal');
+  const input = document.getElementById('qtyEditInput');
+  input.value = c.qty;
+  modal.classList.remove('hidden');
+  // (1.14.1) focus SYNCHRONE dans le geste → clavier iOS (voir openEditPrice).
+  void modal.offsetWidth;
+  input.focus(); input.select();
 }
 function closeQtyEdit() {
   document.getElementById('qtyEditModal').classList.add('hidden');
