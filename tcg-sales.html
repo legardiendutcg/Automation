@@ -1,10 +1,23 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.14.1 (Session #14 — 2026-06-10)
+  Version : 1.14.2 (Session #14 — 2026-06-10)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.14.2 2026-06-10  Session #14 (clavier iOS — vraie cause ; patch Sales seul)
+         - [Fix iOS #2 — suite] La 1.14.1 (focus synchrone) ne suffisait pas. DEUX causes réelles :
+           (a) VOL DE FOCUS : le tap sur le prix/quantité (un <span>) remontait jusqu'au
+               gestionnaire de clic global, qui re-focusait l'input douchette (inputmode="none")
+               juste après l'ouverture de la modale → clavier supprimé. Corrigé : stopPropagation
+               sur qty/price dans la délégation #cartItems + le gestionnaire global bail si une
+               modale est ouverte (.modal-backdrop:not(.hidden)).
+           (b) display:none AU DÉVOILEMENT : iOS refuse d'ouvrir le clavier sur un input qui
+               n'était pas dans l'arbre de rendu au début du geste. Les modales ne sont plus
+               masquées via display:none mais via opacity:0 + pointer-events:none (règle
+               .modal-backdrop.hidden) → l'input reste focusable. Couvre aussi « ± Total ».
+         - Focus synchrone des modales (1.14.1) conservé. Aucune logique métier touchée.
+           Déployable seul ; Master reste 1.14.0.
   1.14.1 2026-06-10  Session #14 (2 bugs iOS — patch Sales seul)
          - [Fix iOS #1] Douchette : après chaque scan, renderCart() déplace #scanZone dans le
            DOM, ce qui défocuse l'input HID caché sur WebKit → le scan suivant n'atterrissait
@@ -522,6 +535,11 @@ body::before{content:'';position:fixed;inset:0;
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
 .modal-info{background:var(--bg);border:1px solid var(--border);border-radius:6px;
   padding:10px 12px;font-size:.78rem;color:var(--dim);margin-bottom:14px;line-height:1.4;}
+/* (1.14.2) Fix clavier iOS : on NE masque PAS les modales via display:none (sinon WebKit
+   refuse d'ouvrir le clavier au focus, l'input n'étant pas dans l'arbre de rendu au début
+   du geste). Elles restent rendues (display:flex) mais transparentes + non interactives
+   quand .hidden. Spécificité (0,2,0) + !important pour battre .hidden{display:none!important}. */
+.modal-backdrop.hidden{display:flex!important;opacity:0;pointer-events:none;animation:none;}
 
 @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
 @keyframes slideUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
@@ -905,7 +923,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.14.1';
+const APP_VERSION      = '1.14.2';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1668,6 +1686,9 @@ scanInput.addEventListener('input', () => {
 });
 
 document.addEventListener('click', e => {
+  // (1.14.2) Une modale est ouverte → ne JAMAIS rebasculer le focus sur l'input douchette
+  // (sinon le clavier de la modale, prix/qté/etc., est volé juste après son ouverture sur iOS).
+  if (document.querySelector('.modal-backdrop:not(.hidden)')) return;
   if (e.target.closest('button') || e.target.closest('.auth-pill') || e.target.closest('.tab-btn') ||
       e.target.closest('.modal-backdrop') || e.target.closest('input') || e.target.closest('select') ||
       e.target.closest('.total-display') || e.target.closest('.cam-screen') ||
@@ -2039,8 +2060,11 @@ document.getElementById('cartItems').addEventListener('click', e => {
   const action = t.getAttribute('data-action');
   const uid = t.getAttribute('data-uid');
   if (action === 'del')        removeFromCart(uid);
-  else if (action === 'qty')   openQtyEdit(uid);
-  else if (action === 'price') openEditPrice(uid);
+  // (1.14.2) qty/price ouvrent une modale → on stoppe la propagation pour que le gestionnaire
+  // global de clic ne re-focuse pas la douchette ensuite (vol de focus → clavier iOS supprimé).
+  // 'del' laisse propager : on VEUT que le focus revienne à la zone de scan après suppression.
+  else if (action === 'qty')   { e.stopPropagation(); openQtyEdit(uid); }
+  else if (action === 'price') { e.stopPropagation(); openEditPrice(uid); }
 });
 
 // ═══════════════════════════════════════════════════════════════
