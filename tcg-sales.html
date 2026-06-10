@@ -1,10 +1,22 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.14.3 (Session #14 — 2026-06-10)
+  Version : 1.14.4 (Session #14 — 2026-06-10)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.14.4 2026-06-10  Session #14 (clavier iOS — cause identifiée + douchette toujours prête ; patch Sales seul)
+         - [Fix iOS #2 — RÉSOLU] Différence concrète trouvée entre le fichier de diagnostic (qui
+           ouvrait le clavier) et l'app : les champs de modale étaient à .9rem (=14,4 px). Sur une
+           page zoomable, iOS ZOOME au focus d'un input < 16 px et, quand le focus est PROGRAMMATIQUE,
+           SUPPRIME le clavier. Champs de modale passés à 16px (.modal-field input) → plus de zoom,
+           clavier rétabli. Auto-focus conservé (aucun tap supplémentaire). Couvre prix article,
+           ± total, quantité, article manuel.
+         - [Fix douchette #1] Filet global : écouteur focusout → si le focus retombe nulle part et
+           qu'aucune modale n'est ouverte (panier, onglet ventes), on ré-arme focusScan(). La
+           douchette redevient prête après N'IMPORTE QUELLE action (édition, validation, fermeture
+           de modale…), sans interférer avec les saisies en cours ni la caméra.
+         - Aucune logique métier touchée. Déployable seul ; Master reste 1.14.0.
   1.14.3 2026-06-10  Session #14 (clavier iOS — 3e passe ; patch Sales seul)
          - [Fix iOS #2 — suite 2] Cause résiduelle : le champ était encore INVISIBLE à l'instant
            du focus. Le fond .modal-backdrop rejouait une animation fadeIn (opacity 0→1) qui
@@ -540,7 +552,7 @@ body::before{content:'';position:fixed;inset:0;
   color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;}
 .modal-field input{width:100%;background:var(--bg);border:1px solid var(--border);
   border-radius:6px;padding:10px 12px;color:var(--text);font-family:'Syne',sans-serif;
-  font-size:.9rem;outline:none;transition:border-color .15s;}
+  font-size:16px;outline:none;transition:border-color .15s;}
 .modal-field input:focus{border-color:var(--accent);}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
 .modal-info{background:var(--bg);border:1px solid var(--border);border-radius:6px;
@@ -933,7 +945,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.14.3';
+const APP_VERSION      = '1.14.4';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1704,6 +1716,23 @@ document.addEventListener('click', e => {
       e.target.closest('.total-display') || e.target.closest('.cam-screen') ||
       e.target.closest('.swipe-dots')) return;
   if (curPane === 0 && document.getElementById('tab1').classList.contains('active')) focusScan();
+});
+
+// (1.14.4) #1 — Filet global « la douchette est toujours prête » : après TOUTE perte de focus,
+// si le focus retombe nulle part (body) et qu'aucune modale n'est ouverte (sur le panier,
+// onglet ventes), on ré-arme la zone de scan. N'interfère pas avec les saisies (si le focus
+// est passé à un autre input, activeElement ≠ body → on ne touche à rien) ni avec la caméra
+// (pane 1 exclue) ni avec les modales (champ prix/qté/total laissé focusé).
+document.addEventListener('focusout', () => {
+  setTimeout(() => {
+    if (document.querySelector('.modal-backdrop:not(.hidden)')) return;
+    const ae = document.activeElement;
+    if ((!ae || ae === document.body)
+        && curPane === 0
+        && document.getElementById('tab1').classList.contains('active')) {
+      focusScan();
+    }
+  }, 0);
 });
 
 async function processScan(rawValue) {
