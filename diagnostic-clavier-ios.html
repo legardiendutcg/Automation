@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Diagnostic clavier iOS — Le Gardien du TCG</title>
+<style>
+  :root{font-family:-apple-system,system-ui,sans-serif;}
+  body{margin:0;background:#0e1014;color:#e8eaed;padding:18px;line-height:1.45;}
+  h1{font-size:1.1rem;margin:0 0 4px;}
+  p{font-size:.9rem;color:#aab;margin:.4rem 0;}
+  .step{background:#171a21;border:1px solid #2a2f3a;border-radius:10px;padding:16px;margin:14px 0;}
+  .step h2{font-size:.95rem;margin:0 0 8px;}
+  button{font-size:1rem;font-weight:700;padding:14px 18px;border:0;border-radius:8px;
+    background:#5b8cff;color:#fff;width:100%;margin-top:6px;}
+  input{font-size:1rem;width:100%;box-sizing:border-box;padding:14px;border-radius:8px;
+    border:1px solid #2a2f3a;background:#0e1014;color:#e8eaed;margin-top:6px;}
+  .verdict{font-size:.85rem;margin-top:8px;padding:10px;border-radius:6px;background:#10131a;border:1px dashed #333;}
+  code{background:#0a0c10;padding:1px 5px;border-radius:4px;}
+
+  /* Modale-test : MÊME mécanique que l'app après 1.14.3 (masquée via opacity, sans display:none,
+     sans animation d'entrée). On reproduit le scénario réel pour un diagnostic fidèle. */
+  .modal-backdrop{position:fixed;inset:0;background:rgba(10,12,16,.85);display:flex;
+    align-items:center;justify-content:center;padding:20px;z-index:50;}
+  .modal-backdrop.hidden{opacity:0;pointer-events:none;}
+  .modal-panel{background:#171a21;border:1px solid #2a2f3a;border-radius:12px;
+    max-width:420px;width:100%;padding:22px;}
+  .modal-panel h2{margin:0 0 10px;font-size:1rem;}
+</style>
+</head>
+<body>
+  <h1>Diagnostic clavier iOS</h1>
+  <p>Ouvre cette page sur ton <b>iPhone</b>, dans le même navigateur que l'app. Trois tests, ~10 s.</p>
+
+  <div class="step">
+    <h2>Test 1 — Input tapé DIRECTEMENT</h2>
+    <p>Touche le champ ci-dessous. Le clavier doit s'ouvrir (c'est la référence).</p>
+    <input type="number" inputmode="decimal" placeholder="Touche-moi directement">
+    <div class="verdict">Attendu : clavier ✅ (sinon ton navigateur bloque tout clavier).</div>
+  </div>
+
+  <div class="step">
+    <h2>Test 2 — Focus PROGRAMMATIQUE via modale (comme l'app)</h2>
+    <p>Touche le bouton : il ouvre une modale et appelle <code>input.focus()</code> tout de suite,
+       exactement comme l'app en 1.14.3.</p>
+    <button onclick="openModal()">Ouvrir la modale + focus programmatique</button>
+    <div class="verdict">Si le clavier s'ouvre ici → le correctif 1.14.3 doit fonctionner.
+      S'il ne s'ouvre PAS (alors que le Test 1 l'ouvre) → iOS bloque le focus programmatique sur
+      cet appareil → je passerai en saisie « inline » (champ tapé directement, garanti).</div>
+  </div>
+
+  <div class="step">
+    <h2>Test 3 — Focus programmatique SANS modale</h2>
+    <p>Bouton qui focus directement un champ déjà visible (sans aucune modale).</p>
+    <button onclick="document.getElementById('plain').focus()">Focus le champ ci-dessous</button>
+    <input id="plain" type="number" inputmode="decimal" placeholder="Champ cible du Test 3">
+    <div class="verdict">Permet de distinguer « modale en cause » vs « focus programmatique en
+      cause » tout court.</div>
+  </div>
+
+  <!-- Modale-test (même masquage que l'app) -->
+  <div class="modal-backdrop hidden" id="m" onclick="if(event.target===this)closeModal()">
+    <div class="modal-panel">
+      <h2>Modale-test</h2>
+      <input id="mInput" type="number" inputmode="decimal" placeholder="Le clavier devrait s'ouvrir">
+      <button onclick="closeModal()">Fermer</button>
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+    function openModal(){
+      var modal = document.getElementById('m');
+      var input = document.getElementById('mInput');
+      modal.classList.remove('hidden');
+      void modal.offsetWidth;        // reflow, comme dans l'app
+      input.focus(); input.select(); // focus SYNCHRONE dans le geste
+    }
+    function closeModal(){ document.getElementById('m').classList.add('hidden'); }
+  </script>
+</body>
+</html>

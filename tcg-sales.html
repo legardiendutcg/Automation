@@ -1,10 +1,21 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.14.2 (Session #14 — 2026-06-10)
+  Version : 1.14.3 (Session #14 — 2026-06-10)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.14.3 2026-06-10  Session #14 (clavier iOS — 3e passe ; patch Sales seul)
+         - [Fix iOS #2 — suite 2] Cause résiduelle : le champ était encore INVISIBLE à l'instant
+           du focus. Le fond .modal-backdrop rejouait une animation fadeIn (opacity 0→1) qui
+           repartait de 0 pile au moment du focus → iOS refuse le clavier sur un input opacity:0.
+           Animations d'entrée RETIRÉES (.modal-backdrop fadeIn + .modal-panel slideUp) → la
+           modale est pleinement opaque dès le retrait de .hidden, donc le champ est visible et
+           focusable à l'instant du focus synchrone. (Les modales s'affichent désormais sans
+           transition — réactivable plus tard via une transition qui ne part PAS d'opacity 0.)
+         - ⚠️ Corrigé à l'aveugle (pas d'iPhone côté dev). Un fichier de diagnostic accompagne
+           cette version pour confirmer si le focus programmatique ouvre le clavier sur l'appareil.
+         - Aucune logique métier touchée. Déployable seul ; Master reste 1.14.0.
   1.14.2 2026-06-10  Session #14 (clavier iOS — vraie cause ; patch Sales seul)
          - [Fix iOS #2 — suite] La 1.14.1 (focus synchrone) ne suffisait pas. DEUX causes réelles :
            (a) VOL DE FOCUS : le tap sur le prix/quantité (un <span>) remontait jusqu'au
@@ -518,10 +529,9 @@ body::before{content:'';position:fixed;inset:0;
 
 /* ── Modal ── */
 .modal-backdrop{position:fixed;inset:0;background:rgba(10,12,16,.85);
-  display:flex;align-items:center;justify-content:center;z-index:5000;padding:20px;
-  animation:fadeIn .15s ease;}
+  display:flex;align-items:center;justify-content:center;z-index:5000;padding:20px;}
 .modal-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;
-  max-width:420px;width:100%;padding:24px;animation:slideUp .2s cubic-bezier(.34,1.56,.64,1);}
+  max-width:420px;width:100%;padding:24px;}
 .modal-title{font-size:1.1rem;font-weight:700;margin-bottom:6px;letter-spacing:-.02em;}
 .modal-subtitle{font-family:'Space Mono',monospace;font-size:.65rem;color:var(--muted);
   text-transform:uppercase;letter-spacing:.1em;margin-bottom:18px;}
@@ -923,7 +933,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.14.2';
+const APP_VERSION      = '1.14.3';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
