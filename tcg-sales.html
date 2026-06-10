@@ -1,10 +1,14 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.15.0 (Session #14 — 2026-06-10)
+  Version : 1.15.1 (Session #22 — 2026-06-10)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.15.1 2026-06-10  Session #22 (cosmétique pure — NON testé navigateur)
+         - [UI] Titre « TCG SALES » agrandi et étiré sur toute la largeur jusqu'au bord droit
+           (.brand-title-block width:100% ; h1 font-size clamp(2rem,12vw,3.2rem)). Version
+           inchangée, toujours collée dessous alignée à droite. Aucune logique métier touchée.
   1.15.0 2026-06-10  Session #14 (cas 2 — code non reconnu → ajout forcé ; JALON COORDONNÉ avec Master 1.15.0)
          - [Feature cas 2] Quand un scan ne matche aucun article du stock, une modale propose
            désormais l'AJOUT FORCÉ : libellé = code brut (modifiable), PRIX OBLIGATOIRE. L'article
@@ -979,7 +983,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.15.0';
+const APP_VERSION      = '1.15.1';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)

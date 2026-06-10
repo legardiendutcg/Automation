@@ -2,10 +2,14 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.4.4 (Session #13 — 2026-06-06)
+  Version : 1.4.5 (Session #22 — 2026-06-10)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.4.5  2026-06-10  Session #22 (cosmétique pure — NON testé navigateur) — logo société ajouté
+         dans l'en-tête ; version (#appVer, désormais un <span>) collée à droite du titre « TCG
+         INTAKE » (.logo-title-row) ; mention « by Cassius » supprimée. flex-wrap sur la ligne
+         titre+version (repasse sous le titre si la place manque). Aucune logique métier touchée.
   1.4.4  2026-06-06  Session #13 — SAFETY_GSHEET_ID repointé sur une Google Sheet native (le
          précédent classeur était un .xlsx importé → refusé par l'API). Backup/log opérationnels.
   1.4.3  2026-06-06  Session #13 — message d'erreur explicite si le classeur de backup/log
@@ -911,7 +915,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.4.4';
+const APP_VERSION = '1.4.5';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';

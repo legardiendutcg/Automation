@@ -1,8 +1,14 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.16.0 (Session #21 — 2026-06-10)
+  Version : 1.16.1 (Session #22 — 2026-06-10)
 =============================================================
+  1.16.1 2026-06-10  Session #22 (cosmétique pure — NON testé navigateur)
+         - [UI] Logo agrandi 54→84 px (.logo-mark ; 60 px sous 520 px).
+         - [UI] Panneaux « 📜 Journal des ventes » et « ⚠ Anomalies » rendus repliables et
+           MASQUÉS PAR DÉFAUT (.card-body.collapsed + bouton « ▸ Détails / ▾ Masquer » par carte ;
+           helper toggleCardDetails()). Le JS qui peuple #salesLog/#anomalies (innerHTML seul) n'est
+           pas affecté. Aucune logique métier touchée.
   1.16.0 2026-06-10  Session #21 (popup checklist vacances — activation event + rappel clôture ; Master seul)
          - [Feature] saveEventConfig() : quand on passe d'un event vide à un event rempli (ou qu'on
            change d'event), affiche une modale-checklist rappelant d'activer le mode vacances sur CM
@@ -810,7 +816,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.16.0';
+const APP_VERSION      = '1.16.1';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
