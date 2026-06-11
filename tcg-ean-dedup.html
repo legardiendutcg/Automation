@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com; frame-src https://accounts.google.com; img-src 'self' data:;">
+<title>TCG · Dédoublonnage EAN scellé</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================================================================
+   TCG · Dédoublonnage EAN scellé — v0.1.0
+   ----------------------------------------------------------------------------
+   Outil de mise en place (session #13bis). LECTURE SEULE de la GSheet centrale.
+   N'écrit JAMAIS dans la Sheet. Produit un export JSON/CSV des décisions.
+   Réutilise l'infra GIS de tcg-intake (même OAuth client, même GSHEET_ID).
+
+   CHANGELOG
+   0.1.0  2026-06-11  Création. Auth GIS lecture seule ; chargement Scelle_Stock +
+                      Scelle_Transactions (détection entête par libellé) ; clé
+                      type-consciente buildSealedKey (sériés vs COFFRET multi-séries) ;
+                      3 passes : (1) quasi-doublons inter-clés, (2) Type_Item vide/n.a.,
+                      (3) revue référentiel ; export décisions. Aucune écriture Sheet.
+   ============================================================================ */
+:root{
+  --bg:#10100e; --panel:#1a1a17; --panel2:#222019; --line:#322e25;
+  --ink:#ece7db; --ink-dim:#9a9384; --ink-faint:#6b6557;
+  --accent:#d8a24a;       /* or — accent unique, parcimonieux */
+  --accent-ink:#1a1408;
+  --serie:#7fa8c9;        /* sériés */
+  --coffret:#c98a6a;      /* coffrets multi-séries */
+  --ok:#7fb069; --warn:#d8a24a; --err:#cf6679;
+  --radius:7px;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --body:'Inter',system-ui,sans-serif;
+  --display:'Fraunces',Georgia,serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--body);
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code,.mono{font-family:var(--mono)}
+
+/* ---- Topbar ------------------------------------------------------------- */
+.topbar{
+  position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:16px;
+  padding:12px 20px;background:rgba(16,16,14,.93);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex;flex-direction:column;line-height:1.15}
+.brand .eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--ink-faint)}
+.brand .title{font-family:var(--display);font-size:19px;font-weight:600;color:var(--ink)}
+.brand .title em{color:var(--accent);font-style:normal}
+.topbar .spacer{flex:1}
+.auth-chip{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--ink-dim);
+  font-family:var(--mono)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--err);flex:none}
+.dot.on{background:var(--ok)}
+.btn{border:1px solid var(--line);background:var(--panel2);color:var(--ink);
+  padding:8px 14px;border-radius:var(--radius);font-size:13px;font-weight:500;
+  transition:border-color .15s,background .15s}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.ghost{background:transparent}
+.btn:disabled{opacity:.4;cursor:not-allowed;border-color:var(--line)}
+.btn.sm{padding:5px 10px;font-size:12px}
+
+/* ---- Layout ------------------------------------------------------------- */
+.wrap{max-width:1100px;margin:0 auto;padding:24px 20px 80px}
+.ro-banner{display:flex;align-items:center;gap:10px;margin:0 0 20px;padding:10px 14px;
+  border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--radius);
+  background:linear-gradient(90deg,rgba(216,162,74,.08),transparent);font-size:12.5px;color:var(--ink-dim)}
+.ro-banner strong{color:var(--accent);font-weight:600}
+
+/* ---- Hero / load -------------------------------------------------------- */
+.hero{text-align:center;padding:36px 0 12px}
+.hero h1{font-family:var(--display);font-weight:600;font-size:34px;line-height:1.1;
+  margin:0 0 10px;letter-spacing:-.01em}
+.hero h1 em{font-style:italic;color:var(--accent)}
+.hero p{max-width:560px;margin:0 auto;color:var(--ink-dim);font-size:14px}
+.load-card{margin:28px auto 0;max-width:480px;border:1px solid var(--line);
+  border-radius:var(--radius);background:var(--panel);padding:22px}
+.load-row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:9px 0;border-bottom:1px dashed var(--line);font-size:13px}
+.load-row:last-child{border-bottom:none}
+.load-row .lbl{font-family:var(--mono);color:var(--ink-dim);font-size:12px}
+.load-row .val{font-family:var(--mono);font-size:12px}
+.load-row .val.ok{color:var(--ok)} .load-row .val.pend{color:var(--ink-faint)}
+
+/* ---- Stepper ------------------------------------------------------------ */
+.stepper{display:flex;gap:0;margin:0 0 24px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.step{flex:1;padding:12px 14px;background:var(--panel);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;gap:3px;position:relative}
+.step:last-child{border-right:none}
+.step .num{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--ink-faint)}
+.step .nm{font-size:13px;font-weight:500;color:var(--ink-dim)}
+.step .ct{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.step.active{background:var(--panel2)}
+.step.active .num{color:var(--accent)}
+.step.active .nm{color:var(--ink)}
+.step.done .nm{color:var(--ink-dim)}
+.step.done .num{color:var(--ok)}
+.step.clickable{cursor:pointer}
+.step.clickable:hover{background:var(--panel2)}
+
+/* ---- Section heading ---------------------------------------------------- */
+.sec-head{display:flex;align-items:baseline;gap:12px;margin:0 0 6px}
+.sec-head h2{font-family:var(--display);font-weight:600;font-size:22px;margin:0}
+.sec-head .pill{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:20px;
+  border:1px solid var(--line);color:var(--ink-dim)}
+.sec-sub{color:var(--ink-dim);font-size:13px;margin:0 0 18px;max-width:680px}
+
+/* ---- Progress ----------------------------------------------------------- */
+.prog{display:flex;align-items:center;gap:12px;margin:0 0 18px}
+.prog .bar{flex:1;height:6px;background:var(--panel2);border-radius:6px;overflow:hidden}
+.prog .bar span{display:block;height:100%;background:var(--accent);width:0;transition:width .3s}
+.prog .txt{font-family:var(--mono);font-size:12px;color:var(--ink-dim);white-space:nowrap}
+
+/* ---- Pair card (pass 1) ------------------------------------------------- */
+.pair{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);
+  margin:0 0 16px;overflow:hidden}
+.pair-top{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  border-bottom:1px solid var(--line);background:var(--panel2)}
+.pair-top .ctx{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)}
+.pair-top .ratio{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--accent)}
+.tag{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:4px;border:1px solid var(--line)}
+.tag.serie{color:var(--serie);border-color:#34465480}
+.tag.coffret{color:var(--coffret);border-color:#5a3f3280}
+.pair-body{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}
+.cand{background:var(--panel);padding:14px;display:flex;flex-direction:column;gap:8px}
+.cand .nm{font-size:15px;font-weight:500;font-family:var(--display)}
+.cand .meta{font-family:var(--mono);font-size:11px;color:var(--ink-faint);display:flex;flex-wrap:wrap;gap:4px 12px}
+.cand .meta b{color:var(--ink-dim);font-weight:500}
+.cand .pick{margin-top:auto}
+.cand.sel{box-shadow:inset 0 0 0 2px var(--accent)}
+.cand .where{font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:4px;
+  background:var(--panel2);color:var(--ink-dim)}
+.pair-actions{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line);flex-wrap:wrap}
+.pair-actions .grow{flex:1}
+.decided{opacity:.55}
+.decided-badge{font-family:var(--mono);font-size:11px;padding:2px 9px;border-radius:5px}
+.decided-badge.merge{background:rgba(127,176,105,.14);color:var(--ok)}
+.decided-badge.distinct{background:rgba(154,147,132,.14);color:var(--ink-dim)}
+
+/* ---- Type table (pass 2) ------------------------------------------------ */
+table.grid{width:100%;border-collapse:collapse;font-size:13px}
+table.grid th,table.grid td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+table.grid th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-faint);font-weight:500;position:sticky;top:61px;background:var(--bg);z-index:5}
+table.grid td.mono{font-family:var(--mono);font-size:12px;color:var(--ink-dim)}
+table.grid tr:hover td{background:var(--panel)}
+table.grid input.typein{width:100%;background:var(--panel2);border:1px solid var(--line);
+  color:var(--ink);border-radius:5px;padding:5px 8px;font-family:var(--body);font-size:13px}
+table.grid input.typein:focus{outline:none;border-color:var(--accent)}
+.scroll{max-height:64vh;overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}
+
+/* ---- Referential (pass 3) ----------------------------------------------- */
+.ref-toolbar{display:flex;gap:10px;align-items:center;margin:0 0 14px;flex-wrap:wrap}
+.ref-toolbar input.search{flex:1;min-width:200px;background:var(--panel);border:1px solid var(--line);
+  color:var(--ink);border-radius:var(--radius);padding:9px 12px;font-family:var(--mono);font-size:12.5px}
+.ref-toolbar input.search:focus{outline:none;border-color:var(--accent)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.fchip{font-family:var(--mono);font-size:11px;padding:5px 10px;border-radius:20px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink-dim)}
+.fchip.on{border-color:var(--accent);color:var(--accent)}
+.kcell{font-family:var(--mono);font-size:11px;color:var(--ink-faint);word-break:break-all}
+
+/* ---- Summary / export --------------------------------------------------- */
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:0 0 22px}
+.stat{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);padding:14px 16px}
+.stat .n{font-family:var(--display);font-size:28px;font-weight:600;line-height:1}
+.stat .l{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:5px}
+.stat.accent .n{color:var(--accent)}
+
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(120%);
+  background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:11px 18px;
+  border-radius:var(--radius);font-size:13px;z-index:200;transition:transform .25s;max-width:90vw}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.empty{text-align:center;padding:48px 20px;color:var(--ink-dim)}
+.empty .big{font-family:var(--display);font-size:20px;color:var(--ink);margin-bottom:6px}
+.hidden{display:none!important}
+.nav-foot{display:flex;justify-content:space-between;margin-top:24px;gap:12px}
+@media(max-width:720px){
+  .pair-body{grid-template-columns:1fr}
+  .stat-row{grid-template-columns:repeat(2,1fr)}
+  .stepper{flex-direction:column}
+  .step{border-right:none;border-bottom:1px solid var(--line)}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <span class="eyebrow">Le Gardien du TCG · mise en place</span>
+    <span class="title">Dédoublonnage <em>EAN scellé</em></span>
+  </div>
+  <div class="spacer"></div>
+  <div class="auth-chip"><span class="dot" id="authDot"></span><span id="authText">hors ligne</span></div>
+  <button class="btn ghost sm" id="authBtn" onclick="onAuthClick()">Se connecter</button>
+</div>
+
+<div class="wrap">
+  <div class="ro-banner">
+    <span><strong>Lecture seule.</strong> Cet outil ne modifie jamais ta Google Sheet. Tes arbitrages sont conservés en mémoire et tu les récupères en fin de parcours via un export à appliquer toi-même.</span>
+  </div>
+
+  <!-- ÉCRAN 0 : chargement -->
+  <section id="screenLoad">
+    <div class="hero">
+      <h1>Bâtir le <em>référentiel</em> à partir de tes données réelles</h1>
+      <p>L'outil lit <code>Scelle_Stock</code> et <code>Scelle_Transactions</code>, regroupe chaque item par sa clé produit, et te fait trancher les cas ambigus. Rien n'est écrit.</p>
+    </div>
+    <div class="load-card">
+      <div class="load-row"><span class="lbl">Authentification Google</span><span class="val pend" id="ldAuth">en attente</span></div>
+      <div class="load-row"><span class="lbl">Scelle_Stock</span><span class="val pend" id="ldStock">—</span></div>
+      <div class="load-row"><span class="lbl">Scelle_Transactions</span><span class="val pend" id="ldTrans">—</span></div>
+      <div class="load-row"><span class="lbl">Produits distincts</span><span class="val pend" id="ldKeys">—</span></div>
+      <div style="margin-top:18px;display:flex;gap:10px">
+        <button class="btn primary" id="loadBtn" onclick="loadData()" disabled>Charger les données</button>
+        <button class="btn ghost" id="startBtn" onclick="goPass(1)" disabled>Commencer →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ÉCRANS DE TRAVAIL -->
+  <section id="screenWork" class="hidden">
+    <div class="stepper" id="stepper"></div>
+    <div id="passBody"></div>
+    <div class="nav-foot">
+      <button class="btn ghost" id="prevBtn" onclick="prevPass()">← Précédent</button>
+      <button class="btn primary" id="nextBtn" onclick="nextPass()">Suivant →</button>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+/* ===========================================================================
+   CONFIG — alignée sur tcg-intake (même projet OAuth, même classeur central)
+   =========================================================================== */
+const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
+const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+const SHEET_STOCK     = 'Scelle_Stock';
+const SHEET_TRANS     = 'Scelle_Transactions';
+// Lecture seule → scope readonly suffisant (plus restrictif que tcg-intake, volontaire).
+const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets.readonly';
+const NEAR_RATIO      = 0.90;   // seuil quasi-doublon inter-clés
+const NA              = 'n.a.'; // marqueur multi-séries (toujours littéral, confirmé)
+
+/* ===========================================================================
+   ÉTAT GIS (repris de tcg-intake)
+   =========================================================================== */
+let gAccessToken=null, gTokenExpiry=0, tokenClient=null, gisReady=false,
+    pendingInteractive=false, refreshTimer=null, gUserEmail='', gUserName='';
+
+function isAuthenticated(){ return gAccessToken && Date.now() < gTokenExpiry; }
+function waitForGis(t=10000){ return new Promise((res,rej)=>{ if(window.google&&google.accounts&&google.accounts.oauth2) return res(); const t0=Date.now(); const iv=setInterval(()=>{ if(window.google&&google.accounts&&google.accounts.oauth2){clearInterval(iv);res();} else if(Date.now()-t0>t){clearInterval(iv);rej(new Error('GIS'));} },100); }); }
+async function initGisClient(){ try{ await waitForGis(); }catch(e){ toast('⚠ Google Identity non chargé'); return; } tokenClient=google.accounts.oauth2.initTokenClient({ client_id:OAUTH_CLIENT_ID, scope:GSHEET_SCOPES+' https://www.googleapis.com/auth/userinfo.email profile', callback:onTokenResponse, error_callback:onAuthError }); gisReady=true; updateAuthUI(); }
+function requestToken(i){ if(!gisReady||!tokenClient){ if(i) toast('⚠ Auth pas prête (recharge la page)'); return; } pendingInteractive=i; try{ tokenClient.requestAccessToken({prompt:''}); }catch(e){ onAuthError({type:'request_failed'}); } }
+async function onTokenResponse(resp){ if(!resp||resp.error||!resp.access_token){ onAuthError(resp||{type:'no_token'}); return; } gAccessToken=resp.access_token; gTokenExpiry=Date.now()+(parseInt(resp.expires_in||'3600',10)*1000); scheduleTokenRefresh(); if(!gUserEmail) await fetchUserInfo(); updateAuthUI(); if(pendingInteractive) toast('✓ Connecté · '+(gUserName||gUserEmail||'Google')); pendingInteractive=false; }
+function onAuthError(err){ const m=(err&&(err.type||err.error||err.message))||'inconnue'; if(m==='popup_failed_to_open') toast('⚠ Popup bloquée — autorise les popups'); else if(pendingInteractive&&m!=='popup_closed') toast('✗ Connexion : '+m); pendingInteractive=false; updateAuthUI(); }
+function scheduleTokenRefresh(){ if(refreshTimer) clearTimeout(refreshTimer); const d=Math.max(10000,gTokenExpiry-Date.now()-5*60*1000); refreshTimer=setTimeout(()=>{ if(gAccessToken) requestToken(false); },d); }
+async function fetchUserInfo(){ try{ const res=await fetch('https://www.googleapis.com/oauth2/v2/userinfo',{headers:{Authorization:'Bearer '+gAccessToken}}); const info=await res.json(); gUserEmail=info.email||''; gUserName=info.name||info.email||''; }catch(e){} }
+function logout(){ if(refreshTimer){clearTimeout(refreshTimer);refreshTimer=null;} gAccessToken=null;gTokenExpiry=0;gUserEmail='';gUserName=''; updateAuthUI(); toast('Déconnecté'); }
+function onAuthClick(){ if(isAuthenticated()) logout(); else requestToken(true); }
+
+function a1(sheet,rng){ return "'"+String(sheet).replace(/'/g,"''")+"'!"+rng; }
+async function sheetsGet(range,spreadsheetId=GSHEET_ID){
+  const url=`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`;
+  const res=await fetch(url,{headers:{Authorization:`Bearer ${gAccessToken}`}});
+  if(!res.ok) throw new Error(`Sheets GET ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+function updateAuthUI(){
+  const on=isAuthenticated();
+  document.getElementById('authDot').classList.toggle('on',on);
+  document.getElementById('authText').textContent = on ? (gUserName||gUserEmail||'connecté') : 'hors ligne';
+  document.getElementById('authBtn').textContent = on ? 'Déconnecter' : 'Se connecter';
+  document.getElementById('ldAuth').textContent = on ? 'connecté' : 'en attente';
+  document.getElementById('ldAuth').className = 'val '+(on?'ok':'pend');
+  document.getElementById('loadBtn').disabled = !on;
+}
+
+/* ===========================================================================
+   CLÉ PRODUIT — fonction UNIQUE (à terme : à factoriser avec tcg-intake)
+   Normalisation CONSERVATRICE : trim + minuscules + espaces multiples réduits.
+   On ne replie volontairement NI accents NI apostrophes (le quasi-match passe 1
+   rattrape ces cas avec validation humaine).
+   =========================================================================== */
+function eanNorm(s){ return String(s==null?'':s).trim().toLowerCase().replace(/\s+/g,' '); }
+function isNA(s){ const v=eanNorm(s); return v==='' || v===NA || v==='nan'; }
+function buildSealedKey(r){
+  const cs=eanNorm(r.codeSerie), ni=eanNorm(r.nomItem);
+  if(isNA(r.codeSerie)) return 'COFFRET|||'+ni;        // multi-séries : nom seul
+  return cs+'|||'+eanNorm(r.typeItem)+'|||'+ni;          // sérié : code|type|nom
+}
+function keyIsCoffret(k){ return k.startsWith('COFFRET|||'); }
+function keyParts(k){
+  if(keyIsCoffret(k)) return {kind:'coffret', serie:NA, type:'coffret', nom:k.slice('COFFRET|||'.length)};
+  const p=k.split('|||'); return {kind:'serie', serie:p[0]||'', type:p[1]||'', nom:p[2]||''};
+}
+
+/* Ratio de similarité (Sørensen-Dice sur bigrammes) — léger, suffisant ici. */
+function simRatio(a,b){
+  if(a===b) return 1; if(a.length<2||b.length<2) return a===b?1:0;
+  const big=s=>{const m=new Map();for(let i=0;i<s.length-1;i++){const g=s.slice(i,i+2);m.set(g,(m.get(g)||0)+1);}return m;};
+  const A=big(a),B=big(b); let inter=0,szA=0,szB=0;
+  A.forEach(v=>szA+=v); B.forEach(v=>szB+=v);
+  A.forEach((v,g)=>{ if(B.has(g)) inter+=Math.min(v,B.get(g)); });
+  return (2*inter)/(szA+szB);
+}
+
+/* ===========================================================================
+   CHARGEMENT — détection entête par libellé (robuste au décalage de ligne)
+   =========================================================================== */
+const COLS = { codeSerie:['code série','code serie'], nomSerie:['nom série','nom serie'],
+               typeItem:['type_item','type item'], nomItem:['nom_item','nom item'],
+               qty:['quantité','quantite'], license:['license','licence'] };
+
+function resolveHeader(rows){
+  // Cherche la 1re ligne contenant à la fois 'origine' et 'key' (signature de tes onglets).
+  for(let i=0;i<Math.min(60,rows.length);i++){
+    const low=(rows[i]||[]).map(c=>eanNorm(c));
+    if(low.includes('origine') && low.includes('key')) return i;
+  }
+  // repli : 1re ligne contenant nom_item
+  for(let i=0;i<Math.min(60,rows.length);i++){
+    const low=(rows[i]||[]).map(c=>eanNorm(c));
+    if(low.some(c=>COLS.nomItem.includes(c))) return i;
+  }
+  return 0;
+}
+function colIndex(headerRow,aliases){
+  const low=headerRow.map(c=>eanNorm(c));
+  for(const a of aliases){ const i=low.indexOf(a); if(i>=0) return i; }
+  return -1;
+}
+function parseSheet(values, sheetName){
+  if(!values||!values.length) return [];
+  const h=resolveHeader(values);
+  const header=values[h]||[];
+  const idx={}; for(const k in COLS) idx[k]=colIndex(header,COLS[k]);
+  const out=[];
+  for(let r=h+1;r<values.length;r++){
+    const row=values[r]||[];
+    const nomItem=idx.nomItem>=0?(row[idx.nomItem]||''):'';
+    if(eanNorm(nomItem)==='') continue;           // ligne vide → ignorée
+    out.push({
+      sheet:sheetName, rowNum:r+1,                  // 1-indexed réel dans la Sheet
+      codeSerie:idx.codeSerie>=0?(row[idx.codeSerie]||''):'',
+      nomSerie:idx.nomSerie>=0?(row[idx.nomSerie]||''):'',
+      typeItem:idx.typeItem>=0?(row[idx.typeItem]||''):'',
+      nomItem:String(nomItem),
+      qty:idx.qty>=0?(row[idx.qty]||''):'',
+    });
+  }
+  return out;
+}
+
+/* ===========================================================================
+   ÉTAT MÉTIER
+   =========================================================================== */
+const STATE = {
+  rows:[],            // toutes les lignes scellées (stock+trans)
+  keyMap:new Map(),   // key -> {rows:[], names:Set, sheets:Set}
+  nearPairs:[],       // [{a,b,ratio,kind}] quasi-doublons inter-clés
+  pairDecisions:{},   // "a||b" -> {action:'merge'|'distinct', winner?:key}
+  typeFixes:{},       // key -> nouveau type_item (pass 2)
+  pass:0, pairIdx:0,
+};
+
+async function loadData(){
+  if(!isAuthenticated()){ toast('Connecte-toi d’abord'); return; }
+  const btn=document.getElementById('loadBtn'); btn.disabled=true; btn.textContent='Chargement…';
+  try{
+    document.getElementById('ldStock').textContent='lecture…'; 
+    const s=await sheetsGet(a1(SHEET_STOCK,'A1:AZ20000'));
+    const stockRows=parseSheet(s.values||[],SHEET_STOCK);
+    document.getElementById('ldStock').textContent=stockRows.length+' lignes';
+    document.getElementById('ldStock').className='val ok';
+
+    document.getElementById('ldTrans').textContent='lecture…';
+    const t=await sheetsGet(a1(SHEET_TRANS,'A1:AZ20000'));
+    const transRows=parseSheet(t.values||[],SHEET_TRANS);
+    document.getElementById('ldTrans').textContent=transRows.length+' lignes';
+    document.getElementById('ldTrans').className='val ok';
+
+    STATE.rows=stockRows.concat(transRows);
+    buildIndex();
+    document.getElementById('ldKeys').textContent=STATE.keyMap.size+' produits';
+    document.getElementById('ldKeys').className='val ok';
+    document.getElementById('startBtn').disabled=false;
+    btn.textContent='Recharger';
+    toast(`✓ ${STATE.rows.length} lignes · ${STATE.keyMap.size} produits · ${STATE.nearPairs.length} quasi-doublons`);
+  }catch(e){
+    console.error(e); toast('✗ '+e.message);
+    document.getElementById('ldStock').textContent='erreur';
+    document.getElementById('ldStock').className='val';
+  }finally{ btn.disabled=false; }
+}
+
+function buildIndex(){
+  STATE.keyMap.clear();
+  for(const r of STATE.rows){
+    const k=buildSealedKey(r);
+    if(!STATE.keyMap.has(k)) STATE.keyMap.set(k,{rows:[],names:new Set(),sheets:new Set(),hasNAType:false});
+    const e=STATE.keyMap.get(k);
+    e.rows.push(r); e.names.add(r.nomItem.trim()); e.sheets.add(r.sheet);
+    if(isNA(r.typeItem) && !keyIsCoffret(k)) e.hasNAType=true;
+  }
+  // Quasi-doublons inter-clés : regrouper par bucket (coffret | serie+type), comparer noms.
+  const buckets=new Map();
+  for(const k of STATE.keyMap.keys()){
+    const p=keyParts(k);
+    const b = p.kind==='coffret' ? 'COFFRET' : (p.serie+'\u0001'+p.type);
+    if(!buckets.has(b)) buckets.set(b,[]);
+    buckets.get(b).push(k);
+  }
+  const pairs=[];
+  for(const ks of buckets.values()){
+    for(let i=0;i<ks.length;i++) for(let j=i+1;j<ks.length;j++){
+      const ni=keyParts(ks[i]).nom, nj=keyParts(ks[j]).nom;
+      const r=simRatio(ni,nj);
+      if(r>=NEAR_RATIO && ni!==nj) pairs.push({a:ks[i],b:ks[j],ratio:r,kind:keyParts(ks[i]).kind});
+    }
+  }
+  pairs.sort((x,y)=>y.ratio-x.ratio);
+  STATE.nearPairs=pairs;
+}
+
+/* ===========================================================================
+   NAVIGATION DES PASSES
+   =========================================================================== */
+const PASSES=[
+  {n:'01',nm:'Quasi-doublons',sub:'Paires de produits aux noms très proches'},
+  {n:'02',nm:'Type manquant',sub:'Items sériés sans Type_Item'},
+  {n:'03',nm:'Référentiel',sub:'Revue des produits distincts'},
+  {n:'04',nm:'Export',sub:'Récupérer tes décisions'},
+];
+function goPass(p){
+  STATE.pass=p;
+  document.getElementById('screenLoad').classList.add('hidden');
+  document.getElementById('screenWork').classList.remove('hidden');
+  renderStepper(); renderPass();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function nextPass(){ if(STATE.pass<PASSES.length) goPass(STATE.pass+1); }
+function prevPass(){ if(STATE.pass>1) goPass(STATE.pass-1); else { document.getElementById('screenWork').classList.add('hidden'); document.getElementById('screenLoad').classList.remove('hidden'); } }
+
+function renderStepper(){
+  const counts=[STATE.nearPairs.length, countNAType(), STATE.keyMap.size, '—'];
+  document.getElementById('stepper').innerHTML=PASSES.map((p,i)=>{
+    const idx=i+1; const cls=idx===STATE.pass?'active':(idx<STATE.pass?'done':'');
+    return `<div class="step ${cls} clickable" onclick="goPass(${idx})">
+      <span class="num">${p.n}</span><span class="nm">${p.nm}</span>
+      <span class="ct">${counts[i]==='—'?'':counts[i]+' '}${idx===1?'paires':idx===2?'items':idx===3?'produits':''}</span></div>`;
+  }).join('');
+  document.getElementById('prevBtn').textContent = STATE.pass===1?'← Retour chargement':'← Précédent';
+  document.getElementById('nextBtn').classList.toggle('hidden', STATE.pass===PASSES.length);
+}
+function countNAType(){ let n=0; for(const e of STATE.keyMap.values()) if(e.hasNAType) n++; return n; }
+
+function renderPass(){
+  if(STATE.pass===1) renderPairs();
+  else if(STATE.pass===2) renderTypeFix();
+  else if(STATE.pass===3) renderReferential();
+  else if(STATE.pass===4) renderExport();
+}
+
+/* ---- PASSE 1 : quasi-doublons ------------------------------------------ */
+function renderPairs(){
+  const body=document.getElementById('passBody');
+  const pairs=STATE.nearPairs;
+  const decidedCount=Object.keys(STATE.pairDecisions).length;
+  let html=`<div class="sec-head"><h2>Quasi-doublons</h2><span class="pill">${pairs.length} paires</span></div>
+    <p class="sec-sub">Deux clés produit aux noms très proches. Si c'est la même chose (faute de frappe), fusionne en choisissant le nom correct. Si ce sont des produits différents, garde-les séparés. Le contexte (série, type, où l'item apparaît) t'aide à trancher.</p>`;
+  if(!pairs.length){
+    body.innerHTML=html+`<div class="empty"><div class="big">Aucun quasi-doublon détecté</div>Ta nomenclature est déjà propre sur ce critère. Passe à l'étape suivante.</div>`;
+    return;
+  }
+  html+=`<div class="prog"><div class="bar"><span style="width:${pairs.length?decidedCount/pairs.length*100:0}%"></span></div>
+    <div class="txt">${decidedCount}/${pairs.length} arbitrées</div></div>`;
+  html+=pairs.map((pr,i)=>pairCard(pr,i)).join('');
+  body.innerHTML=html;
+}
+function origName(k){
+  const e=STATE.keyMap.get(k); if(!e) return keyParts(k).nom;
+  const freq=new Map();
+  for(const r of e.rows){ const n=r.nomItem.trim(); freq.set(n,(freq.get(n)||0)+1); }
+  let best=-1,nm=e.rows[0].nomItem.trim();
+  for(const [n,c] of freq){ if(c>best){best=c;nm=n;} }
+  return nm;
+}
+function nameCtxt(k){
+  const e=STATE.keyMap.get(k); const p=keyParts(k);
+  const sheets=[...e.sheets].map(s=>s===SHEET_STOCK?'stock':'transac').join(' + ');
+  const nbLines=e.rows.length;
+  const variants=[...e.names];
+  return {p,sheets,nbLines,variants,e};
+}
+function pairCard(pr,i){
+  const id=pairId(pr.a,pr.b);
+  const dec=STATE.pairDecisions[id];
+  const ca=nameCtxt(pr.a), cb=nameCtxt(pr.b);
+  const kind=pr.kind;
+  const tag = kind==='coffret'
+     ? `<span class="tag coffret">COFFRET multi-séries</span>`
+     : `<span class="tag serie">série ${esc(ca.p.serie)} · ${esc(ca.p.type)}</span>`;
+  const cand=(k,c,side)=>{
+    const selWinner = dec&&dec.action==='merge'&&dec.winner===k;
+    return `<div class="cand ${selWinner?'sel':''}" id="cand_${i}_${side}">
+      <div class="nm">${esc(origName(k))}</div>
+      <div class="meta">
+        <span><b>lignes</b> ${c.nbLines}</span>
+        <span class="where">${c.sheets}</span>
+        ${kind!=='coffret'?'':`<span><b>type</b> ${esc([...c.e.rows].map(r=>r.typeItem)[0]||'—')}</span>`}
+      </div>
+      <div class="pick">
+        <button class="btn sm ${selWinner?'primary':'ghost'}" onclick="decideMerge('${escJs(pr.a)}','${escJs(pr.b)}','${escJs(k)}')">
+          ${selWinner?'✓ nom retenu':'Fusionner — garder ce nom'}</button>
+      </div>
+    </div>`;
+  };
+  const winnerName = dec&&dec.action==='merge' ? origName(dec.winner) : '';
+  const badge = !dec ? '' :
+    dec.action==='merge' ? `<span class="decided-badge merge">fusionnées → « ${esc(winnerName)} »</span>`
+                         : `<span class="decided-badge distinct">gardées distinctes</span>`;
+  return `<div class="pair ${dec?'decided':''}" id="pair_${i}">
+    <div class="pair-top">${tag}<span class="ratio mono">~${Math.round(pr.ratio*100)}%</span></div>
+    <div class="pair-body">${cand(pr.a,ca,'a')}${cand(pr.b,cb,'b')}</div>
+    <div class="pair-actions">
+      <button class="btn sm ghost" onclick="decideDistinct('${escJs(pr.a)}','${escJs(pr.b)}')">Produits distincts — ne pas fusionner</button>
+      <span class="grow"></span>${badge}
+      ${dec?`<button class="btn sm ghost" onclick="clearDecision('${escJs(pr.a)}','${escJs(pr.b)}')">annuler</button>`:''}
+    </div></div>`;
+}
+// IMPORTANT : la clé produit contient déjà '|||'. On encode l'id de paire avec un
+// séparateur qui ne peut PAS apparaître dans une clé (saut de ligne) pour éviter
+// toute collision au split. NE PAS revenir à '||'.
+const PAIR_SEP='\n';
+function pairId(a,b){ return a+PAIR_SEP+b; }
+function splitPairId(id){ const i=id.indexOf(PAIR_SEP); return [id.slice(0,i),id.slice(i+1)]; }
+function decideMerge(a,b,winner){ STATE.pairDecisions[pairId(a,b)]={action:'merge',winner}; renderPairs(); }
+function decideDistinct(a,b){ STATE.pairDecisions[pairId(a,b)]={action:'distinct'}; renderPairs(); }
+function clearDecision(a,b){ delete STATE.pairDecisions[pairId(a,b)]; renderPairs(); }
+
+/* ---- PASSE 2 : Type_Item manquant -------------------------------------- */
+function renderTypeFix(){
+  const body=document.getElementById('passBody');
+  const items=[...STATE.keyMap.entries()].filter(([k,e])=>e.hasNAType);
+  let html=`<div class="sec-head"><h2>Type manquant</h2><span class="pill">${items.length} items</span></div>
+    <p class="sec-sub">Ces produits sériés ont au moins une ligne sans <code>Type_Item</code> (vide ou n.a.). Le type entre dans la clé des sériés : un type manquant fragmente le produit. Renseigne le bon type ; il sera consigné dans l'export (aucune écriture directe).</p>`;
+  if(!items.length){ body.innerHTML=html+`<div class="empty"><div class="big">Aucun type manquant</div>Tous tes items sériés ont un Type_Item. Étape suivante.</div>`; return; }
+  html+=`<div class="scroll"><table class="grid"><thead><tr>
+    <th>Nom item</th><th>Code série</th><th>Type actuel</th><th>Type corrigé</th><th>Lignes</th></tr></thead><tbody>`;
+  for(const [k,e] of items){
+    const p=keyParts(k); const sample=e.rows[0];
+    const cur=[...new Set(e.rows.map(r=>r.typeItem.trim()||'(vide)'))].join(' / ');
+    html+=`<tr>
+      <td>${esc(p.nom)}</td>
+      <td class="mono">${esc(p.serie)}</td>
+      <td class="mono">${esc(cur)}</td>
+      <td><input class="typein" value="${esc(STATE.typeFixes[k]||'')}" placeholder="ex. Display de boosters"
+           oninput="STATE.typeFixes['${escJs(k)}']=this.value"></td>
+      <td class="mono">${e.rows.length}</td></tr>`;
+  }
+  html+=`</tbody></table></div>`;
+  body.innerHTML=html;
+}
+
+/* ---- PASSE 3 : référentiel --------------------------------------------- */
+let refFilter='all', refSearch='';
+function renderReferential(){
+  const body=document.getElementById('passBody');
+  const merges=mergeTargets();
+  let entries=[...STATE.keyMap.keys()].filter(k=>!merges.has(k)); // masque les clés fusionnées (absorbées)
+  const total=entries.length;
+  if(refFilter==='coffret') entries=entries.filter(k=>keyIsCoffret(k));
+  else if(refFilter==='serie') entries=entries.filter(k=>!keyIsCoffret(k));
+  if(refSearch){ const q=eanNorm(refSearch); entries=entries.filter(k=>eanNorm(keyParts(k).nom).includes(q)||eanNorm(keyParts(k).serie).includes(q)); }
+  entries.sort((a,b)=>keyParts(a).nom.localeCompare(keyParts(b).nom));
+  let html=`<div class="sec-head"><h2>Référentiel</h2><span class="pill">${total} produits distincts</span></div>
+    <p class="sec-sub">La base qui amorcera la table de mapping EAN. Les paires fusionnées en passe 1 sont déjà absorbées. Chaque ligne deviendra une entrée à laquelle tu rattacheras un (ou plusieurs) EAN par scan.</p>
+    <div class="ref-toolbar">
+      <input class="search" placeholder="filtrer par nom ou série…" value="${esc(refSearch)}" oninput="refSearch=this.value;renderReferential()">
+      <div class="chips">
+        <span class="fchip ${refFilter==='all'?'on':''}" onclick="refFilter='all';renderReferential()">tous</span>
+        <span class="fchip ${refFilter==='serie'?'on':''}" onclick="refFilter='serie';renderReferential()">sériés</span>
+        <span class="fchip ${refFilter==='coffret'?'on':''}" onclick="refFilter='coffret';renderReferential()">coffrets</span>
+      </div></div>`;
+  html+=`<div class="scroll"><table class="grid"><thead><tr>
+    <th>Nom item</th><th>Type</th><th>Code série</th><th>Lignes</th><th>Clé</th></tr></thead><tbody>`;
+  for(const k of entries.slice(0,1200)){
+    const p=keyParts(k); const e=STATE.keyMap.get(k);
+    const tagcls=p.kind==='coffret'?'coffret':'serie';
+    html+=`<tr>
+      <td>${esc(p.nom)}</td>
+      <td><span class="tag ${tagcls}">${esc(p.type)}</span></td>
+      <td class="mono">${p.kind==='coffret'?'<span style="color:var(--ink-faint)">n.a.</span>':esc(p.serie)}</td>
+      <td class="mono">${e.rows.length}</td>
+      <td class="kcell">${esc(k)}</td></tr>`;
+  }
+  html+=`</tbody></table></div>`;
+  if(entries.length>1200) html+=`<p class="sec-sub" style="margin-top:10px">Affichage limité à 1200 lignes (${entries.length} filtrées). Affine le filtre.</p>`;
+  body.innerHTML=html;
+}
+function mergeTargets(){
+  // clés "perdantes" d'une fusion → à absorber dans le winner
+  const absorbed=new Set();
+  for(const id in STATE.pairDecisions){
+    const d=STATE.pairDecisions[id]; if(d.action!=='merge') continue;
+    const [a,b]=splitPairId(id); const loser = d.winner===a?b:a; absorbed.add(loser);
+  }
+  return absorbed;
+}
+
+/* ---- PASSE 4 : export --------------------------------------------------- */
+function renderExport(){
+  const body=document.getElementById('passBody');
+  const merges=Object.values(STATE.pairDecisions).filter(d=>d.action==='merge').length;
+  const distincts=Object.values(STATE.pairDecisions).filter(d=>d.action==='distinct').length;
+  const typeFixCount=Object.keys(STATE.typeFixes).filter(k=>STATE.typeFixes[k].trim()).length;
+  const refCount=STATE.keyMap.size - mergeTargets().size;
+  body.innerHTML=`<div class="sec-head"><h2>Export</h2></div>
+    <p class="sec-sub">Récupère tes décisions. Rien n'a été écrit dans la Sheet : ces fichiers te servent à appliquer le nettoyage toi-même, ou alimenteront une future version écrivante.</p>
+    <div class="stat-row">
+      <div class="stat accent"><div class="n">${refCount}</div><div class="l">produits au référentiel</div></div>
+      <div class="stat"><div class="n">${merges}</div><div class="l">fusions de noms</div></div>
+      <div class="stat"><div class="n">${distincts}</div><div class="l">paires gardées distinctes</div></div>
+      <div class="stat"><div class="n">${typeFixCount}</div><div class="l">types corrigés</div></div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn primary" onclick="exportJSON()">⤓ Décisions (JSON)</button>
+      <button class="btn" onclick="exportCorrectionsCSV()">⤓ Corrections de noms (CSV)</button>
+      <button class="btn" onclick="exportReferentialCSV()">⤓ Référentiel produits (CSV)</button>
+    </div>`;
+}
+
+function buildCorrections(){
+  // Pour chaque fusion : on remplace le nom de toute ligne (perdante OU gagnante)
+  // qui ne porte pas EXACTEMENT le nom retenu. Le nom retenu est le libellé ORIGINAL
+  // (casse d'origine) de la clé gagnante, pas le fragment de clé normalisé.
+  const rows=[]; // {sheet,rowNum,from,to,serie,type}
+  for(const id in STATE.pairDecisions){
+    const d=STATE.pairDecisions[id]; if(d.action!=='merge') continue;
+    const [a,b]=splitPairId(id); const winner=d.winner;
+    const we=STATE.keyMap.get(winner);
+    if(!we){ continue; }
+    // libellé retenu = nom original le plus fréquent parmi les lignes de la clé gagnante
+    const freq=new Map();
+    for(const r of we.rows){ const n=r.nomItem.trim(); freq.set(n,(freq.get(n)||0)+1); }
+    let target=we.rows[0].nomItem.trim(), best=-1;
+    for(const [n,c] of freq){ if(c>best){best=c;target=n;} }
+    for(const k of [a,b]){
+      const e=STATE.keyMap.get(k); if(!e) continue;
+      for(const r of e.rows){
+        if(r.nomItem.trim()!==target){
+          rows.push({sheet:r.sheet,rowNum:r.rowNum,from:r.nomItem,to:target,
+                     serie:r.codeSerie,type:r.typeItem});
+        }
+      }
+    }
+  }
+  return rows;
+}
+function dl(name,content,type){ const b=new Blob([content],{type}); const u=URL.createObjectURL(b);
+  const a=document.createElement('a'); a.href=u; a.download=name; a.click(); URL.revokeObjectURL(u); }
+function csvCell(s){ s=String(s==null?'':s); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; }
+
+function exportJSON(){
+  const out={ generatedAt:new Date().toISOString(), readOnly:true,
+    counts:{rows:STATE.rows.length,products:STATE.keyMap.size,nearPairs:STATE.nearPairs.length},
+    pairDecisions:STATE.pairDecisions, typeFixes:STATE.typeFixes,
+    corrections:buildCorrections() };
+  dl('ean_dedup_decisions.json',JSON.stringify(out,null,2),'application/json');
+  toast('✓ JSON exporté');
+}
+function exportCorrectionsCSV(){
+  const rows=buildCorrections();
+  const head=['onglet','ligne','nom_actuel','nom_corrige','code_serie','type_item'];
+  const lines=[head.join(',')].concat(rows.map(r=>[r.sheet,r.rowNum,r.from,r.to,r.serie,r.type].map(csvCell).join(',')));
+  dl('ean_corrections_noms.csv',lines.join('\n'),'text/csv');
+  toast(rows.length?`✓ ${rows.length} corrections`:'Aucune correction à exporter');
+}
+function exportReferentialCSV(){
+  const absorbed=mergeTargets();
+  const head=['cle','genre','code_serie','type_item','nom_item','nb_lignes','onglets'];
+  const lines=[head.join(',')];
+  for(const [k,e] of STATE.keyMap){
+    if(absorbed.has(k)) continue; const p=keyParts(k);
+    lines.push([k,p.kind,p.kind==='coffret'?NA:p.serie,p.type,p.nom,e.rows.length,[...e.sheets].join('+')].map(csvCell).join(','));
+  }
+  dl('ean_referentiel_produits.csv',lines.join('\n'),'text/csv');
+  toast('✓ Référentiel exporté');
+}
+
+/* ===========================================================================
+   UTILITAIRES
+   =========================================================================== */
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escJs(s){ return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+let toastTimer=null;
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2600); }
+
+window.addEventListener('DOMContentLoaded',()=>{ initGisClient(); });
+</script>
+</body>
+</html>
