@@ -17,6 +17,12 @@
    Réutilise l'infra GIS de tcg-intake (même OAuth client, même GSHEET_ID).
 
    CHANGELOG
+   0.3.0  2026-06-11  Liste de types lue en LIVE depuis la colonne G bornée par
+                      Début_Liste_Types / Fin_Liste_Types (dédoublonnée), avec repli
+                      sur liste codée en dur si bornes introuvables. Indicateur de
+                      provenance (live/repli) en passe 2.
+   0.2.0  2026-06-11  Passe 1 enrichie (code+nom série, type, cote/u) ; passe 2 en menu
+                      déroulant de types ; correction en-têtes sticky (top:0 dans .scroll).
    0.1.0  2026-06-11  Création. Auth GIS lecture seule ; chargement Scelle_Stock +
                       Scelle_Transactions (détection entête par libellé) ; clé
                       type-consciente buildSealedKey (sériés vs COFFRET multi-séries) ;
@@ -138,6 +144,12 @@ code,.mono{font-family:var(--mono)}
 .cand .nm{font-size:15px;font-weight:500;font-family:var(--display)}
 .cand .meta{font-family:var(--mono);font-size:11px;color:var(--ink-faint);display:flex;flex-wrap:wrap;gap:4px 12px}
 .cand .meta b{color:var(--ink-dim);font-weight:500}
+.cand .fields{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:2px 0 4px;
+  padding:8px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.cand .fields dt{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-faint);align-self:center}
+.cand .fields dd{margin:0;font-size:12.5px;color:var(--ink)}
+.cand .fields dd.mono{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)}
 .cand .pick{margin-top:auto}
 .cand.sel{box-shadow:inset 0 0 0 2px var(--accent)}
 .cand .where{font-family:var(--mono);font-size:10px;padding:1px 6px;border-radius:4px;
@@ -153,12 +165,14 @@ code,.mono{font-family:var(--mono)}
 table.grid{width:100%;border-collapse:collapse;font-size:13px}
 table.grid th,table.grid td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
 table.grid th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
-  color:var(--ink-faint);font-weight:500;position:sticky;top:61px;background:var(--bg);z-index:5}
+  color:var(--ink-faint);font-weight:500;position:sticky;top:0;background:var(--panel2);z-index:5;
+  box-shadow:0 1px 0 var(--line)}
 table.grid td.mono{font-family:var(--mono);font-size:12px;color:var(--ink-dim)}
 table.grid tr:hover td{background:var(--panel)}
-table.grid input.typein{width:100%;background:var(--panel2);border:1px solid var(--line);
+table.grid input.typein,table.grid select.typein{width:100%;background:var(--panel2);border:1px solid var(--line);
   color:var(--ink);border-radius:5px;padding:5px 8px;font-family:var(--body);font-size:13px}
-table.grid input.typein:focus{outline:none;border-color:var(--accent)}
+table.grid input.typein:focus,table.grid select.typein:focus{outline:none;border-color:var(--accent)}
+table.grid select.typein option{background:var(--panel2);color:var(--ink)}
 .scroll{max-height:64vh;overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}
 
 /* ---- Referential (pass 3) ----------------------------------------------- */
@@ -257,6 +271,17 @@ const SHEET_TRANS     = 'Scelle_Transactions';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 const NEAR_RATIO      = 0.90;   // seuil quasi-doublon inter-clés
 const NA              = 'n.a.'; // marqueur multi-séries (toujours littéral, confirmé)
+const SHEET_TYPE_COL  = 'G';    // colonne où vit la liste de types (bornée)
+const TYPE_BORDER_START='Début_Liste_Types';
+const TYPE_BORDER_END  ='Fin_Liste_Types';
+// FILET DE SÉCURITÉ : liste utilisée uniquement si la lecture live échoue
+// (bornes introuvables, onglet renommé, erreur réseau). À METTRE À JOUR
+// périodiquement pour rester proche de la liste réelle de la Sheet.
+// Dette technique connue : cette liste est dupliquée (ici + 2 onglets Sheet).
+const TYPE_OPTIONS_FALLBACK = ['Pokebox','Display de boosters','Coffret','Ultra-Premium','ETB',
+  'Booster','Display de Mini-Tins','Blister','Tripack','Deck','Display de Bundles',
+  'Protection Acrylique','Funko Pop','Goodies','Valisette','Duopack',
+  'Stades et Stratégies de Combat','Figurine','Peluches','Pokeball','Maillot','Portfolio'];
 
 /* ===========================================================================
    ÉTAT GIS (repris de tcg-intake)
@@ -327,7 +352,8 @@ function simRatio(a,b){
    =========================================================================== */
 const COLS = { codeSerie:['code série','code serie'], nomSerie:['nom série','nom serie'],
                typeItem:['type_item','type item'], nomItem:['nom_item','nom item'],
-               qty:['quantité','quantite'], license:['license','licence'] };
+               qty:['quantité','quantite'], license:['license','licence'],
+               cote:['côte/u','cote/u','côte / u','cote / u'] };
 
 function resolveHeader(rows){
   // Cherche la 1re ligne contenant à la fois 'origine' et 'key' (signature de tes onglets).
@@ -364,6 +390,7 @@ function parseSheet(values, sheetName){
       typeItem:idx.typeItem>=0?(row[idx.typeItem]||''):'',
       nomItem:String(nomItem),
       qty:idx.qty>=0?(row[idx.qty]||''):'',
+      cote:idx.cote>=0?(row[idx.cote]||''):'',
     });
   }
   return out;
@@ -378,8 +405,42 @@ const STATE = {
   nearPairs:[],       // [{a,b,ratio,kind}] quasi-doublons inter-clés
   pairDecisions:{},   // "a||b" -> {action:'merge'|'distinct', winner?:key}
   typeFixes:{},       // key -> nouveau type_item (pass 2)
+  typeList:[],        // liste de types active (live ou fallback)
+  typeListSource:'',  // 'live' | 'fallback' — provenance, pour info UI
   pass:0, pairIdx:0,
 };
+
+/* Extrait la liste de types entre les bornes Début_/Fin_Liste_Types d'une colonne.
+   Retourne un tableau dédoublonné, ou null si bornes absentes/zone vide. */
+function extractTypeList(columnValues){
+  let si=-1, ei=-1;
+  for(let i=0;i<columnValues.length;i++){
+    const v=String(columnValues[i]==null?'':columnValues[i]).trim();
+    if(v===TYPE_BORDER_START){ si=i; }
+    else if(v===TYPE_BORDER_END && si>=0){ ei=i; break; }
+  }
+  if(si<0 || ei<0 || ei<=si+1) return null;
+  const out=[], seen=new Set();
+  for(let i=si+1;i<ei;i++){
+    const v=String(columnValues[i]==null?'':columnValues[i]).trim();
+    if(!v) continue;
+    const key=v.toLowerCase();
+    if(seen.has(key)) continue;
+    seen.add(key); out.push(v);
+  }
+  return out.length?out:null;
+}
+/* Charge la liste de types depuis la colonne bornée ; repli sur la liste en dur. */
+async function loadTypeList(){
+  try{
+    const col=SHEET_TYPE_COL;
+    const r=await sheetsGet(a1(SHEET_STOCK,`${col}1:${col}200`));
+    const vals=(r.values||[]).map(row=>row[0]);
+    const live=extractTypeList(vals);
+    if(live){ STATE.typeList=live; STATE.typeListSource='live'; return; }
+  }catch(e){ console.warn('Liste types live indisponible:',e.message); }
+  STATE.typeList=TYPE_OPTIONS_FALLBACK.slice(); STATE.typeListSource='fallback';
+}
 
 async function loadData(){
   if(!isAuthenticated()){ toast('Connecte-toi d’abord'); return; }
@@ -398,12 +459,15 @@ async function loadData(){
     document.getElementById('ldTrans').className='val ok';
 
     STATE.rows=stockRows.concat(transRows);
+    await loadTypeList();
     buildIndex();
     document.getElementById('ldKeys').textContent=STATE.keyMap.size+' produits';
     document.getElementById('ldKeys').className='val ok';
     document.getElementById('startBtn').disabled=false;
     btn.textContent='Recharger';
-    toast(`✓ ${STATE.rows.length} lignes · ${STATE.keyMap.size} produits · ${STATE.nearPairs.length} quasi-doublons`);
+    const tlMsg = STATE.typeListSource==='live'
+      ? `${STATE.typeList.length} types (live)` : `${STATE.typeList.length} types (repli)`;
+    toast(`✓ ${STATE.rows.length} lignes · ${STATE.keyMap.size} produits · ${STATE.nearPairs.length} quasi-doublons · ${tlMsg}`);
   }catch(e){
     console.error(e); toast('✗ '+e.message);
     document.getElementById('ldStock').textContent='erreur';
@@ -520,12 +584,24 @@ function pairCard(pr,i){
      : `<span class="tag serie">série ${esc(ca.p.serie)} · ${esc(ca.p.type)}</span>`;
   const cand=(k,c,side)=>{
     const selWinner = dec&&dec.action==='merge'&&dec.winner===k;
+    const e=c.e; const sample=e.rows[0];
+    // valeurs représentatives (1re ligne non vide)
+    const pick=f=>{ for(const r of e.rows){ const v=String(r[f]||'').trim(); if(v) return v; } return '—'; };
+    const codeSerie = pick('codeSerie');
+    const nomSerie  = pick('nomSerie');
+    const typeItem  = pick('typeItem');
+    const cote      = pick('cote');
     return `<div class="cand ${selWinner?'sel':''}" id="cand_${i}_${side}">
       <div class="nm">${esc(origName(k))}</div>
+      <dl class="fields">
+        <dt>code série</dt><dd class="mono">${esc(codeSerie)}</dd>
+        <dt>nom série</dt><dd>${esc(nomSerie)}</dd>
+        <dt>type</dt><dd>${esc(typeItem)}</dd>
+        <dt>cote/u</dt><dd class="mono">${esc(cote)}</dd>
+      </dl>
       <div class="meta">
         <span><b>lignes</b> ${c.nbLines}</span>
         <span class="where">${c.sheets}</span>
-        ${kind!=='coffret'?'':`<span><b>type</b> ${esc([...c.e.rows].map(r=>r.typeItem)[0]||'—')}</span>`}
       </div>
       <div class="pick">
         <button class="btn sm ${selWinner?'primary':'ghost'}" onclick="decideMerge('${escJs(pr.a)}','${escJs(pr.b)}','${escJs(k)}')">
@@ -559,8 +635,10 @@ function clearDecision(a,b){ delete STATE.pairDecisions[pairId(a,b)]; renderPair
 /* ---- PASSE 2 : Type_Item manquant -------------------------------------- */
 function renderTypeFix(){
   const body=document.getElementById('passBody');
+  if(!STATE.typeList||!STATE.typeList.length){ STATE.typeList=TYPE_OPTIONS_FALLBACK.slice(); if(!STATE.typeListSource) STATE.typeListSource='fallback'; }
   const items=[...STATE.keyMap.entries()].filter(([k,e])=>e.hasNAType);
-  let html=`<div class="sec-head"><h2>Type manquant</h2><span class="pill">${items.length} items</span></div>
+  let html=`<div class="sec-head"><h2>Type manquant</h2><span class="pill">${items.length} items</span>
+    <span class="pill" style="${STATE.typeListSource==='live'?'border-color:#3a5a3a;color:var(--ok)':'border-color:#5a4a2a;color:var(--warn)'}">${STATE.typeList.length} types · ${STATE.typeListSource==='live'?'liste live':'repli codé'}</span></div>
     <p class="sec-sub">Ces produits sériés ont au moins une ligne sans <code>Type_Item</code> (vide ou n.a.). Le type entre dans la clé des sériés : un type manquant fragmente le produit. Renseigne le bon type ; il sera consigné dans l'export (aucune écriture directe).</p>`;
   if(!items.length){ body.innerHTML=html+`<div class="empty"><div class="big">Aucun type manquant</div>Tous tes items sériés ont un Type_Item. Étape suivante.</div>`; return; }
   html+=`<div class="scroll"><table class="grid"><thead><tr>
@@ -572,8 +650,10 @@ function renderTypeFix(){
       <td>${esc(p.nom)}</td>
       <td class="mono">${esc(p.serie)}</td>
       <td class="mono">${esc(cur)}</td>
-      <td><input class="typein" value="${esc(STATE.typeFixes[k]||'')}" placeholder="ex. Display de boosters"
-           oninput="STATE.typeFixes['${escJs(k)}']=this.value"></td>
+      <td><select class="typein" onchange="STATE.typeFixes['${escJs(k)}']=this.value">
+        <option value="">— choisir —</option>
+        ${STATE.typeList.map(t=>`<option value="${esc(t)}"${STATE.typeFixes[k]===t?' selected':''}>${esc(t)}</option>`).join('')}
+      </select></td>
       <td class="mono">${e.rows.length}</td></tr>`;
   }
   html+=`</tbody></table></div>`;
