@@ -1,10 +1,21 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.15.1 (Session #22 — 2026-06-10)
+  Version : 1.16.0 (Session #24 — 2026-06-13)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.16.0 2026-06-13  Session #24 (fix douchette — code scanné inversé sur certains appareils)
+         - [Fix scan] Sur certains appareils (constaté chez un vendeur en répétition), le code
+           douchette ressortait À L'ENVERS dans tcg-sales (ex. "ABCDEF" → "FEDCBA") alors qu'il
+           s'affichait correct ailleurs (Chrome, WhatsApp) → l'article n'était jamais reconnu.
+           Cause : la capture lisait scanInput.value, dont l'ordre d'insertion des caractères
+           n'est pas fiable sur un input hors-écran avec inputmode="none" selon le navigateur.
+         - CORRECTION : la chaîne scannée est désormais reconstruite frappe par frappe via les
+           événements keydown (e.key), dans l'ordre RÉEL de réception — indépendant du rendu de
+           l'input. L'input caché ne sert plus que de capteur de focus (sa value est ignorée).
+           Le fallback timeout (scanners sans Enter) et le feedback flash sont préservés.
+         - Aucun changement de protocole ni d'écriture → Master inchangé. Sales seul.
   1.15.1 2026-06-10  Session #22 (cosmétique pure — NON testé navigateur)
          - [UI] Titre « TCG SALES » agrandi et étiré sur toute la largeur jusqu'au bord droit
            (.brand-title-block width:100% ; h1 font-size clamp(2rem,12vw,3.2rem)). Version
@@ -983,7 +994,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.15.1';
+const APP_VERSION      = '1.16.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1723,27 +1734,42 @@ function scanFlash(ok) {
 scanInput.addEventListener('focus', () => scanZone.classList.add('active'));
 scanInput.addEventListener('blur',  () => scanZone.classList.remove('active'));
 
+// (1.16.0) Capture par keydown : on reconstruit la chaîne caractère par caractère dans
+// l'ordre RÉEL de réception (e.key), au lieu de lire scanInput.value. L'ordre d'insertion
+// dans un input hors-écran (inputmode="none") n'est pas fiable selon le navigateur et
+// produisait un code inversé sur certains appareils (ex. "ABCDEF" → "FEDCBA"). L'input
+// caché ne sert plus que de capteur de focus ; sa value est systématiquement vidée.
+function flushScan() {
+  clearTimeout(scanTimer);
+  const val = scanBuffer.trim();
+  scanBuffer = '';
+  scanInput.value = '';
+  return val;
+}
+
 scanInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' || e.key === 'Tab') {
     e.preventDefault();
-    const val = scanBuffer.trim();
-    scanBuffer = '';
-    scanInput.value = '';
+    const val = flushScan();
     if (val) processScan(val);
+    return;
+  }
+  // Caractère imprimable unique → on l'ajoute au buffer dans l'ordre d'arrivée.
+  // (Les touches mortes / fonction ont e.key.length > 1 : Shift, Control, ArrowLeft… → ignorées.)
+  if (e.key && e.key.length === 1) {
+    scanBuffer += e.key;
+    // Fallback : certains scanners n'envoient pas Enter → flush après 800 ms d'inactivité.
+    clearTimeout(scanTimer);
+    scanTimer = setTimeout(() => {
+      const val = flushScan();
+      if (val.length >= 6) processScan(val);
+    }, 800);
   }
 });
 
-scanInput.addEventListener('input', () => {
-  scanBuffer = scanInput.value;
-  // Fallback: certains scanners n'envoient pas Enter — timeout 800ms
-  clearTimeout(scanTimer);
-  scanTimer = setTimeout(() => {
-    const val = scanBuffer.trim();
-    scanBuffer = '';
-    scanInput.value = '';
-    if (val.length >= 6) processScan(val);
-  }, 800);
-});
+// L'événement input est neutralisé pour la capture : on garde uniquement le champ vide
+// (la value n'est plus la source de vérité ; tout passe par keydown ci-dessus).
+scanInput.addEventListener('input', () => { scanInput.value = ''; });
 
 document.addEventListener('click', e => {
   // (1.14.2) Une modale est ouverte → ne JAMAIS rebasculer le focus sur l'input douchette
