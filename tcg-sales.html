@@ -1,21 +1,28 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.16.0 (Session #24 — 2026-06-13)
+  Version : 1.17.0 (Session #25 — 2026-06-15)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
-  1.16.0 2026-06-13  Session #24 (fix douchette — code scanné inversé sur certains appareils)
-         - [Fix scan] Sur certains appareils (constaté chez un vendeur en répétition), le code
-           douchette ressortait À L'ENVERS dans tcg-sales (ex. "ABCDEF" → "FEDCBA") alors qu'il
-           s'affichait correct ailleurs (Chrome, WhatsApp) → l'article n'était jamais reconnu.
-           Cause : la capture lisait scanInput.value, dont l'ordre d'insertion des caractères
-           n'est pas fiable sur un input hors-écran avec inputmode="none" selon le navigateur.
-         - CORRECTION : la chaîne scannée est désormais reconstruite frappe par frappe via les
-           événements keydown (e.key), dans l'ordre RÉEL de réception — indépendant du rendu de
-           l'input. L'input caché ne sert plus que de capteur de focus (sa value est ignorée).
-           Le fallback timeout (scanners sans Enter) et le feedback flash sont préservés.
-         - Aucun changement de protocole ni d'écriture → Master inchangé. Sales seul.
+  1.17.0 2026-06-15  Session #25 (photo d'article manuel/inconnu → Google Drive ; JALON COORDONNÉ avec Master 1.17.0)
+         - [Feature] Photo d'article dans les modales « + manuel » et « code non reconnu » :
+           bouton 📷 → appareil photo natif (<input type=file capture=environment>), donc
+           INSENSIBLE au bug douchette-Bluetooth iOS (aucun clavier impliqué). Vignette + ✕ pour
+           retirer/reprendre. Photo FORTEMENT CONSEILLÉE mais NON BLOQUANTE (ajout possible sans).
+         - [Drive] Nouveau scope OAuth `drive.file` (moindre privilège : l'app ne voit QUE les
+           fichiers qu'elle crée). ⚠️ Ré-consentement requis sur CHAQUE appareil vendeur — révoquer
+           l'app sur myaccount.google.com/permissions sinon 403 « insufficient scopes ».
+         - [Drive] À la 1ʳᵉ photo de session, création/réutilisation d'un dossier « Photos ventes —
+           <event> — <date> » ; chaque photo (JPEG compressé canvas ~1280px / q0.7) y est déposée.
+         - [Robustesse] Upload au moment de l'ajout au panier, via une FILE DE SECOURS persistée
+           (LS_PHOTO_QUEUE) + réessai en arrière-plan (réseau dégradé) → ne bloque JAMAIS la vente.
+           Reprise au boot, au retour réseau (online), au réveil d'onglet et à la (re)connexion.
+         - [Trace] À l'upload réussi, écriture d'une ligne dans `anomalies` (A:L) : type
+           PHOTO_ARTICLE, URL Drive en col L (Photo_URL) + JSON en col K (Notes). NÉCESSITE le
+           schéma anomalies 12 colonnes — Master ≥ 1.17.0. Déployer les deux ensemble.
+         - Aucune modification du protocole de vente, du schéma ventes_detail (A:N), de l'outbox,
+           du roll-back, du heartbeat ni de la sécurité existante.
   1.15.1 2026-06-10  Session #22 (cosmétique pure — NON testé navigateur)
          - [UI] Titre « TCG SALES » agrandi et étiré sur toute la largeur jusqu'au bord droit
            (.brand-title-block width:100% ; h1 font-size clamp(2rem,12vw,3.2rem)). Version
@@ -581,6 +588,15 @@ body::before{content:'';position:fixed;inset:0;
   font-size:16px;outline:none;transition:border-color .15s;}
 .modal-field input:focus{border-color:var(--accent);}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
+/* (1.17.0) Bloc photo article (manuel / inconnu) */
+.photo-hint{font-family:'Syne',sans-serif;font-size:.62rem;color:var(--muted);text-transform:none;letter-spacing:0;font-weight:400;}
+.photo-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.photo-btn{flex:0 0 auto;}
+.photo-thumb{position:relative;width:64px;height:64px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:var(--bg);}
+.photo-thumb.hidden{display:none;}
+.photo-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+.photo-remove{position:absolute;top:2px;right:2px;width:20px;height:20px;border:none;border-radius:50%;
+  background:rgba(0,0,0,.65);color:#fff;font-size:.7rem;line-height:1;cursor:pointer;padding:0;}
 .modal-info{background:var(--bg);border:1px solid var(--border);border-radius:6px;
   padding:10px 12px;font-size:.78rem;color:var(--dim);margin-bottom:14px;line-height:1.4;}
 /* (1.14.2) Fix clavier iOS : on NE masque PAS les modales via display:none (sinon WebKit
@@ -885,6 +901,17 @@ body::before{content:'';position:fixed;inset:0;
         <option value="Autre">Autre</option>
       </select>
     </div>
+    <div class="modal-field">
+      <label>Photo de l'article <span class="photo-hint">(fortement conseillée)</span></label>
+      <div class="photo-row">
+        <button type="button" class="btn btn-secondary photo-btn" onclick="document.getElementById('manualPhotoInput').click()">📷 Prendre une photo</button>
+        <div class="photo-thumb hidden" id="manualPhotoThumb">
+          <img id="manualPhotoImg" alt="aperçu">
+          <button type="button" class="photo-remove" onclick="clearPhoto('manual')" title="Retirer">✕</button>
+        </div>
+      </div>
+      <input id="manualPhotoInput" type="file" accept="image/*" capture="environment" class="hidden" onchange="onPhotoPicked(event,'manual')">
+    </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeManualItem()">Annuler</button>
       <button class="btn btn-primary" onclick="confirmManualItem()">Ajouter</button>
@@ -907,6 +934,17 @@ body::before{content:'';position:fixed;inset:0;
     <div class="modal-field">
       <label>Prix de vente (€) — obligatoire</label>
       <input id="unknownPrice" type="number" step="0.01" min="0" placeholder="0.00" inputmode="decimal">
+    </div>
+    <div class="modal-field">
+      <label>Photo de l'article <span class="photo-hint">(fortement conseillée)</span></label>
+      <div class="photo-row">
+        <button type="button" class="btn btn-secondary photo-btn" onclick="document.getElementById('unknownPhotoInput').click()">📷 Prendre une photo</button>
+        <div class="photo-thumb hidden" id="unknownPhotoThumb">
+          <img id="unknownPhotoImg" alt="aperçu">
+          <button type="button" class="photo-remove" onclick="clearPhoto('unknown')" title="Retirer">✕</button>
+        </div>
+      </div>
+      <input id="unknownPhotoInput" type="file" accept="image/*" capture="environment" class="hidden" onchange="onPhotoPicked(event,'unknown')">
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeUnknownScan()">Annuler</button>
@@ -994,12 +1032,16 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.16.0';
+const APP_VERSION      = '1.17.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
 const EVENTS_GSHEET_ID   = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
-const GSHEET_SCOPES      = 'https://www.googleapis.com/auth/spreadsheets';
+// (1.17.0) Scope Sheets + Drive.file (moindre privilège : l'app ne voit QUE les fichiers
+// qu'elle crée — jamais le reste du Drive). drive.file sert à déposer les photos d'articles
+// manuels / codes inconnus. ⚠️ Nouveau scope = ré-consentement requis sur CHAQUE appareil
+// vendeur (révoquer l'app sur myaccount.google.com/permissions sinon 403 insufficient scopes).
+const GSHEET_SCOPES      = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
 
 // Tabs (Central GSheet) — conservés pour info ; Sales ne lit PLUS CENTRAL depuis 1.9.0.
 const SHEET_CARDS  = 'cartes_stock_et_transactions';
@@ -1034,7 +1076,13 @@ const LS_TOKEN         = 'tcg_sales_token_v2';
 const LS_LOG           = 'tcg_sales_log_v1';   // journal d'événements (anneau)
 const LOG_MAX          = 300;                  // nombre max d'entrées conservées
 const LS_DEADLETTER    = 'tcg_sales_deadletter_v1'; // ventes en échec définitif (jamais perdues)
+const LS_PHOTO_QUEUE   = 'tcg_sales_photo_queue_v1'; // (1.17.0) uploads photo en attente (réseau dégradé)
 const MAX_SALE_RETRIES = 5;                    // au-delà → bascule en anomalies
+
+// (1.17.0) Photo d'article (manuel / code inconnu) → Google Drive via drive.file.
+const PHOTO_MAX_DIM    = 1280;   // redimensionnement max (px, plus grand côté) avant upload
+const PHOTO_JPEG_Q     = 0.7;    // qualité JPEG de compression
+const PHOTO_RETRY_MS   = 8000;   // intervalle de réessai des uploads en attente
 
 // ═══════════════════════════════════════════════════════════════
 // STATE
@@ -1080,6 +1128,14 @@ let eventLog = [];
 let offlineQueue = []; // [{ payload, queuedAt, retries, state:'pending'|'sent' }]
 let flushingQueue = false;
 let deadLetter = [];   // ventes en échec définitif (anomalies inaccessibles) — jamais perdues
+
+// (1.17.0) Photo d'article (Drive) :
+let driveFolderId   = null;     // dossier Drive de la session (créé/réutilisé à la 1ère photo)
+let driveFolderName = null;     // nom du dossier courant (suit l'event ; recréé si l'event change)
+let photoQueue      = [];       // [{ id, dataUrl, filename, code, name, status, tries, queuedAt }] uploads en attente
+let photoQueueTimer = null;     // réessai périodique des uploads en attente
+// Contexte de prise de photo dans la modale courante ('manual' | 'unknown' | null)
+let photoCtx = { mode: null, dataUrl: null, filename: null };
 
 // Last cleared cart (for restore)
 let lastClearedCart = null;
@@ -1234,6 +1290,7 @@ function updateNet() {
     if (dot) dot.classList.remove('off');
     // Tente de flusher la queue offline
     if (offlineQueue.length > 0 && isAuth()) flushOfflineQueue();
+    if (photoQueue.length > 0 && isAuth()) schedulePhotoFlush(true);
   } else {
     if (bar) { bar.textContent = '⚠ Hors ligne'; bar.className = 'net-bar offline hidden'; }
     if (dot) dot.classList.add('off');
@@ -1349,6 +1406,7 @@ async function onTokenResponse(resp) {
     updateAuthUI();
     await loadStockCache();
     await readMasterHeartbeat();
+    if (photoQueue.length) schedulePhotoFlush(true);   // (1.17.0) reprend les uploads en attente
   } else {
     updateAuthUI();   // simple renouvellement → pas de re-bootstrap (cache/heartbeat déjà actifs)
   }
@@ -1467,6 +1525,165 @@ async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID) {
 async function sheetsAppend(range, values, inputOption = 'USER_ENTERED', gsheetId = CENTRAL_GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=${inputOption}&insertDataOption=INSERT_ROWS`;
   return sheetsRequest('POST', url, { values });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DRIVE — photos d'articles (manuel / code inconnu)  [1.17.0]
+// ═══════════════════════════════════════════════════════════════
+// Scope drive.file : l'app ne voit QUE les fichiers/dossiers qu'elle crée. À la 1ère photo de
+// la session on crée (ou réutilise) un dossier nommé d'après l'event ; chaque photo y est
+// déposée. L'URL Drive (webViewLink) est ensuite écrite dans l'onglet `anomalies`.
+
+// Nom de dossier dérivé de l'event courant (fallback date si pas d'event publié).
+function currentPhotoFolderName() {
+  const ev = (lastConfirmedEvent || '').toString().trim();
+  const d  = new Date();
+  const ymd = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  return 'Photos ventes — ' + (ev ? ev : 'sans event') + ' — ' + ymd;
+}
+
+// Recherche un dossier existant (créé par cette app) du même nom, sinon le crée.
+// Mémorisé en mémoire pour la session ; ré-évalué si le nom (event) a changé.
+async function ensureDriveFolder() {
+  const wantName = currentPhotoFolderName();
+  if (driveFolderId && driveFolderName === wantName) return driveFolderId;
+  // Recherche (drive.file ne renvoie que NOS fichiers → pas de fuite d'autres dossiers).
+  try {
+    const q = encodeURIComponent(
+      "mimeType='application/vnd.google-apps.folder' and trashed=false and name='" +
+      wantName.replace(/'/g, "\\'") + "'"
+    );
+    const res = await fetch(
+      'https://www.googleapis.com/drive/v3/files?q=' + q + '&fields=files(id,name)&spaces=drive',
+      { headers: { Authorization: 'Bearer ' + gAccessToken } }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (data.files && data.files.length) {
+        driveFolderId = data.files[0].id; driveFolderName = wantName;
+        return driveFolderId;
+      }
+    }
+  } catch (_) { /* recherche best-effort → on tente la création */ }
+  // Création
+  const res = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + gAccessToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: wantName, mimeType: 'application/vnd.google-apps.folder' })
+  });
+  if (!res.ok) throw new HttpError('DRIVE_FOLDER', res.status, await res.text());
+  const data = await res.json();
+  driveFolderId = data.id; driveFolderName = wantName;
+  return driveFolderId;
+}
+
+// Upload multipart (métadonnées + binaire JPEG) dans le dossier de session.
+// dataUrl = "data:image/jpeg;base64,...". Renvoie { id, webViewLink }.
+async function driveUploadPhoto(dataUrl, filename, folderId) {
+  const base64 = dataUrl.split(',')[1] || '';
+  const meta = { name: filename, parents: [folderId] };
+  const boundary = 'tcgphoto' + Date.now();
+  const body =
+    '--' + boundary + '\r\n' +
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+    JSON.stringify(meta) + '\r\n' +
+    '--' + boundary + '\r\n' +
+    'Content-Type: image/jpeg\r\n' +
+    'Content-Transfer-Encoding: base64\r\n\r\n' +
+    base64 + '\r\n' +
+    '--' + boundary + '--';
+  const res = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink',
+    {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + gAccessToken, 'Content-Type': 'multipart/related; boundary=' + boundary },
+      body
+    }
+  );
+  if (!res.ok) throw new HttpError('DRIVE_UPLOAD', res.status, await res.text());
+  return res.json();
+}
+
+// Compression côté client : charge l'image, redimensionne (PHOTO_MAX_DIM), réencode JPEG.
+function compressImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('lecture fichier échouée'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('image illisible'));
+      img.onload = () => {
+        let { width: w, height: h } = img;
+        if (w > h && w > PHOTO_MAX_DIM) { h = Math.round(h * PHOTO_MAX_DIM / w); w = PHOTO_MAX_DIM; }
+        else if (h >= w && h > PHOTO_MAX_DIM) { w = Math.round(w * PHOTO_MAX_DIM / h); h = PHOTO_MAX_DIM; }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', PHOTO_JPEG_Q));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// File d'attente d'uploads (persistée). Un upload qui échoue (réseau) est réessayé en
+// arrière-plan SANS jamais bloquer la vente. Quand il aboutit, l'URL est écrite en anomalies.
+function loadPhotoQueue() { photoQueue = lsLoad(LS_PHOTO_QUEUE, []) || []; }
+function persistPhotoQueue() { lsSave(LS_PHOTO_QUEUE, photoQueue); }
+
+function enqueuePhoto(entry) {
+  photoQueue.push(entry);
+  persistPhotoQueue();
+  schedulePhotoFlush(true);
+}
+
+function schedulePhotoFlush(soon) {
+  if (photoQueueTimer) return;
+  photoQueueTimer = setTimeout(() => { photoQueueTimer = null; flushPhotoQueue(); }, soon ? 200 : PHOTO_RETRY_MS);
+}
+
+async function flushPhotoQueue() {
+  if (!isAuth() || !navigator.onLine) { if (photoQueue.length) schedulePhotoFlush(false); return; }
+  if (!photoQueue.length) return;
+  const entry = photoQueue[0];
+  try {
+    const folderId = await ensureDriveFolder();
+    const up = await driveUploadPhoto(entry.dataUrl, entry.filename, folderId);
+    const url = (up && up.webViewLink) || (up && up.id ? 'https://drive.google.com/file/d/' + up.id + '/view' : '');
+    // Trace en anomalies (col L = Photo_URL + JSON Notes) — best-effort, ne bloque rien.
+    await writePhotoAnomaly(entry, url);
+    photoQueue.shift();
+    persistPhotoQueue();
+    logEvent('info', 'photo article uploadée', { code: entry.code, url });
+    if (photoQueue.length) schedulePhotoFlush(true);
+  } catch (e) {
+    entry.tries = (entry.tries || 0) + 1;
+    persistPhotoQueue();
+    logEvent('warn', 'upload photo en attente (réessai)', { code: entry.code, tries: entry.tries, err: e && e.message });
+    schedulePhotoFlush(false);
+  }
+}
+
+// Écrit une ligne dans `anomalies` (A:L) : type PHOTO_ARTICLE, URL en col L + JSON Notes (col K).
+// 12 colonnes alignées sur le schéma Master 1.17.0 (Photo_URL en L).
+async function writePhotoAnomaly(entry, url) {
+  const notes = JSON.stringify({ photo: url, file: entry.filename, code: entry.code });
+  const row = [
+    new Date().toISOString(),                  // A Timestamp
+    '',                                         // B TX_ID (vente pas encore validée à la prise)
+    safeForSheets(gUserName || ''),             // C Vendeur
+    safeForSheets(entry.code || ''),            // D Clé/Barcode
+    safeForSheets(entry.name || ''),            // E Nom article
+    entry.source || 'inconnu',                  // F Source
+    'PHOTO_ARTICLE',                            // G Type anomalie
+    'Photo jointe à un article manuel/inconnu', // H Détails
+    '',                                         // I Synced_From_Row
+    '',                                         // J Resolved
+    safeForSheets(notes),                       // K Notes (JSON, contient l'URL)
+    safeForSheets(url || '')                    // L Photo_URL
+  ];
+  await sheetsAppend(a1(SHEET_ANOMALIES, 'A:L'), [row], 'USER_ENTERED', EVENTS_GSHEET_ID);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1734,42 +1951,27 @@ function scanFlash(ok) {
 scanInput.addEventListener('focus', () => scanZone.classList.add('active'));
 scanInput.addEventListener('blur',  () => scanZone.classList.remove('active'));
 
-// (1.16.0) Capture par keydown : on reconstruit la chaîne caractère par caractère dans
-// l'ordre RÉEL de réception (e.key), au lieu de lire scanInput.value. L'ordre d'insertion
-// dans un input hors-écran (inputmode="none") n'est pas fiable selon le navigateur et
-// produisait un code inversé sur certains appareils (ex. "ABCDEF" → "FEDCBA"). L'input
-// caché ne sert plus que de capteur de focus ; sa value est systématiquement vidée.
-function flushScan() {
-  clearTimeout(scanTimer);
-  const val = scanBuffer.trim();
-  scanBuffer = '';
-  scanInput.value = '';
-  return val;
-}
-
 scanInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' || e.key === 'Tab') {
     e.preventDefault();
-    const val = flushScan();
+    const val = scanBuffer.trim();
+    scanBuffer = '';
+    scanInput.value = '';
     if (val) processScan(val);
-    return;
-  }
-  // Caractère imprimable unique → on l'ajoute au buffer dans l'ordre d'arrivée.
-  // (Les touches mortes / fonction ont e.key.length > 1 : Shift, Control, ArrowLeft… → ignorées.)
-  if (e.key && e.key.length === 1) {
-    scanBuffer += e.key;
-    // Fallback : certains scanners n'envoient pas Enter → flush après 800 ms d'inactivité.
-    clearTimeout(scanTimer);
-    scanTimer = setTimeout(() => {
-      const val = flushScan();
-      if (val.length >= 6) processScan(val);
-    }, 800);
   }
 });
 
-// L'événement input est neutralisé pour la capture : on garde uniquement le champ vide
-// (la value n'est plus la source de vérité ; tout passe par keydown ci-dessus).
-scanInput.addEventListener('input', () => { scanInput.value = ''; });
+scanInput.addEventListener('input', () => {
+  scanBuffer = scanInput.value;
+  // Fallback: certains scanners n'envoient pas Enter — timeout 800ms
+  clearTimeout(scanTimer);
+  scanTimer = setTimeout(() => {
+    const val = scanBuffer.trim();
+    scanBuffer = '';
+    scanInput.value = '';
+    if (val.length >= 6) processScan(val);
+  }, 800);
+});
 
 document.addEventListener('click', e => {
   // (1.14.2) Une modale est ouverte → ne JAMAIS rebasculer le focus sur l'input douchette
@@ -2233,6 +2435,7 @@ function openUnknownScan(rawCode) {
   const price = document.getElementById('unknownPrice');
   label.value = unknownScanCode;
   price.value = '';
+  resetPhotoModal('unknown');
   modal.classList.remove('hidden');
   // focus synchrone (cf. modales prix) ; douchette connectée → double-clic gâchette pour le clavier
   void modal.offsetWidth;
@@ -2240,6 +2443,7 @@ function openUnknownScan(rawCode) {
 }
 function closeUnknownScan() {
   document.getElementById('unknownScanModal').classList.add('hidden');
+  resetPhotoModal('unknown');
   unknownScanCode = null;
   focusScan();
 }
@@ -2260,6 +2464,7 @@ function confirmUnknownScan() {
     prixOriginal: price,
     source: 'inconnu'
   };
+  attachPhotoToItem(item);   // (1.17.0) upload de la photo si prise (non bloquant)
   closeUnknownScan();
   addToCart(item);
   showToast('❓ Article inconnu ajouté (sera signalé en anomalies)');
@@ -2276,6 +2481,7 @@ function openManualItem() {
   document.getElementById('manualName').value = '';
   document.getElementById('manualPrice').value = '';
   document.getElementById('manualCategory').value = 'Cartes Loose';
+  resetPhotoModal('manual');
   const modal = document.getElementById('manualItemModal');
   const input = document.getElementById('manualName');
   modal.classList.remove('hidden');
@@ -2285,6 +2491,7 @@ function openManualItem() {
 }
 function closeManualItem() {
   document.getElementById('manualItemModal').classList.add('hidden');
+  resetPhotoModal('manual');
   focusScan();
 }
 function confirmManualItem() {
@@ -2301,10 +2508,69 @@ function confirmManualItem() {
     qty: 1, prixUnit: price, prixOriginal: price,
     source: 'manuel'
   };
+  attachPhotoToItem(item);   // (1.17.0) upload de la photo si prise (non bloquant)
   cart.push(item);
   closeManualItem();
   renderCart();
   showToast('✓ Article manuel ajouté');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHOTO D'ARTICLE (manuel / inconnu)  [1.17.0]
+// ═══════════════════════════════════════════════════════════════
+// Capture via l'appareil photo natif (<input capture>) → insensible au bug douchette-Bluetooth
+// iOS (pas de clavier impliqué). Compression canvas avant upload. La photo est tenue dans
+// photoCtx jusqu'à l'ajout au panier ; l'upload Drive part à ce moment-là (file de secours).
+async function onPhotoPicked(ev, mode) {
+  const file = ev && ev.target && ev.target.files && ev.target.files[0];
+  ev.target.value = '';   // permet de re-sélectionner le même fichier ensuite
+  if (!file) return;
+  try {
+    const dataUrl = await compressImageFile(file);
+    photoCtx.mode = mode;
+    photoCtx.dataUrl = dataUrl;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    photoCtx.filename = (mode === 'unknown' ? 'inconnu_' : 'manuel_') + stamp + '.jpg';
+    const thumb = document.getElementById(mode + 'PhotoThumb');
+    const img   = document.getElementById(mode + 'PhotoImg');
+    if (img) img.src = dataUrl;
+    if (thumb) thumb.classList.remove('hidden');
+  } catch (e) {
+    showToast('⚠ Photo illisible, réessayez', true);
+    logEvent('warn', 'compression photo échouée', { err: e && e.message });
+  }
+}
+
+function clearPhoto(mode) {
+  photoCtx = { mode: null, dataUrl: null, filename: null };
+  const thumb = document.getElementById(mode + 'PhotoThumb');
+  const img   = document.getElementById(mode + 'PhotoImg');
+  if (img) img.removeAttribute('src');
+  if (thumb) thumb.classList.add('hidden');
+}
+
+function resetPhotoModal(mode) {
+  clearPhoto(mode);
+}
+
+// Met en file l'upload de la photo prise pour CET item (si présente). Appelée au moment de
+// l'ajout au panier. Ne bloque jamais : si pas de photo, no-op ; sinon enqueue + flush async.
+function attachPhotoToItem(item) {
+  if (!photoCtx.dataUrl) return;
+  enqueuePhoto({
+    id: uid(),
+    dataUrl: photoCtx.dataUrl,
+    filename: photoCtx.filename,
+    code: item.key || '',
+    name: item.name || '',
+    source: item.source || '',
+    status: 'pending',
+    tries: 0,
+    queuedAt: Date.now()
+  });
+  item.hasPhoto = true;
+  photoCtx = { mode: null, dataUrl: null, filename: null };
+  showToast('📷 Photo en cours d\'envoi vers Drive');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2822,6 +3088,7 @@ async function init() {
   // Restore offline queue
   offlineQueue = lsLoad(LS_OFFLINE_QUEUE, []);
   deadLetter   = lsLoad(LS_DEADLETTER, []);
+  loadPhotoQueue();   // (1.17.0) uploads photo en attente (réseau dégradé à la session précédente)
   renderOfflineQueueBar();
 
   // Restore cart from previous session
@@ -2867,6 +3134,7 @@ document.addEventListener('visibilitychange', () => {
     setTimeout(focusScan, 200);
     // Trigger queue flush at wake
     if (offlineQueue.length > 0 && isAuth() && navigator.onLine) flushOfflineQueue();
+    if (photoQueue.length > 0 && isAuth() && navigator.onLine) schedulePhotoFlush(true);
   }
 });
 
