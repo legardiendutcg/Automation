@@ -1,8 +1,21 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.16.1 (Session #22 — 2026-06-10)
+  Version : 1.17.0 (Session #25 — 2026-06-15)
 =============================================================
+  1.17.0 2026-06-15  Session #25 (photo d'article manuel/inconnu → schéma anomalies 12 colonnes ; JALON COORDONNÉ avec Sales 1.17.0)
+         - [Schéma] Onglet `anomalies` passe de 11 à 12 colonnes : ajout de Photo_URL en col L.
+           ANOMALIES_HEADERS mis à jour → la réparation d'en-tête existante (verifySchema) écrit
+           automatiquement la nouvelle colonne L au prochain lancement (aucune migration manuelle).
+         - [Lecture] Toutes les lectures/écritures/vidages de `anomalies` passent de A:K à A:L
+           (writeAnomaly, loadAnomaliesList, résumé de clôture, archive, clear de clôture).
+         - [UI] Chaque ligne d'anomalie affiche un lien « 📷 photo » (nouvel onglet) quand la col L
+           porte une URL Drive (renseignée par Sales pour les lignes PHOTO_ARTICLE).
+         - [Archive] Les anomalies archivées à la clôture conservent désormais leurs 12 colonnes
+           (Photo_URL incluse) ; les lignes de vente restent tronquées à A→G (scope inchangé).
+         - writeAnomaly écrit Photo_URL vide pour ses propres anomalies (réconciliation) ; seules
+           les lignes PHOTO_ARTICLE émises par Sales portent l'URL. APP_VERSION bumpé à 1.17.0.
+         - NÉCESSITE Sales ≥ 1.17.0 (émetteur des lignes PHOTO_ARTICLE). Déployer les deux ensemble.
   1.16.1 2026-06-10  Session #22 (cosmétique pure — NON testé navigateur)
          - [UI] Logo agrandi 54→84 px (.logo-mark ; 60 px sous 520 px).
          - [UI] Panneaux « 📜 Journal des ventes » et « ⚠ Anomalies » rendus repliables et
@@ -816,7 +829,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.16.1';
+const APP_VERSION      = '1.17.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1232,7 +1245,7 @@ async function sheetsClear(range, gsheetId = CENTRAL_GSHEET_ID) {
 // ═══════════════════════════════════════════════════════════════
 const APP_STATE_HEADERS  = ['master_alive_ts', 'master_event_name', 'master_lock_uuid', 'master_lock_label'];
 const VENTES_HEADERS     = ['Timestamp','Vendeur','Email','TX_ID','Clé/Barcode','Nom','Type','Catégorie','Licence','Quantité','Prix','Source','TVA_Vente','Acheteur','Synced','SyncedAt'];
-const ANOMALIES_HEADERS  = ['Timestamp','TX_ID','Vendeur','Clé/Barcode','Nom article','Source','Type anomalie','Détails','Synced_From_Row','Resolved','Notes'];
+const ANOMALIES_HEADERS  = ['Timestamp','TX_ID','Vendeur','Clé/Barcode','Nom article','Source','Type anomalie','Détails','Synced_From_Row','Resolved','Notes','Photo_URL'];
 
 async function verifyEventsSchema() {
   // Vérifie/répare les en-têtes des 3 onglets opérationnels.
@@ -2396,9 +2409,10 @@ async function writeAnomaly(salesRowIdx, salesRow, type, details) {
     details,
     salesRowIdx,
     '',  // Resolved
-    ''   // Notes
+    '',  // Notes
+    ''   // Photo_URL (1.17.0 — rempli par Sales pour les lignes PHOTO_ARTICLE ; vide ici)
   ].map(v => typeof v === 'string' ? safeForSheets(v) : v);
-  await sheetsAppend(a1(SHEET_ANOMALIES, `A:K`), [row], 'USER_ENTERED', EVENTS_GSHEET_ID);
+  await sheetsAppend(a1(SHEET_ANOMALIES, `A:L`), [row], 'USER_ENTERED', EVENTS_GSHEET_ID);
 }
 
 async function markSyncedRow(rowIdx, status) {
@@ -2718,7 +2732,7 @@ function renderSalesLog(rows) {
 
 async function loadAnomaliesList() {
   try {
-    const r = await sheetsGet(a1(SHEET_ANOMALIES, `A:K`), EVENTS_GSHEET_ID);
+    const r = await sheetsGet(a1(SHEET_ANOMALIES, `A:L`), EVENTS_GSHEET_ID);
     const rows = r.values || [];
     const data = rows.slice(1);
     renderAnomalies(data);
@@ -2743,12 +2757,16 @@ function renderAnomalies(rows) {
     const details = r[7] || '';
     const name = r[4] || r[3] || '—';
     const resolved = (r[9] || '').toString().trim();
+    const photoUrl = (r[11] || '').toString().trim();   // (1.17.0) col L Photo_URL
+    const photoLink = photoUrl
+      ? ` · <a href="${esc(photoUrl)}" target="_blank" rel="noopener" style="color:var(--accent2);">📷 photo</a>`
+      : '';
     return `<div class="anom-row ${resolved ? 'resolved' : ''}">
       <div class="anom-icon">${resolved ? '✓' : '⚠'}</div>
       <div class="anom-info">
         <div class="anom-type">${esc(type)}${resolved ? ' · RÉSOLU' : ''}</div>
         <div class="anom-detail">${esc(name)}</div>
-        <div class="anom-meta">${esc(ts)} · ${esc(details)}</div>
+        <div class="anom-meta">${esc(ts)} · ${esc(details)}${photoLink}</div>
       </div>
     </div>`;
   }).join('');
@@ -2772,7 +2790,7 @@ async function loadCloseSummary() {
     const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 16);
     const [salesR, anomR] = await Promise.all([
       sheetsGet(a1(SHEET_SALES, `A:${lastCol}`), EVENTS_GSHEET_ID),
-      sheetsGet(a1(SHEET_ANOMALIES, `A:K`), EVENTS_GSHEET_ID),
+      sheetsGet(a1(SHEET_ANOMALIES, `A:L`), EVENTS_GSHEET_ID),
     ]);
     const sales = (salesR.values || []).slice(1);
     const anoms = (anomR.values || []).slice(1);
@@ -2803,7 +2821,7 @@ async function confirmCloseEvent() {
     const lastCol = colIdx2letter(salesHeaderInfo.headerCount);
     const [salesR, anomR] = await Promise.all([
       sheetsGet(a1(SHEET_SALES, `A:${lastCol}`), EVENTS_GSHEET_ID),
-      sheetsGet(a1(SHEET_ANOMALIES, `A:K`), EVENTS_GSHEET_ID),
+      sheetsGet(a1(SHEET_ANOMALIES, `A:L`), EVENTS_GSHEET_ID),
     ]);
     const salesHeader = (salesR.values && salesR.values[0]) || VENTES_HEADERS;
     const sales = (salesR.values || []).slice(1);
@@ -2837,7 +2855,7 @@ async function confirmCloseEvent() {
     // 6. Clear les buffers
     btn.textContent = '⏳ Vidage buffers…';
     await sheetsClear(a1(SHEET_SALES, `A2:${lastCol}`), EVENTS_GSHEET_ID);
-    await sheetsClear(a1(SHEET_ANOMALIES, `A2:K`), EVENTS_GSHEET_ID);
+    await sheetsClear(a1(SHEET_ANOMALIES, `A2:L`), EVENTS_GSHEET_ID);
 
     // 7. Vider event_name dans app_state
     await sheetsUpdate(a1(SHEET_STATE, `B2`), [['']], 'RAW', EVENTS_GSHEET_ID);
@@ -2936,8 +2954,10 @@ function buildArchiveContent(salesHeader, sales, anomHeader, anoms) {
   });
   out.push(blank);
   out.push(['── ANOMALIES (' + anoms.length + ') ──', '', '', '', '', '', '']);
-  out.push(anomHeader.slice(0, 7));
-  anoms.forEach(r => out.push((r || []).slice(0, 7)));
+  // (1.17.0) Anomalies archivées sur 12 colonnes (inclut Photo_URL en L) — les ventes
+  // restent tronquées à 7 col (A→G), scope inchangé.
+  out.push(anomHeader.slice(0, 12));
+  anoms.forEach(r => out.push((r || []).slice(0, 12)));
   out.push(blank);
   out.push(['── VENTES (' + sales.length + ' lignes) ──', '', '', '', '', '', '']);
   out.push(salesHeader.slice(0, 7));
