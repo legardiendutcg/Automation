@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://apis.google.com https://accounts.google.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://sheets.googleapis.com https://accounts.google.com https://www.googleapis.com; frame-src https://accounts.google.com; img-src 'self' data:;" />
+<title>tcg-distrib — Répartition ventes communes</title>
+<!--
+  tcg-distrib — Allocation des ventes communes au prorata des stocks
+  ==================================================================
+  CHANGELOG
+  v1.0.0  Version initiale.
+          - GIS OAuth (token en mémoire, refresh silencieux 5 min avant expiry)
+          - Lecture directe des onglets "Products_Sold_NN_Mois" de la GSheet dédiée
+          - Résolution des colonnes par label d'en-tête (jamais par lettre)
+          - Mapping persistant des libellés (onglet MAPPING_LIBELLES)
+          - État persistant stock + dette d'arrondi par produit (onglet ETAT_STOCK)
+          - Saisie manuelle des achats communs du mois
+          - Allocation largest-remainder avec compensation par dette cumulée (par produit)
+          - Détection anomalie "facture manquante" (ventes > stock disponible) : bloquante
+          - Commit : écrit RESULTAT_MOIS + met à jour ETAT_STOCK + tamponne Dernier_Mois_Traité
+  ==================================================================
+-->
+<style>
+  :root {
+    --bg: #faf9f6; --surface: #ffffff; --ink: #1c1b19; --muted: #6b6a64;
+    --line: #e5e3db; --accent: #0f6e56; --accent-soft: #e1f5ee;
+    --danger: #a32d2d; --danger-soft: #fcebeb; --amber: #854f0b; --amber-soft: #faeeda;
+    --info: #185fa5; --info-soft: #e6f1fb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--ink); line-height: 1.5; font-size: 15px;
+  }
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--line);
+    padding: 14px 20px; display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .ver { font-size: 11px; color: var(--muted); background: var(--accent-soft);
+    color: var(--accent); padding: 2px 7px; border-radius: 10px; font-weight: 500; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 20px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 14px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px; }
+  .step-n { background: var(--accent); color: #fff; width: 22px; height: 22px;
+    border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600; flex-shrink: 0; }
+  button {
+    font: inherit; font-size: 14px; cursor: pointer; border: 1px solid var(--line);
+    background: var(--surface); color: var(--ink); padding: 8px 14px; border-radius: 8px;
+    transition: background .12s, border-color .12s;
+  }
+  button:hover:not(:disabled) { background: #f3f1ea; border-color: #cdcabf; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover:not(:disabled) { background: #0c5a47; }
+  button.danger { color: var(--danger); border-color: #e8c9c9; }
+  select, input {
+    font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--line);
+    border-radius: 8px; background: var(--surface); color: var(--ink);
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+  .pill.moi { background: var(--info-soft); color: var(--info); }
+  .pill.lui { background: var(--amber-soft); color: var(--amber); }
+  .pill.commun { background: var(--accent-soft); color: var(--accent); }
+  .banner { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+  .banner.err { background: var(--danger-soft); color: var(--danger); }
+  .banner.warn { background: var(--amber-soft); color: var(--amber); }
+  .banner.ok { background: var(--accent-soft); color: var(--accent); }
+  .banner.info { background: var(--info-soft); color: var(--info); }
+  .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .metric { background: #f3f1ea; border-radius: 8px; padding: 14px; }
+  .metric .lbl { font-size: 12px; color: var(--muted); }
+  .metric .val { font-size: 24px; font-weight: 600; }
+  .hidden { display: none; }
+  .anomaly-row { background: var(--danger-soft); }
+  .map-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #status { font-size: 12px; color: var(--muted); }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%; animation: s .7s linear infinite; vertical-align: -1px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><h1>tcg-distrib</h1><span class="ver">v1.0.0</span></div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <span id="status"></span>
+    <button id="authBtn" class="primary">Se connecter</button>
+  </div>
+</header>
+
+<main>
+  <div id="authGate" class="banner info">
+    Connecte-toi avec ton compte Google pour accéder à la GSheet dédiée.
+  </div>
+
+  <div id="app" class="hidden">
+
+    <!-- Étape 1 : choix du mois -->
+    <div class="card">
+      <h2><span class="step-n">1</span> Choisir le mois à traiter</h2>
+      <div class="row">
+        <label class="fld">Onglet de ventes
+          <select id="monthSel"><option value="">—</option></select>
+        </label>
+        <button id="loadMonthBtn">Charger les ventes</button>
+        <button id="refreshTabsBtn">↻ Onglets</button>
+      </div>
+      <div id="monthInfo" style="margin-top:10px;"></div>
+    </div>
+
+    <!-- Étape 2 : mapping des libellés communs -->
+    <div id="mapCard" class="card hidden">
+      <h2><span class="step-n">2</span> Rattacher les libellés communs</h2>
+      <p class="muted" style="font-size:13px;margin:0 0 12px;">
+        Ces libellés « commun » ne sont pas encore reconnus. Rattache-les à un produit existant ou crée-en un.
+      </p>
+      <div id="mapList"></div>
+      <button id="saveMapBtn" class="primary" style="margin-top:12px;">Enregistrer les rattachements</button>
+    </div>
+
+    <!-- Étape 3 : achats communs du mois -->
+    <div id="buyCard" class="card hidden">
+      <h2><span class="step-n">3</span> Saisir les achats communs du mois</h2>
+      <p class="muted" style="font-size:13px;margin:0 0 12px;">
+        Quantités achetées ce mois pour chaque produit commun (depuis tes factures). Laisse à 0 si aucun achat.
+      </p>
+      <div id="buyList"></div>
+    </div>
+
+    <!-- Étape 4 : prévisualisation -->
+    <div id="previewCard" class="card hidden">
+      <h2><span class="step-n">4</span> Prévisualiser l'allocation</h2>
+      <button id="calcBtn">Calculer</button>
+      <div id="previewOut" style="margin-top:14px;"></div>
+    </div>
+
+    <!-- Étape 5 : commit -->
+    <div id="commitCard" class="card hidden">
+      <h2><span class="step-n">5</span> Valider et enregistrer</h2>
+      <p class="muted" style="font-size:13px;margin:0 0 12px;">
+        Écrit le résultat dans RESULTAT_MOIS et met à jour l'état des stocks et dettes. Action irréversible côté GSheet.
+      </p>
+      <button id="commitBtn" class="primary">Enregistrer le mois</button>
+      <div id="commitOut" style="margin-top:12px;"></div>
+    </div>
+
+  </div>
+</main>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// ============================================================
+//  CONFIG
+// ============================================================
+const SPREADSHEET_ID = "1Amlyh5LpyJ24glSZtPUA9Tzfo-IkQZSm2YagMwuR0Po";
+const CLIENT_ID = "REMPLACER_PAR_TON_CLIENT_ID.apps.googleusercontent.com";
+const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
+const MONTH_TAB_PREFIX = "Products_Sold_";
+
+const SHEET_ETAT   = "ETAT_STOCK";
+const SHEET_MAP    = "MAPPING_LIBELLES";
+const SHEET_RESULT = "RESULTAT_MOIS";
+
+// En-têtes canoniques des onglets gérés par l'app
+const ETAT_HEADERS   = ["Produit_ID","Libelle","Stock_Report_Moi","Stock_Report_Lui","Dette_Arrondi_Moi","Dette_Arrondi_Lui","Dernier_Mois_Traite"];
+const MAP_HEADERS    = ["Libelle_Source","Produit_ID"];
+const RESULT_HEADERS = ["Mois","Produit_ID","Libelle","Qte_Vendue","Qte_Allouee_Moi","Qte_Allouee_Lui","CA_Total","CA_Moi","CA_Lui","Anomalie"];
+
+// Colonnes acceptées dans les onglets de ventes (résolution par label, casse/espaces ignorés)
+const SALES_COLS = {
+  libelle:  ["libelle","libellé","nom","item","produit","article"],
+  tag:      ["tag","proprietaire","propriétaire","categorie","catégorie","owner"],
+  qte:      ["quantite","quantité","qte","qty","quantite_vendue","quantité vendue"],
+  ca:       ["prix_vente_total","ca","ca_total","montant","prix total","prix vente total","total"]
+};
+
+// ============================================================
+//  ÉTAT GLOBAL
+// ============================================================
+let tokenClient = null;
+let accessToken = null;
+let tokenExpiry = 0;
+let refreshTimer = null;
+
+let etat = [];        // [{Produit_ID, Libelle, reportMoi, reportLui, detteMoi, detteLui, dernierMois}]
+let mapping = {};     // { libelleSourceNorm: Produit_ID }
+let currentMonth = "";
+let salesCommon = []; // ventes communes du mois agrégées par Produit_ID : [{pid, libelle, qte, ca}]
+let unmapped = [];    // libellés communs non reconnus
+let achats = {};      // { pid: {moi, lui} }
+let lastPreview = null;
+
+// ============================================================
+//  UTIL
+// ============================================================
+const $ = s => document.querySelector(s);
+const norm = s => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+const round2 = n => Math.round(n*100)/100;
+function setStatus(msg, busy) {
+  $("#status").innerHTML = busy ? '<span class="spin"></span> '+msg : (msg||"");
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ============================================================
+//  OAUTH (GIS, token en mémoire, refresh silencieux)
+// ============================================================
+function initAuth() {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: (resp) => {
+      if (resp.error) { setStatus("Échec connexion", false); return; }
+      accessToken = resp.access_token;
+      tokenExpiry = Date.now() + (resp.expires_in ? resp.expires_in*1000 : 3600000);
+      scheduleRefresh();
+      onSignedIn();
+    }
+  });
+}
+function scheduleRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  const lead = 5*60*1000; // 5 min avant expiry
+  const delay = Math.max(tokenExpiry - Date.now() - lead, 10000);
+  refreshTimer = setTimeout(() => {
+    tokenClient.requestAccessToken({ prompt: "" }); // silencieux
+  }, delay);
+}
+function signIn() {
+  if (!tokenClient) { setStatus("GIS pas prêt, réessaie", false); return; }
+  tokenClient.requestAccessToken({ prompt: accessToken ? "" : "consent" });
+}
+async function onSignedIn() {
+  $("#authBtn").textContent = "Connecté";
+  $("#authGate").classList.add("hidden");
+  $("#app").classList.remove("hidden");
+  setStatus("Chargement de l'état…", true);
+  try {
+    await ensureManagedSheets();
+    await loadEtat();
+    await loadMapping();
+    await listMonthTabs();
+    setStatus("Prêt", false);
+  } catch (e) {
+    setStatus("Erreur init : "+e.message, false);
+  }
+}
+
+// ============================================================
+//  SHEETS API helpers
+// ============================================================
+async function sheetsFetch(path, opts={}) {
+  const url = "https://sheets.googleapis.com/v4/spreadsheets/"+SPREADSHEET_ID+path;
+  const r = await fetch(url, {
+    ...opts,
+    headers: { "Authorization": "Bearer "+accessToken, "Content-Type": "application/json", ...(opts.headers||{}) }
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error("Sheets API "+r.status+" : "+t.slice(0,200));
+  }
+  return r.json();
+}
+async function getValues(range) {
+  const j = await sheetsFetch("/values/"+encodeURIComponent(range)+"?valueRenderOption=UNFORMATTED_VALUE");
+  return j.values || [];
+}
+async function setValues(range, values) {
+  return sheetsFetch("/values/"+encodeURIComponent(range)+"?valueInputOption=RAW", {
+    method: "PUT", body: JSON.stringify({ values })
+  });
+}
+async function getMeta() {
+  return sheetsFetch("?fields=sheets.properties(title,sheetId)");
+}
+async function addSheet(title) {
+  return sheetsFetch(":batchUpdate", {
+    method: "POST",
+    body: JSON.stringify({ requests: [{ addSheet: { properties: { title } } }] })
+  });
+}
+
+// Crée les onglets gérés s'ils manquent, avec leurs en-têtes
+async function ensureManagedSheets() {
+  const meta = await getMeta();
+  const titles = meta.sheets.map(s => s.properties.title);
+  const want = [[SHEET_ETAT,ETAT_HEADERS],[SHEET_MAP,MAP_HEADERS],[SHEET_RESULT,RESULT_HEADERS]];
+  for (const [title, headers] of want) {
+    if (!titles.includes(title)) {
+      await addSheet(title);
+      await setValues(title+"!A1", [headers]);
+    }
+  }
+}
+
+// ============================================================
+//  CHARGEMENT ÉTAT + MAPPING
+// ============================================================
+function colIndex(headerRow, names) {
+  const H = headerRow.map(norm);
+  for (const n of names) { const i = H.indexOf(norm(n)); if (i !== -1) return i; }
+  return -1;
+}
+async function loadEtat() {
+  const rows = await getValues(SHEET_ETAT+"!A1:Z10000");
+  etat = [];
+  if (!rows.length) return;
+  const H = rows[0];
+  const ix = {
+    pid: colIndex(H,["Produit_ID"]), lib: colIndex(H,["Libelle","Libellé"]),
+    rm: colIndex(H,["Stock_Report_Moi"]), rl: colIndex(H,["Stock_Report_Lui"]),
+    dm: colIndex(H,["Dette_Arrondi_Moi"]), dl: colIndex(H,["Dette_Arrondi_Lui"]),
+    last: colIndex(H,["Dernier_Mois_Traite","Dernier_Mois_Traité"])
+  };
+  for (let i=1;i<rows.length;i++){
+    const r = rows[i]; if (!r || !r[ix.pid]) continue;
+    etat.push({
+      Produit_ID: String(r[ix.pid]),
+      Libelle: ix.lib>=0 ? (r[ix.lib]||"") : "",
+      reportMoi: +(r[ix.rm]||0), reportLui: +(r[ix.rl]||0),
+      detteMoi: +(r[ix.dm]||0), detteLui: +(r[ix.dl]||0),
+      dernierMois: ix.last>=0 ? (r[ix.last]||"") : ""
+    });
+  }
+}
+async function loadMapping() {
+  const rows = await getValues(SHEET_MAP+"!A1:B10000");
+  mapping = {};
+  if (!rows.length) return;
+  const H = rows[0];
+  const iSrc = colIndex(H,["Libelle_Source","Libellé_Source"]);
+  const iPid = colIndex(H,["Produit_ID"]);
+  for (let i=1;i<rows.length;i++){
+    const r = rows[i]; if (!r || !r[iSrc]) continue;
+    mapping[norm(r[iSrc])] = String(r[iPid]||"");
+  }
+}
+function etatById(pid){ return etat.find(e => e.Produit_ID === pid); }
+
+// ============================================================
+//  ONGLETS MOIS
+// ============================================================
+async function listMonthTabs() {
+  const meta = await getMeta();
+  const tabs = meta.sheets.map(s=>s.properties.title)
+    .filter(t => t.startsWith(MONTH_TAB_PREFIX)).sort();
+  const sel = $("#monthSel");
+  sel.innerHTML = '<option value="">—</option>' + tabs.map(t=>'<option>'+escapeHtml(t)+'</option>').join("");
+  if (!tabs.length) $("#monthInfo").innerHTML = '<span class="banner warn">Aucun onglet "'+MONTH_TAB_PREFIX+'…" trouvé.</span>';
+}
+
+async function loadMonth() {
+  const month = $("#monthSel").value;
+  if (!month) return;
+  currentMonth = month;
+  setStatus("Lecture des ventes…", true);
+  try {
+    const rows = await getValues(month+"!A1:Z100000");
+    if (!rows.length) throw new Error("Onglet vide");
+    const H = rows[0];
+    const iLib = colIndex(H, SALES_COLS.libelle);
+    const iTag = colIndex(H, SALES_COLS.tag);
+    const iQte = colIndex(H, SALES_COLS.qte);
+    const iCa  = colIndex(H, SALES_COLS.ca);
+    const missing = [];
+    if (iLib<0) missing.push("libellé"); if (iTag<0) missing.push("tag");
+    if (iQte<0) missing.push("quantité"); if (iCa<0) missing.push("prix vente total");
+    if (missing.length) throw new Error("Colonnes manquantes : "+missing.join(", "));
+
+    let nMoi=0, nLui=0, nCommun=0;
+    const commonAgg = {}; // libelleNorm -> {libelle, qte, ca}
+    for (let i=1;i<rows.length;i++){
+      const r = rows[i]; if (!r || r[iLib]===undefined || r[iLib]==="") continue;
+      const tag = norm(r[iTag]);
+      const qte = +(r[iQte]||0); const ca = +(r[iCa]||0);
+      if (tag==="commun"){
+        nCommun++;
+        const key = norm(r[iLib]);
+        if (!commonAgg[key]) commonAgg[key] = { libelle: String(r[iLib]), qte:0, ca:0 };
+        commonAgg[key].qte += qte; commonAgg[key].ca += ca;
+      } else if (tag==="moi") nMoi++;
+      else if (tag==="lui") nLui++;
+    }
+
+    // Résolution mapping
+    salesCommon = []; unmapped = [];
+    for (const key in commonAgg){
+      const agg = commonAgg[key];
+      const pid = mapping[key];
+      if (pid){ salesCommon.push({ pid, libelle: agg.libelle, qte: agg.qte, ca: agg.ca, srcKey: key }); }
+      else { unmapped.push({ srcKey: key, libelle: agg.libelle, qte: agg.qte, ca: agg.ca }); }
+    }
+
+    $("#monthInfo").innerHTML =
+      '<div class="banner ok">Ventes lues : <b>'+nMoi+'</b> à moi · <b>'+nLui+'</b> à lui · <b>'+nCommun+
+      '</b> lignes communes ('+Object.keys(commonAgg).length+' produits distincts).</div>';
+
+    if (unmapped.length) { renderMapList(); $("#mapCard").classList.remove("hidden"); }
+    else { $("#mapCard").classList.add("hidden"); proceedToBuy(); }
+
+    setStatus("Prêt", false);
+  } catch(e){
+    $("#monthInfo").innerHTML = '<div class="banner err">'+escapeHtml(e.message)+'</div>';
+    setStatus("Erreur", false);
+  }
+}
+
+// ============================================================
+//  ÉTAPE 2 : mapping des libellés
+// ============================================================
+function renderMapList(){
+  const opts = etat.map(e=>'<option value="'+escapeHtml(e.Produit_ID)+'">'+escapeHtml(e.Produit_ID)+(e.Libelle?' — '+escapeHtml(e.Libelle):'')+'</option>').join("");
+  $("#mapList").innerHTML = unmapped.map((u,i)=>(
+    '<div class="map-row" data-i="'+i+'">'
+    + '<div><b>'+escapeHtml(u.libelle)+'</b><br><span class="muted" style="font-size:12px;">vendu '+u.qte+' · '+round2(u.ca)+' €</span></div>'
+    + '<select data-role="pid"><option value="">— produit existant —</option>'+opts+'</select>'
+    + '<input data-role="new" placeholder="ou nouvel ID" style="width:140px;" />'
+    + '</div>'
+  )).join("");
+}
+async function saveMapping(){
+  setStatus("Enregistrement mapping…", true);
+  const rows = [...$("#mapList").querySelectorAll(".map-row")];
+  const newMapEntries = []; const newEtatEntries = [];
+  for (const row of rows){
+    const i = +row.dataset.i; const u = unmapped[i];
+    const sel = row.querySelector('[data-role="pid"]').value.trim();
+    const neu = row.querySelector('[data-role="new"]').value.trim();
+    let pid = neu || sel;
+    if (!pid){ setStatus("Un libellé non rattaché", false); return; }
+    mapping[u.srcKey] = pid;
+    newMapEntries.push([u.libelle, pid]);
+    if (neu && !etatById(neu)){
+      const e = { Produit_ID: neu, Libelle: u.libelle, reportMoi:0, reportLui:0, detteMoi:0, detteLui:0, dernierMois:"" };
+      etat.push(e); newEtatEntries.push(e);
+    }
+  }
+  try {
+    // append mapping
+    await sheetsFetch("/values/"+encodeURIComponent(SHEET_MAP+"!A1")+":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+      { method:"POST", body: JSON.stringify({ values: newMapEntries }) });
+    // append nouveaux produits dans ETAT_STOCK
+    if (newEtatEntries.length){
+      const vals = newEtatEntries.map(e=>[e.Produit_ID,e.Libelle,0,0,0,0,""]);
+      await sheetsFetch("/values/"+encodeURIComponent(SHEET_ETAT+"!A1")+":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+        { method:"POST", body: JSON.stringify({ values: vals }) });
+    }
+    // reclasser les unmapped en salesCommon
+    for (const u of unmapped) salesCommon.push({ pid: mapping[u.srcKey], libelle: u.libelle, qte: u.qte, ca: u.ca, srcKey: u.srcKey });
+    unmapped = [];
+    $("#mapCard").classList.add("hidden");
+    setStatus("Prêt", false);
+    proceedToBuy();
+  } catch(e){ setStatus("Erreur mapping : "+e.message, false); }
+}
+
+// ============================================================
+//  ÉTAPE 3 : saisie achats
+// ============================================================
+function proceedToBuy(){
+  // regrouper salesCommon par pid (au cas où plusieurs libellés -> même pid)
+  const byPid = {};
+  for (const s of salesCommon){
+    if (!byPid[s.pid]) byPid[s.pid] = { pid:s.pid, libelle:s.libelle, qte:0, ca:0 };
+    byPid[s.pid].qte += s.qte; byPid[s.pid].ca += s.ca;
+  }
+  salesCommon = Object.values(byPid);
+  achats = {};
+  for (const s of salesCommon) achats[s.pid] = { moi:0, lui:0 };
+
+  $("#buyList").innerHTML =
+    '<table><thead><tr><th>Produit</th><th>Stock report moi</th><th>Stock report lui</th>'
+    + '<th>Achats moi</th><th>Achats lui</th><th class="num">Vendu</th></tr></thead><tbody>'
+    + salesCommon.map(s=>{
+        const e = etatById(s.pid) || {reportMoi:0,reportLui:0};
+        return '<tr data-pid="'+escapeHtml(s.pid)+'">'
+          + '<td><b>'+escapeHtml(s.pid)+'</b><br><span class="muted">'+escapeHtml(s.libelle)+'</span></td>'
+          + '<td class="num muted">'+e.reportMoi+'</td><td class="num muted">'+e.reportLui+'</td>'
+          + '<td><input type="number" min="0" value="0" data-role="amoi" style="width:80px;"></td>'
+          + '<td><input type="number" min="0" value="0" data-role="alui" style="width:80px;"></td>'
+          + '<td class="num">'+s.qte+'</td></tr>';
+      }).join("")
+    + '</tbody></table>';
+  $("#buyList").querySelectorAll("input").forEach(inp=>{
+    inp.addEventListener("input", e=>{
+      const pid = e.target.closest("tr").dataset.pid;
+      const role = e.target.dataset.role;
+      achats[pid][role==="amoi"?"moi":"lui"] = +e.target.value || 0;
+    });
+  });
+  $("#buyCard").classList.remove("hidden");
+  $("#previewCard").classList.remove("hidden");
+  $("#commitCard").classList.add("hidden");
+}
+
+// ============================================================
+//  MOTEUR D'ALLOCATION (largest-remainder + dette par produit)
+// ============================================================
+function allocate(pid){
+  const e = etatById(pid) || { reportMoi:0, reportLui:0, detteMoi:0, detteLui:0 };
+  const a = achats[pid] || { moi:0, lui:0 };
+  const s = salesCommon.find(x=>x.pid===pid);
+  const vendu = s ? s.qte : 0;
+  const ca = s ? s.ca : 0;
+
+  const baseMoi = e.reportMoi + a.moi;
+  const baseLui = e.reportLui + a.lui;
+  const baseTot = baseMoi + baseLui;
+
+  if (vendu > baseTot){
+    return { pid, libelle: e.Libelle||(s&&s.libelle)||"", anomalie:true, vendu, baseTot, ecart: vendu-baseTot };
+  }
+  let qMoi, qLui, newDetteMoi=e.detteMoi, newDetteLui=e.detteLui, exactMoi=0;
+  if (baseTot===0){ qMoi=0; qLui=0; }
+  else {
+    exactMoi = vendu * baseMoi / baseTot;
+    qMoi = Math.floor(exactMoi);
+    qLui = Math.floor(vendu * baseLui / baseTot);
+    let residu = vendu - qMoi - qLui;
+    const fracMoi = exactMoi - Math.floor(exactMoi);
+    while (residu > 0){
+      const scoreMoi = fracMoi + e.detteMoi;
+      const scoreLui = (1-fracMoi) + e.detteLui;
+      if (scoreMoi >= scoreLui){ qMoi++; newDetteLui += fracMoi; newDetteMoi -= (1-fracMoi); }
+      else { qLui++; newDetteMoi += (1-fracMoi); newDetteLui -= fracMoi; }
+      residu--;
+    }
+  }
+  const caMoi = vendu>0 ? ca * qMoi / vendu : 0;
+  const caLui = round2(ca - caMoi);
+  return {
+    pid, libelle: e.Libelle||(s&&s.libelle)||"", anomalie:false,
+    vendu, ca, baseMoi, baseLui, exactMoi,
+    qMoi, qLui, caMoi: round2(caMoi), caLui,
+    repMoi: baseMoi-qMoi, repLui: baseLui-qLui,
+    newDetteMoi: round2(newDetteMoi), newDetteLui: round2(newDetteLui)
+  };
+}
+
+function calcPreview(){
+  const res = salesCommon.map(s=>allocate(s.pid));
+  lastPreview = res;
+  const anomalies = res.filter(r=>r.anomalie);
+  let qMoiT=0,qLuiT=0,caMoiT=0,caLuiT=0;
+  const body = res.map(r=>{
+    if (r.anomalie){
+      return '<tr class="anomaly-row"><td><b>'+escapeHtml(r.pid)+'</b><br><span class="muted">'+escapeHtml(r.libelle)+'</span></td>'
+        + '<td colspan="5" style="color:var(--danger);">⚠ Facture manquante — vendu '+r.vendu+' &gt; stock '+r.baseTot+' (écart '+r.ecart+')</td></tr>';
+    }
+    qMoiT+=r.qMoi; qLuiT+=r.qLui; caMoiT+=r.caMoi; caLuiT+=r.caLui;
+    return '<tr><td><b>'+escapeHtml(r.pid)+'</b><br><span class="muted">'+escapeHtml(r.libelle)+'</span></td>'
+      + '<td class="num">'+r.qMoi+' / '+r.qLui+'</td>'
+      + '<td class="num">'+r.repMoi+' / '+r.repLui+'</td>'
+      + '<td class="num">'+r.caMoi.toFixed(2)+' / '+r.caLui.toFixed(2)+'</td>'
+      + '<td class="num muted">'+r.newDetteMoi.toFixed(2)+' / '+r.newDetteLui.toFixed(2)+'</td>'
+      + '<td class="num muted">'+(r.exactMoi?r.exactMoi.toFixed(2):'—')+'</td></tr>';
+  }).join("");
+
+  $("#previewOut").innerHTML =
+    (anomalies.length ? '<div class="banner err"><b>'+anomalies.length+' anomalie(s)</b> — résous les factures manquantes avant d\'enregistrer.</div>' : '')
+    + '<table><thead><tr><th>Produit</th><th class="num">Qté moi/lui</th><th class="num">Report moi/lui</th>'
+    + '<th class="num">CA moi/lui</th><th class="num">Dette moi/lui</th><th class="num">Part exacte</th></tr></thead><tbody>'
+    + body + '</tbody></table>'
+    + '<div class="metrics"><div class="metric"><div class="lbl">Qté allouée — moi</div><div class="val">'+qMoiT+'</div></div>'
+    + '<div class="metric"><div class="lbl">Qté allouée — lui</div><div class="val">'+qLuiT+'</div></div></div>'
+    + '<div class="metrics"><div class="metric"><div class="lbl">CA — moi</div><div class="val">'+caMoiT.toFixed(2)+' €</div></div>'
+    + '<div class="metric"><div class="lbl">CA — lui</div><div class="val">'+caLuiT.toFixed(2)+' €</div></div></div>';
+
+  if (anomalies.length){ $("#commitCard").classList.add("hidden"); }
+  else { $("#commitCard").classList.remove("hidden"); $("#commitOut").innerHTML=""; }
+}
+
+// ============================================================
+//  ÉTAPE 5 : commit
+// ============================================================
+async function commit(){
+  if (!lastPreview || lastPreview.some(r=>r.anomalie)){
+    $("#commitOut").innerHTML='<div class="banner err">Anomalies non résolues.</div>'; return;
+  }
+  if (!confirm("Enregistrer le mois "+currentMonth+" ? Cette action met à jour l'état des stocks.")) return;
+  setStatus("Enregistrement…", true);
+  try {
+    // 1) append RESULTAT_MOIS
+    const resultRows = lastPreview.map(r=>[
+      currentMonth, r.pid, r.libelle, r.vendu, r.qMoi, r.qLui,
+      round2(r.ca), r.caMoi, r.caLui, ""
+    ]);
+    await sheetsFetch("/values/"+encodeURIComponent(SHEET_RESULT+"!A1")+":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+      { method:"POST", body: JSON.stringify({ values: resultRows }) });
+
+    // 2) mettre à jour ETAT_STOCK pour chaque produit traité
+    for (const r of lastPreview){
+      const e = etatById(r.pid);
+      if (e){ e.reportMoi=r.repMoi; e.reportLui=r.repLui; e.detteMoi=r.newDetteMoi; e.detteLui=r.newDetteLui; e.dernierMois=currentMonth; }
+    }
+    // réécrire tout ETAT_STOCK (simple et sûr)
+    const etatRows = [ETAT_HEADERS, ...etat.map(e=>[
+      e.Produit_ID, e.Libelle, e.reportMoi, e.reportLui, e.detteMoi, e.detteLui, e.dernierMois
+    ])];
+    await setValues(SHEET_ETAT+"!A1", etatRows);
+
+    $("#commitOut").innerHTML='<div class="banner ok">Mois '+escapeHtml(currentMonth)+' enregistré. '+lastPreview.length+' produits mis à jour.</div>';
+    $("#commitBtn").disabled = true;
+    setStatus("Enregistré", false);
+  } catch(e){
+    $("#commitOut").innerHTML='<div class="banner err">Erreur : '+escapeHtml(e.message)+'</div>';
+    setStatus("Erreur", false);
+  }
+}
+
+// ============================================================
+//  WIRING
+// ============================================================
+window.addEventListener("load", ()=>{
+  const t = setInterval(()=>{
+    if (window.google && google.accounts && google.accounts.oauth2){
+      clearInterval(t); initAuth();
+    }
+  }, 100);
+});
+$("#authBtn").addEventListener("click", signIn);
+$("#refreshTabsBtn").addEventListener("click", listMonthTabs);
+$("#loadMonthBtn").addEventListener("click", loadMonth);
+$("#saveMapBtn").addEventListener("click", saveMapping);
+$("#calcBtn").addEventListener("click", calcPreview);
+$("#commitBtn").addEventListener("click", commit);
+</script>
+</body>
+</html>
