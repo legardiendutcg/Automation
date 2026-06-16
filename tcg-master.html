@@ -1,8 +1,21 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.17.0 (Session #25 — 2026-06-15)
+  Version : 1.18.0 (Session #25 — 2026-06-15)
 =============================================================
+  1.18.0 2026-06-15  Session #25 (publication DateEntree pour pastilles d'ancienneté ; JALON COORDONNÉ avec Sales 1.18.0)
+         - [Feature #5] STOCK_PUBLIC publie une 11ᵉ colonne `DateEntree` (col K, ISO YYYY-MM-DD),
+           extraite de `Origine` ("xxxx_Nom_Vendeur_DDMMYYYY") par parseOrigineDate(). Cartes
+           UNIQUEMENT (col K vide pour le scellé). Le nom de lot brut n'est JAMAIS exposé — seule
+           la date part dans la vue vendeurs (confidentialité STOCK_PUBLIC préservée).
+         - [Lecture] La colonne A (`Origine`) des cartes est lue À PART (A{h+1}:A), alignée par
+           index de ligne, SANS toucher au mapping positionnel C:AF éprouvé. Échec de lecture
+           Origine = non bloquant (log warn ; pastilles simplement indisponibles).
+         - [Robustesse] parseOrigineDate tolère DDMMYYYY ET DDMMYY (filet transition), ne se fie
+           qu'au dernier segment après "_", valide la plausibilité (mois/jour/année reconstruite).
+         - STOCK_PUBLIC écrit désormais A1:K (stock) + L (liste TVA) ; le clear A:L est inchangé.
+           Réparation d'en-tête : DateEntree ajoutée automatiquement au prochain refresh.
+         - Aucune autre logique touchée (anomalies/photo 1.17.0, clôture, sync, sécurité intacts).
   1.17.0 2026-06-15  Session #25 (photo d'article manuel/inconnu → schéma anomalies 12 colonnes ; JALON COORDONNÉ avec Sales 1.17.0)
          - [Schéma] Onglet `anomalies` passe de 11 à 12 colonnes : ajout de Photo_URL en col L.
            ANOMALIES_HEADERS mis à jour → la réparation d'en-tête existante (verifySchema) écrit
@@ -829,7 +842,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.17.0';
+const APP_VERSION      = '1.18.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -847,7 +860,7 @@ const SHEET_STATE     = 'app_state';
 // Vue stock publiée dans la GSheet EVENTS pour Sales (Option 1) : ne contient QUE
 // les champs sûrs (pas de coûts/marges). Permet aux vendeurs de NE PLUS accéder à CENTRAL.
 const SHEET_STOCK_PUBLIC = 'STOCK_PUBLIC';
-const STOCK_PUBLIC_HEADERS = ['Key','Kind','CodeSerie','NomSerie','Nom','Type','Etat','PrixVente','Qty','Reserved'];
+const STOCK_PUBLIC_HEADERS = ['Key','Kind','CodeSerie','NomSerie','Nom','Type','Etat','PrixVente','Qty','Reserved','DateEntree'];
 
 const MASTER_EMAILS = ['legardiendutcg@gmail.com'];
 
@@ -964,6 +977,31 @@ function colIdx2letter(n) {
   let result = '';
   while (n > 0) { n--; result = String.fromCharCode(65 + (n % 26)) + result; n = Math.floor(n / 26); }
   return result;
+}
+
+// (1.18.0) Extrait la DATE D'ENTRÉE du nom de lot d'origine.
+// Format attendu : "xxxx_Nom_Vendeur_DDMMYYYY" (le nom peut contenir des chiffres → on ne se
+// fie qu'au DERNIER segment après le dernier "_"). Tolère aussi DDMMYY (transition format).
+// Renvoie une date ISO "YYYY-MM-DD", ou '' si pas de date exploitable (→ pas de pastille).
+// On ne publie QUE cette date dans STOCK_PUBLIC, jamais le nom de lot brut (confidentialité).
+function parseOrigineDate(origine) {
+  const s = String(origine || '').trim();
+  if (!s) return '';
+  const last = s.split('_').pop().trim();   // dernier segment
+  let d, m, y;
+  if (/^\d{8}$/.test(last)) {               // DDMMYYYY
+    d = +last.slice(0, 2); m = +last.slice(2, 4); y = +last.slice(4, 8);
+  } else if (/^\d{6}$/.test(last)) {        // DDMMYY → 20YY (filet transition)
+    d = +last.slice(0, 2); m = +last.slice(2, 4); y = 2000 + (+last.slice(4, 6));
+  } else {
+    return '';
+  }
+  if (m < 1 || m > 12 || d < 1 || d > 31) return '';   // garde-fou date plausible
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  // Rejette une date reconstruite incohérente (ex. 31/02) ou aberrante
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return '';
+  if (y < 2020 || y > 2100) return '';
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
 }
 // Réservation : une cellule TVA_Vente valant "réservée" (toutes variantes) bloque la vente.
 // Porté de tcg-sales.html pour pouvoir publier le flag Reserved dans la vue STOCK_PUBLIC.
@@ -1321,6 +1359,16 @@ async function loadStockCache() {
     // Read N..AF starting at header+1 (we need col D=clé, col P=statut, plus all the others)
     const cardData = await sheetsGet(a1(SHEET_CARDS, `C${cardHeaderRow + 1}:AF`), CENTRAL_GSHEET_ID);
     const rows = cardData.values || [];
+    // (1.18.0) Colonne A = Origine ("xxxx_Nom_Vendeur_DDMMYYYY") — lue À PART pour ne PAS
+    // toucher au mapping positionnel C:AF éprouvé. Alignée par index de ligne. Sert UNIQUEMENT
+    // à publier la DATE D'ENTRÉE dans STOCK_PUBLIC (jamais le nom de lot brut → confidentialité).
+    let originCol = [];
+    try {
+      const originData = await sheetsGet(a1(SHEET_CARDS, `A${cardHeaderRow + 1}:A`), CENTRAL_GSHEET_ID);
+      originCol = (originData.values || []).map(r => (r[0] || '').toString());
+    } catch (e) {
+      logEvent('warn', 'Lecture colonne Origine (cartes) échouée — pastilles ancienneté indispo', { message: e && e.message });
+    }
     stockCacheCards.clear();
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -1338,6 +1386,7 @@ async function loadStockCache() {
         etat:      (row[8] || '').toString().trim(),  // K
         prix:      parsePrix(row[14]),                 // Q (index 14)
         reserved:  isReservedValue(row[29]),           // AF (TVA_Vente carte) = index 29 dans la lecture C:AF
+        dateEntree: parseOrigineDate(originCol[i] || ''), // (1.18.0) date ISO ou '' — pour pastille ancienneté
         sheetRow:  cardHeaderRow + 1 + i
       });
     }
@@ -1462,17 +1511,19 @@ async function publishStockView() {
   await ensureStockPublicTab();
 
   // 1. Lignes stock (cartes + scellés) à partir des caches déjà chargés
+  // (1.18.0) col K = DateEntree (ISO) pour les CARTES uniquement → pastille ancienneté côté Sales.
+  // Le scellé n'a pas de pastille (décision Le Gardien) → col K vide.
   const stockRows = [STOCK_PUBLIC_HEADERS.slice()];
   for (const c of stockCacheCards.values()) {
     stockRows.push([
       c.key, 'card', c.codeSerie || '', c.nomSerie || '', c.name || '',
-      c.type || '', c.etat || '', (c.prix || 0), 1, c.reserved ? '1' : ''
+      c.type || '', c.etat || '', (c.prix || 0), 1, c.reserved ? '1' : '', c.dateEntree || ''
     ]);
   }
   for (const s of stockCacheSealed.values()) {
     stockRows.push([
       s.key, 'sealed', '', s.nomSerie || '', s.name || '',
-      s.type || '', '', (s.prix || 0), (s.qty || 0), s.reserved ? '1' : ''
+      s.type || '', '', (s.prix || 0), (s.qty || 0), s.reserved ? '1' : '', ''
     ]);
   }
 
@@ -1489,7 +1540,7 @@ async function publishStockView() {
 
   // 3. Vide l'ancien contenu (gère le cas où le stock a rétréci), puis réécrit.
   await sheetsClear(a1(SHEET_STOCK_PUBLIC, 'A:L'), EVENTS_GSHEET_ID);
-  await sheetsUpdate(a1(SHEET_STOCK_PUBLIC, `A1:J${stockRows.length}`), stockRows, 'RAW', EVENTS_GSHEET_ID);
+  await sheetsUpdate(a1(SHEET_STOCK_PUBLIC, `A1:K${stockRows.length}`), stockRows, 'RAW', EVENTS_GSHEET_ID);
   await sheetsUpdate(a1(SHEET_STOCK_PUBLIC, `L1:L${tvaCol.length}`), tvaCol, 'RAW', EVENTS_GSHEET_ID);
 
   logEvent('info', 'STOCK_PUBLIC publié', { cartes: stockCacheCards.size, scelles: stockCacheSealed.size, tva: tvaCol.length - 1 });

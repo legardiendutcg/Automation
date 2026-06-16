@@ -1,10 +1,22 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.17.0 (Session #25 — 2026-06-15)
+  Version : 1.18.0 (Session #25 — 2026-06-15)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.18.0 2026-06-15  Session #25 (réductions rapides + pastilles d'ancienneté ; pastilles = JALON COORDONNÉ avec Master 1.18.0)
+         - [Feature #6] Rangée de 3 boutons de remise −5 % / −7,5 % / −10 % entre les panneaux
+           client/type et le total. Base = total COURANT (permet d'empiler négo manuelle + %).
+           Total cible = ceil(base × (1 − taux)) → ARRONDI À L'EURO SUPÉRIEUR. Réutilise
+           applyTargetTotalCents() existant → répartition par ligne + affichage bicolore + reset ↺.
+         - [Feature #5] Pastille d'ancienneté sur les lignes CARTES (point coloré devant le nom) :
+           vert < 1 mois · bleu < 3 mois · orange < 6 mois · noir ≥ 6 mois (borne incluse dans la
+           tranche basse ; mois calendaires). Source : nouvelle col K `DateEntree` de STOCK_PUBLIC,
+           publiée par Master depuis `Origine`. Pas de date exploitable → pas de pastille.
+           NÉCESSITE Master ≥ 1.18.0 (publie DateEntree). Scellé NON concerné (décision LG).
+         - Aucune modification du protocole de vente, des schémas ventes_detail (A:N) / anomalies,
+           de l'outbox, du roll-back, de la photo (1.17.0), du heartbeat ni de la sécurité.
   1.17.0 2026-06-15  Session #25 (photo d'article manuel/inconnu → Google Drive ; JALON COORDONNÉ avec Master 1.17.0)
          - [Feature] Photo d'article dans les modales « + manuel » et « code non reconnu » :
            bouton 📷 → appareil photo natif (<input type=file capture=environment>), donc
@@ -493,6 +505,13 @@ body::before{content:'';position:fixed;inset:0;
 .cart-item.dup-red{border:2px solid var(--accent3);background:rgba(255,107,107,.07);}
 .cart-item.unknown{border:2px dashed #fbbf24;background:rgba(251,191,36,.06);}
 .ci-unknown{color:var(--warning);font-size:.85rem;margin-right:2px;}
+/* (1.18.0) Pastille d'ancienneté (cartes) — point coloré devant le nom */
+.age-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;
+  vertical-align:middle;flex:0 0 auto;border:1px solid rgba(255,255,255,.18);}
+.age-green{background:#4ade80;}
+.age-blue{background:#47c8ff;}
+.age-orange{background:#fb923c;}
+.age-black{background:#1a1a1a;border-color:rgba(255,255,255,.35);}
 .ci-del{flex:0 0 auto;align-self:center;background:transparent;border:none;cursor:pointer;
   font-size:1.05rem;line-height:1;padding:2px;opacity:.85;}
 .ci-del:active{opacity:1;transform:scale(.92);}
@@ -651,6 +670,14 @@ body::before{content:'';position:fixed;inset:0;
 .buyer-locked{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:11px;font-size:.8rem;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .buyer-locked #buyerLockedName{font-weight:700;}
+
+/* ── (1.18.0) Rangée de réductions rapides ── */
+.discount-row{display:flex;gap:8px;margin-bottom:8px;}
+.discount-btn{flex:1 1 0;padding:9px 0;background:var(--surface);border:1px solid var(--border);
+  border-radius:9px;color:var(--text);font-family:'Space Mono',monospace;font-weight:700;
+  font-size:.82rem;cursor:pointer;transition:border-color .15s,color .15s,background .15s;}
+.discount-btn:active{transform:scale(.97);}
+.discount-btn:hover{border-color:var(--warning);color:var(--warning);}
 
 /* ── Total : gros, centré ; bicolore quand modifié (origine barré | nouveau) ── */
 .total-display{height:60px;display:flex;align-items:center;justify-content:center;
@@ -852,6 +879,14 @@ body::before{content:'';position:fixed;inset:0;
         </select>
       </div>
 
+      <!-- (1.18.0) Réductions rapides : base = total courant, arrondi à l'euro SUPÉRIEUR.
+           Réutilise applyTargetTotalCents() → affichage bicolore + reset ↺ automatiques. -->
+      <div class="discount-row" id="discountRow">
+        <button class="discount-btn" onclick="applyDiscount(5)">−5 %</button>
+        <button class="discount-btn" onclick="applyDiscount(7.5)">−7,5 %</button>
+        <button class="discount-btn" onclick="applyDiscount(10)">−10 %</button>
+      </div>
+
       <!-- Total : tap → rouleaux. Bicolore quand modifié (origine barré | nouveau) -->
       <div class="total-display" id="totalDisplay" onclick="openAdjustTotal()">
         <button class="total-reset" onclick="event.stopPropagation();resetTotal()" title="Rétablir le prix d'origine">↺</button>
@@ -1032,7 +1067,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.17.0';
+const APP_VERSION      = '1.18.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1850,12 +1885,13 @@ async function loadStockCache() {
       const prix     = parsePrix(row[7]);
       const qty      = parseInt(row[8], 10) || 0;
       const reserved = (row[9] || '').toString().trim() !== '';
+      const dateEntree = (row[10] || '').toString().trim();   // (1.18.0) col K = DateEntree ISO (cartes)
 
       if (kind === 'sealed') {
         if (qty <= 0) continue;
         stockCacheSealed.set(key, { key, name: name || key, type: type || 'Scellé', nomSerie, prix, reserved, qty });
       } else {
-        stockCacheCards.set(key, { key, codeSerie, nomSerie, name, type, etat, prix, reserved });
+        stockCacheCards.set(key, { key, codeSerie, nomSerie, name, type, etat, prix, reserved, dateEntree });
       }
     }
 
@@ -2074,6 +2110,7 @@ function lookupCard(key) {
     prixOriginal: c.prix,
     source: 'cartes',
     reserved: !!c.reserved,
+    dateEntree: c.dateEntree || '',   // (1.18.0) pour la pastille d'ancienneté
     sheetRow: c.sheetRow
   };
 }
@@ -2108,6 +2145,31 @@ function dupStatusFor(c) {
   if (c.source !== 'cartes') return null;
   if ((c.qty || 1) <= 1) return null;
   return NEW_KEY_RE.test(c.key) ? 'red' : 'orange';
+}
+
+// (1.18.0) Pastille d'ancienneté (CARTES uniquement). dateEntree = ISO "YYYY-MM-DD" publiée
+// par Master depuis Origine. Seuils en MOIS calendaires, borne incluse dans la tranche BASSE :
+//   < 1 mois → vert · < 3 mois → bleu · < 6 mois → orange · ≥ 6 mois → noir.
+// Pas de date → null (pas de pastille). "Tranche basse" : exactement 1 mois = encore vert.
+function ageBadgeFor(c) {
+  if (c.source !== 'cartes') return null;
+  const iso = (c.dateEntree || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const [y, m, d] = iso.split('-').map(Number);
+  const entry = new Date(y, m - 1, d);
+  if (isNaN(entry.getTime())) return null;
+  const now = new Date();
+  // Nombre de mois calendaires écoulés (borne basse : on ne "monte" de tranche
+  // qu'une fois le seuil DÉPASSÉ, pas atteint).
+  let months = (now.getFullYear() - y) * 12 + (now.getMonth() - (m - 1));
+  if (now.getDate() < d) months -= 1;          // le mois en cours n'est pas "complet"
+  if (months < 0) months = 0;                  // date future éventuelle → traitée comme récente
+  let color, label;
+  if (months < 1)      { color = 'green';  label = 'moins d’1 mois en stock'; }
+  else if (months < 3) { color = 'blue';   label = 'moins de 3 mois en stock'; }
+  else if (months < 6) { color = 'orange'; label = 'moins de 6 mois en stock'; }
+  else                 { color = 'black';  label = 'plus de 6 mois en stock'; }
+  return { color, label };
 }
 
 function addToCart(item) {
@@ -2261,10 +2323,12 @@ function cartItemInnerHTML(c) {
   const modClass = c.priceModified ? ' modified' : '';
   const unk = (c.source === 'inconnu')
     ? '<span class="ci-unknown" title="Code non reconnu — ira en anomalies">❓</span>' : '';
+  const age = ageBadgeFor(c);   // (1.18.0) pastille d'ancienneté (cartes)
+  const badge = age ? `<span class="age-dot age-${age.color}" title="${esc(age.label)}"></span>` : '';
   return `
       <button class="ci-del" data-action="del" data-uid="${esc(c.uid)}" title="Retirer l'article">🗑</button>
       <span class="ci-qty" data-action="qty" data-uid="${esc(c.uid)}" title="Modifier la quantité">×${c.qty}</span>
-      <div class="ci-name">${unk}${esc(c.name)}<span class="ci-price${modClass}" data-action="price" data-uid="${esc(c.uid)}" title="Corriger le prix unitaire">${formatPrice(c.prixUnit)}</span></div>
+      <div class="ci-name">${badge}${unk}${esc(c.name)}<span class="ci-price${modClass}" data-action="price" data-uid="${esc(c.uid)}" title="Corriger le prix unitaire">${formatPrice(c.prixUnit)}</span></div>
     `;
 }
 
@@ -2314,7 +2378,7 @@ function renderCart() {
     if (el.className !== cls) el.className = cls;
 
     // Signature : ne réécrit l'innerHTML que si le contenu visible a changé
-    const sig = JSON.stringify([c.dupStatus, c.name, c.prixUnit, c.qty, !!c.priceModified]);
+    const sig = JSON.stringify([c.dupStatus, c.name, c.prixUnit, c.qty, !!c.priceModified, c.dateEntree || '']);
     if (el.dataset.sig !== sig) {
       el.innerHTML = cartItemInnerHTML(c);
       el.dataset.sig = sig;
@@ -2363,6 +2427,22 @@ function resetTotal() {
   if (!changed) return;
   renderCart();
   showToast('↺ Prix d\'origine rétablis');
+}
+
+// (1.18.0) Réduction rapide : base = total COURANT (permet d'empiler négo manuelle + %).
+// Total cible = ceil(base × (1 − taux)) → arrondi à l'EURO SUPÉRIEUR. Réutilise
+// applyTargetTotalCents() pour la répartition + l'affichage bicolore + le reset ↺.
+function applyDiscount(pct) {
+  if (cart.length === 0) { showToast('⚠ Panier vide', true); return; }
+  const base = getCartTotal();
+  if (base <= 0) { showToast('⚠ Rien à réduire', true); return; }
+  const targetEuros = Math.ceil(base * (1 - pct / 100));   // arrondi euro supérieur
+  const targetCents = targetEuros * 100;
+  if (!applyTargetTotalCents(targetCents)) return;
+  renderCart();
+  const pctLabel = String(pct).replace('.', ',');   // 7.5 → "7,5"
+  showToast(`✓ Remise −${pctLabel} % → ${formatPrice(targetEuros)}`);
+  logEvent('info', 'Remise % appliquée', { pct, de: base, vers: targetEuros });
 }
 
 // Event delegation on cart items (évite onclick inline avec esc)
