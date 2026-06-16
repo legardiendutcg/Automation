@@ -1,10 +1,15 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.22.1 (Session #26 — 2026-06-16)
+  Version : 1.22.2 (Session #26 — 2026-06-16)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.22.2 2026-06-16  Session #26 (CORRECTIF split : moyens d'ajout n'apparaissaient pas)
+         - [Fix] Les chips "+ ajouter un moyen" étaient construits dans renderSplitMeans() (appelé
+           seulement à l'ouverture/ajout/suppression), pas dans updateSplitFooter() (appelé à chaque
+           frappe). En baissant le Cash, le reste passait à >0 mais aucun moyen suivant ne s'affichait.
+           Chips déplacés dans un conteneur dédié #payAdd, reconstruit à chaque frappe (renderSplitAdd).
   1.22.1 2026-06-16  Session #26 (CORRECTIF split : pop-up d'encaissement ne s'affichait pas)
          - [Fix] `isProSaleType()` était appelée dans openPaymentSplit() mais n'était définie que
            côté Master → ReferenceError au clic sur "Valider" → aucun pop-up. Helper ajouté côté Sales.
@@ -1091,6 +1096,7 @@ body::before{content:'';position:fixed;inset:0;
     <div class="modal-title">💳 Encaissement</div>
     <div class="modal-subtitle" id="paySubtitle">—</div>
     <div id="payMeans"></div>
+    <div id="payAdd"></div>
     <div class="pay-residual" id="payResidual"></div>
     <div class="modal-actions" id="payActions"></div>
   </div>
@@ -1175,7 +1181,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.22.1';
+const APP_VERSION      = '1.22.2';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -3218,22 +3224,30 @@ function closePaymentSplit() {
 function renderSplitMeans() {
   if (!splitState) return;
   const wrap = document.getElementById('payMeans');
-  let html = splitState.active.map(m => `
+  // Ne (re)construit QUE les lignes de moyens actifs (préserve le focus pendant la frappe).
+  // Les chips d'ajout dépendent du reste → gérés dans updateSplitFooter() à chaque frappe.
+  wrap.innerHTML = splitState.active.map(m => `
     <div class="pay-row">
       <span class="pay-label">${PAY_MEANS[m.id] || m.id}</span>
       <input class="pay-amt" type="text" inputmode="decimal" data-id="${m.id}"
              value="${centsToEur(m.cents)}" oninput="onSplitAmount('${m.id}', this.value)">
       <button class="pay-del" onclick="removeSplitMean('${m.id}')" title="Retirer">🗑</button>
     </div>`).join('');
-  // Chips d'ajout : moyens restants (dans l'ordre), seulement si reste > 0
+}
+
+// (Re)construit les chips d'ajout selon le reste — appelé à chaque frappe via updateSplitFooter.
+function renderSplitAdd() {
+  if (!splitState) return;
+  const el = document.getElementById('payAdd');
   const used = new Set(splitState.active.map(m => m.id));
   const remaining = splitState.order.filter(id => !used.has(id));
   if (splitResidualCents() > 0 && remaining.length) {
-    html += `<div class="pay-add-row">` +
+    el.innerHTML = `<div class="pay-add-row">` +
       remaining.map(id => `<button class="pay-chip" onclick="addSplitMean('${id}')">+ ${PAY_MEANS[id] || id}</button>`).join('') +
       `</div>`;
+  } else {
+    el.innerHTML = '';
   }
-  wrap.innerHTML = html;
 }
 
 function onSplitAmount(id, val) {
@@ -3260,6 +3274,7 @@ function removeSplitMean(id) {
 
 function updateSplitFooter() {
   if (!splitState) return;
+  renderSplitAdd();   // (#26) chips d'ajout dépendent du reste → rafraîchis à chaque frappe
   const res = splitResidualCents();
   const resEl = document.getElementById('payResidual');
   resEl.classList.remove('ok', 'bad');
