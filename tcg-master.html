@@ -1,8 +1,14 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.21.0 (Session #26 — 2026-06-16)
+  Version : 1.21.1 (Session #26 — 2026-06-16)
 =============================================================
+  1.21.1 2026-06-16  Session #26 (Dashboard : ajustement layout après test ; Master seul)
+         - [Layout] Le donut "CA par vendeur" rejoint la colonne de gauche, SOUS les donuts
+           catégorie + licence (3 donuts empilés). Les faits marquants / ventes du jour remontent
+           au centre, directement sous le bandeau KPI. "CA par heure" reste à droite.
+           grid-template-areas : "kpis kpis kpis" / "donuts center hours" (2 rangées).
+         - Aucune logique touchée (agrégats byType/donut inchangés depuis 1.21.0).
   1.21.0 2026-06-16  Session #26 (Dashboard : panneau "CA par vendeur" + réagencement de la grille ; Master seul)
          - [Feature] Nouveau donut "CA par vendeur" : CA ventilé par Type_Vente (col O de ventes_detail).
            Réutilise renderDonut() → un vendeur ajouté à la volée reçoit une couleur de secours
@@ -569,11 +575,10 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 .cards-row .card{display:flex;flex-direction:column;}
 
 /* Grille stats */
-.dash-grid{display:grid;grid-template-columns:1.05fr 1.05fr 1.05fr;grid-template-rows:auto 1fr 1fr;gap:12px;
-  grid-template-areas:"kpis kpis kpis" "donuts vendeur hours" "donuts center hours";align-items:stretch;}
+.dash-grid{display:grid;grid-template-columns:1.05fr 1.05fr 1.05fr;grid-template-rows:auto 1fr;gap:12px;
+  grid-template-areas:"kpis kpis kpis" "donuts center hours";align-items:stretch;}
 .area-kpis{grid-area:kpis;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
 .area-donuts{grid-area:donuts;display:flex;flex-direction:column;gap:12px;}
-.area-vendeur{grid-area:vendeur;}
 .area-center{grid-area:center;}
 .area-hours{grid-area:hours;}
 .dpanel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:11px 13px;min-width:0;display:flex;flex-direction:column;}
@@ -625,7 +630,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 
 @media(max-width:760px){
   .cards-row,.area-kpis{grid-template-columns:1fr 1fr;}
-  .dash-grid{grid-template-columns:1fr;grid-template-areas:"kpis" "donuts" "vendeur" "center" "hours";}
+  .dash-grid{grid-template-columns:1fr;grid-template-areas:"kpis" "donuts" "center" "hours";}
 }
 </style>
 </head>
@@ -714,11 +719,11 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
           <div class="pt">CA par licence</div>
           <div class="donut-wrap"><div id="donutLicSvg"></div><div class="legend two" id="donutLicLeg"></div></div>
         </div>
-      </div>
-      <!-- (#26) Donut CA par vendeur (Type_Vente) -->
-      <div class="area-vendeur dpanel">
-        <div class="pt">CA par vendeur</div>
-        <div class="donut-wrap"><div id="donutVendeurSvg"></div><div class="legend two" id="donutVendeurLeg"></div></div>
+        <!-- (#26) Donut CA par vendeur (Type_Vente) — sous les 2 autres donuts -->
+        <div class="dpanel">
+          <div class="pt">CA par vendeur</div>
+          <div class="donut-wrap"><div id="donutVendeurSvg"></div><div class="legend two" id="donutVendeurLeg"></div></div>
+        </div>
       </div>
       <!-- Center : ⭐ Faits marquants (convention) ⇄ 🏠 Récap comptoir (pas de nom d'event) -->
       <div class="area-center dpanel">
@@ -884,7 +889,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.21.0';
+const APP_VERSION      = '1.21.1';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
