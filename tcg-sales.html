@@ -1,10 +1,15 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.19.0 (Session #25 — 2026-06-15)
+  Version : 1.19.1 (Session #25 — 2026-06-15)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.19.1 2026-06-15  Session #25 (correctif UI : hover "collé" sur boutons de remise tactile)
+         - [Fix #6] Après désélection d'une remise, le bouton gardait un contour + chiffre orange
+           (état :hover persistant sur tactile). Le :hover est désormais sous @media (hover: hover)
+           → ne s'applique qu'aux vrais pointeurs (souris). Sur tactile, le bouton désélectionné
+           reprend franchement son aspect initial (fond sombre, chiffre blanc).
   1.19.0 2026-06-15  Session #25 (réductions = options exclusives réversibles ; correctif comportement #6)
          - [Fix #6] Les remises −5 / −7,5 / −10 % ne sont PLUS cumulatives : ce sont des OPTIONS
            EXCLUSIVES. Cliquer un taux le sélectionne (désélectionne l'autre) ; re-cliquer le taux
@@ -687,7 +692,11 @@ body::before{content:'';position:fixed;inset:0;
   border-radius:9px;color:var(--text);font-family:'Space Mono',monospace;font-weight:700;
   font-size:1.15rem;cursor:pointer;transition:border-color .15s,color .15s,background .15s;}
 .discount-btn:active{transform:scale(.97);}
-.discount-btn:hover{border-color:var(--warning);color:var(--warning);}
+/* (1.19.1) Hover limité aux vrais pointeurs (souris) : sur tactile, :hover reste "collé"
+   après un tap, ce qui laissait un bouton désélectionné en contour/chiffre orange. */
+@media (hover: hover) {
+  .discount-btn:hover{border-color:var(--warning);color:var(--warning);}
+}
 .discount-btn.active{background:var(--warning);border-color:var(--warning);color:#1a1200;}
 
 /* ── Total : gros, centré ; bicolore quand modifié (origine barré | nouveau) ── */
@@ -1078,7 +1087,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.19.0';
+const APP_VERSION      = '1.19.1';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
