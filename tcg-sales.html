@@ -1,10 +1,20 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.18.0 (Session #25 — 2026-06-15)
+  Version : 1.19.0 (Session #25 — 2026-06-15)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.19.0 2026-06-15  Session #25 (réductions = options exclusives réversibles ; correctif comportement #6)
+         - [Fix #6] Les remises −5 / −7,5 / −10 % ne sont PLUS cumulatives : ce sont des OPTIONS
+           EXCLUSIVES. Cliquer un taux le sélectionne (désélectionne l'autre) ; re-cliquer le taux
+           actif l'ANNULE (retour prix plein). Base = total d'ORIGINE (jamais le total courant),
+           donc passer de −10 % à −5 % recalcule depuis le prix plein, sans empilement.
+         - [Comportement] Une remise % REMPLACE toute négociation manuelle en cours (modèle exclusif).
+         - [Robustesse] Toute modif de composition du panier (ajout/retrait/quantité) RÉINITIALISE
+           la remise et revient au prix plein → jamais de total trompeur. Idem reset ↺ et panier vidé.
+         - [UI] Bouton du taux actif mis en évidence (fond ambre) ; chiffres des boutons agrandis.
+         - Aucune autre logique touchée (pastilles 1.18.0, photo 1.17.0, vente/outbox/sécurité intacts).
   1.18.0 2026-06-15  Session #25 (réductions rapides + pastilles d'ancienneté ; pastilles = JALON COORDONNÉ avec Master 1.18.0)
          - [Feature #6] Rangée de 3 boutons de remise −5 % / −7,5 % / −10 % entre les panneaux
            client/type et le total. Base = total COURANT (permet d'empiler négo manuelle + %).
@@ -671,13 +681,14 @@ body::before{content:'';position:fixed;inset:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .buyer-locked #buyerLockedName{font-weight:700;}
 
-/* ── (1.18.0) Rangée de réductions rapides ── */
+/* ── (1.18.0) Rangée de réductions rapides — (1.19.0) options exclusives, chiffres plus gros ── */
 .discount-row{display:flex;gap:8px;margin-bottom:8px;}
-.discount-btn{flex:1 1 0;padding:9px 0;background:var(--surface);border:1px solid var(--border);
+.discount-btn{flex:1 1 0;padding:11px 0;background:var(--surface);border:1px solid var(--border);
   border-radius:9px;color:var(--text);font-family:'Space Mono',monospace;font-weight:700;
-  font-size:.82rem;cursor:pointer;transition:border-color .15s,color .15s,background .15s;}
+  font-size:1.15rem;cursor:pointer;transition:border-color .15s,color .15s,background .15s;}
 .discount-btn:active{transform:scale(.97);}
 .discount-btn:hover{border-color:var(--warning);color:var(--warning);}
+.discount-btn.active{background:var(--warning);border-color:var(--warning);color:#1a1200;}
 
 /* ── Total : gros, centré ; bicolore quand modifié (origine barré | nouveau) ── */
 .total-display{height:60px;display:flex;align-items:center;justify-content:center;
@@ -882,9 +893,9 @@ body::before{content:'';position:fixed;inset:0;
       <!-- (1.18.0) Réductions rapides : base = total courant, arrondi à l'euro SUPÉRIEUR.
            Réutilise applyTargetTotalCents() → affichage bicolore + reset ↺ automatiques. -->
       <div class="discount-row" id="discountRow">
-        <button class="discount-btn" onclick="applyDiscount(5)">−5 %</button>
-        <button class="discount-btn" onclick="applyDiscount(7.5)">−7,5 %</button>
-        <button class="discount-btn" onclick="applyDiscount(10)">−10 %</button>
+        <button class="discount-btn" data-pct="5" onclick="applyDiscount(5)">−5 %</button>
+        <button class="discount-btn" data-pct="7.5" onclick="applyDiscount(7.5)">−7,5 %</button>
+        <button class="discount-btn" data-pct="10" onclick="applyDiscount(10)">−10 %</button>
       </div>
 
       <!-- Total : tap → rouleaux. Bicolore quand modifié (origine barré | nouveau) -->
@@ -1067,7 +1078,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.18.0';
+const APP_VERSION      = '1.19.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -2173,6 +2184,7 @@ function ageBadgeFor(c) {
 }
 
 function addToCart(item) {
+  invalidateDiscountOnCartChange();
   if (item.source === 'manuel' || item.source === 'inconnu') {
     // Manuel / inconnu : pas de regroupement (chaque ajout = une ligne distincte)
     item.qty = item.qty || 1;
@@ -2197,6 +2209,7 @@ function addToCart(item) {
 function removeFromCart(uidToRemove) {
   const idx = cart.findIndex(c => c.uid === uidToRemove);
   if (idx < 0) return;
+  invalidateDiscountOnCartChange();
   cart.splice(idx, 1);
   renderCart();
 }
@@ -2207,9 +2220,21 @@ function setQty(uidToChange, n) {
   if (!c) return;
   n = Math.max(0, Math.round(n));
   if (n === 0) { removeFromCart(uidToChange); return; }
+  invalidateDiscountOnCartChange();
   c.qty = n;
   c.dupStatus = dupStatusFor(c);
   renderCart();
+}
+
+// (1.19.0) Une remise % est calculée sur la composition du panier à l'instant du clic.
+// Si la composition change (ajout/retrait/quantité), la remise n'est plus valide → on la
+// désactive et on revient au prix plein, pour ne JAMAIS afficher un total trompeur.
+function invalidateDiscountOnCartChange() {
+  if (activeDiscountPct === null) return;
+  activeDiscountPct = null;
+  cart.forEach(c => { c.prixUnit = c.prixOriginal; c.priceModified = false; });
+  updateDiscountButtons();
+  showToast('↺ Remise réinitialisée (panier modifié)');
 }
 
 function confirmClearCart() {
@@ -2351,6 +2376,8 @@ function renderCart() {
 
   // Panier vide : retirer les lignes, montrer le hint, garder le slot de scan en tête
   if (cart.length === 0) {
+    activeDiscountPct = null;          // (1.19.0) plus de remise sur un panier vide
+    updateDiscountButtons();
     existing.forEach(el => el.remove());
     if (empty) empty.classList.remove('hidden');
     if (scanSlot) container.insertBefore(scanSlot, container.firstChild);
@@ -2424,25 +2451,50 @@ function resetTotal() {
     c.prixUnit = c.prixOriginal;
     c.priceModified = false;
   });
+  if (activeDiscountPct !== null) { activeDiscountPct = null; updateDiscountButtons(); changed = true; }
   if (!changed) return;
   renderCart();
   showToast('↺ Prix d\'origine rétablis');
 }
 
-// (1.18.0) Réduction rapide : base = total COURANT (permet d'empiler négo manuelle + %).
-// Total cible = ceil(base × (1 − taux)) → arrondi à l'EURO SUPÉRIEUR. Réutilise
-// applyTargetTotalCents() pour la répartition + l'affichage bicolore + le reset ↺.
+// (1.19.0) Remise = OPTION EXCLUSIVE réversible, calculée sur le PRIX D'ORIGINE du panier.
+// Cliquer un taux le sélectionne (et désélectionne l'autre) ; re-cliquer le taux actif l'annule
+// (retour au prix plein). N'est PAS cumulatif. Une remise % REMPLACE toute négociation manuelle
+// (le modèle exclusif l'exige : base = prix d'origine, pas total courant).
+// État mémorisé dans `activeDiscountPct` (null = aucune).
+let activeDiscountPct = null;
+
 function applyDiscount(pct) {
   if (cart.length === 0) { showToast('⚠ Panier vide', true); return; }
-  const base = getCartTotal();
+  // Re-clic sur le taux déjà actif → annulation (retour prix plein)
+  if (activeDiscountPct === pct) {
+    activeDiscountPct = null;
+    cart.forEach(c => { c.prixUnit = c.prixOriginal; c.priceModified = false; });
+    renderCart();
+    updateDiscountButtons();
+    showToast('↺ Remise annulée');
+    logEvent('info', 'Remise annulée', { pct });
+    return;
+  }
+  // Sélection d'un nouveau taux → base = total d'ORIGINE (remplace toute négo en cours)
+  const base = cart.reduce((s, c) => s + (c.prixOriginal || 0) * c.qty, 0);
   if (base <= 0) { showToast('⚠ Rien à réduire', true); return; }
   const targetEuros = Math.ceil(base * (1 - pct / 100));   // arrondi euro supérieur
-  const targetCents = targetEuros * 100;
-  if (!applyTargetTotalCents(targetCents)) return;
+  if (!applyTargetTotalCents(targetEuros * 100)) return;
+  activeDiscountPct = pct;
   renderCart();
-  const pctLabel = String(pct).replace('.', ',');   // 7.5 → "7,5"
+  updateDiscountButtons();
+  const pctLabel = String(pct).replace('.', ',');
   showToast(`✓ Remise −${pctLabel} % → ${formatPrice(targetEuros)}`);
   logEvent('info', 'Remise % appliquée', { pct, de: base, vers: targetEuros });
+}
+
+// Met en évidence le bouton de remise actif (classe .active).
+function updateDiscountButtons() {
+  document.querySelectorAll('#discountRow .discount-btn').forEach(b => {
+    const p = parseFloat(b.dataset.pct);
+    b.classList.toggle('active', activeDiscountPct === p);
+  });
 }
 
 // Event delegation on cart items (évite onclick inline avec esc)
