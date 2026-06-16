@@ -1,10 +1,13 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.22.0 (Session #26 — 2026-06-16)
+  Version : 1.22.1 (Session #26 — 2026-06-16)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.22.1 2026-06-16  Session #26 (CORRECTIF split : pop-up d'encaissement ne s'affichait pas)
+         - [Fix] `isProSaleType()` était appelée dans openPaymentSplit() mais n'était définie que
+           côté Master → ReferenceError au clic sur "Valider" → aucun pop-up. Helper ajouté côté Sales.
   1.22.0 2026-06-16  Session #26 (SPLIT DE PAIEMENT — JALON COORDONNÉ avec Master 1.22.0)
          - [Feature #2] Paiement OBLIGATOIRE à chaque vente : "Valider la vente" (après ses verrous
            habituels) ouvre un pop-up d'encaissement. Cash y est pré-rempli au total ; le vendeur
@@ -1172,7 +1175,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.22.0';
+const APP_VERSION      = '1.22.1';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1997,6 +2000,12 @@ function onSaleTypeChange() {
 // Type de vente effectivement retenu pour la vente (null si non choisi).
 function getSaleType() {
   return (selectedSaleType && selectedSaleType.trim()) ? selectedSaleType.trim() : null;
+}
+
+// (#26 split) Vrai si le type correspond à la vente Pro (résolution tolérante accents/casse).
+// Détermine les moyens de paiement proposés. Aligné sur la même logique côté Master.
+function isProSaleType(s) {
+  return normAccent((s || '').toString().trim()) === normAccent(PRO_SALE_TYPE);
 }
 
 // Lit la liste partagée des vendeurs ajoutés (EVENTS/event_sellers, col A, hors en-tête).
