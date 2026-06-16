@@ -1,8 +1,26 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.18.1 (Session #25 — 2026-06-15)
+  Version : 1.20.0 (Session #26 — 2026-06-16)
 =============================================================
+  1.20.0 2026-06-16  Session #26 (TYPES DE VENTE — JALON COORDONNÉ avec Sales 1.20.0)
+         - [Feature #1] ventes_detail passe de A:P à A:Q : nouvelle col O `Type_Vente` (libellé choisi
+           par le vendeur). Synced/SyncedAt glissent en P/Q. Le Master résout Synced/SyncedAt PAR
+           LIBELLÉ (indexOf) → s'adapte seul. NÉCESSITE Sales ≥ 1.20.0 — déployer ensemble, HORS EVENT.
+         - [Sync] Routage par Type_Vente AVANT le routage par source :
+             • "Gardien Vente Pro" → comportement actuel (MAJ stock CENTRAL par source, TVA_Vente
+               "Régime normal" en col M, écrit en AF/AG).
+             • tout autre libellé (privée / vendeurs nommés) → statut OK_NOSTOCK : archivé, AUCUNE
+               écriture CENTRAL.
+             • Type_Vente VIDE → anomalie TYPE_VENTE_MANQUANT, aucune MAJ stock (jamais de "devine
+               Pro" — décision #26). En pratique Sales bloque la validation sans type → ne devrait
+               jamais arriver.
+           Le roll-back (-RB) d'une vente hors-stock est un no-op CENTRAL (Type_Vente recopié par Sales).
+         - [Partage] Onglet EVENTS `event_sellers` (append-only) garanti à la publication du stock,
+           VIDÉ au 🏁 (clôture) en même temps que ventes_detail / anomalies.
+         - [Fix index figé] renderSalesLog et loadCloseSummary lisaient Synced en r[14] (col O) :
+           or col O devient Type_Vente → Synced est désormais lu via salesHeaderInfo.syncedCol.
+           renderSalesLog affiche aussi le type de vente (qui a vendu).
   1.18.1 2026-06-15  Session #25 (correctif : colonne Origine cartes résolue par libellé)
          - [Fix #5] La colonne `Origine` des cartes était lue en col A en dur → vide (elle est en
            col F, et sa position comme la ligne d'en-tête varient). Désormais résolue PAR LIBELLÉ
@@ -848,7 +866,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.18.1';
+const APP_VERSION      = '1.20.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1288,8 +1306,19 @@ async function sheetsClear(range, gsheetId = CENTRAL_GSHEET_ID) {
 // SCHEMA VERIFICATION (events gsheet)
 // ═══════════════════════════════════════════════════════════════
 const APP_STATE_HEADERS  = ['master_alive_ts', 'master_event_name', 'master_lock_uuid', 'master_lock_label'];
-const VENTES_HEADERS     = ['Timestamp','Vendeur','Email','TX_ID','Clé/Barcode','Nom','Type','Catégorie','Licence','Quantité','Prix','Source','TVA_Vente','Acheteur','Synced','SyncedAt'];
+const VENTES_HEADERS     = ['Timestamp','Vendeur','Email','TX_ID','Clé/Barcode','Nom','Type','Catégorie','Licence','Quantité','Prix','Source','TVA_Vente','Acheteur','Type_Vente','Synced','SyncedAt'];
 const ANOMALIES_HEADERS  = ['Timestamp','TX_ID','Vendeur','Clé/Barcode','Nom article','Source','Type anomalie','Détails','Synced_From_Row','Resolved','Notes','Photo_URL'];
+// (#26) Types de vente : seule cette valeur déclenche la MAJ stock CENTRAL. Tout autre libellé
+// (vente privée / vendeur nommé) est archivé mais ne touche jamais CENTRAL (statut OK_NOSTOCK).
+const PRO_SALE_TYPE      = 'Gardien Vente Pro';
+// (#26) Liste partagée des vendeurs ajoutés à la volée (append-only), vidée au 🏁.
+const SHEET_EVENT_SELLERS  = 'event_sellers';
+const EVENT_SELLERS_HEADERS = ['Vendeur', 'Ajouté_par', 'Timestamp'];
+
+// Vrai si le libellé de type de vente correspond à la vente Pro (résolution tolérante accents/casse).
+function isProSaleType(s) {
+  return normAccent((s || '').toString().trim()) === normAccent(PRO_SALE_TYPE);
+}
 
 async function verifyEventsSchema() {
   // Vérifie/répare les en-têtes des 3 onglets opérationnels.
@@ -1330,9 +1359,10 @@ async function verifyEventsSchema() {
   // Cache les infos de schéma ventes pour le sync
   salesHeaderInfo = {
     hasSync: true,
-    syncedCol:   VENTES_HEADERS.indexOf('Synced')   + 1,
-    syncedAtCol: VENTES_HEADERS.indexOf('SyncedAt') + 1,
-    headerCount: VENTES_HEADERS.length
+    syncedCol:    VENTES_HEADERS.indexOf('Synced')     + 1,
+    syncedAtCol:  VENTES_HEADERS.indexOf('SyncedAt')   + 1,
+    typeVenteCol: VENTES_HEADERS.indexOf('Type_Vente') + 1,   // (#26) col O
+    headerCount:  VENTES_HEADERS.length
   };
   return true;
 }
@@ -1525,8 +1555,24 @@ async function ensureStockPublicTab() {
   }
 }
 
+// (#26) Garantit l'onglet partagé des vendeurs ajoutés à la volée (+ en-tête). Les vendeurs y
+// appendent (Éditeur sur EVENTS) ; le Master le vide au 🏁.
+async function ensureEventSellersTab() {
+  const meta = await sheetsRequest('GET',
+    `https://sheets.googleapis.com/v4/spreadsheets/${EVENTS_GSHEET_ID}?fields=sheets.properties`);
+  const exists = (meta.sheets || []).some(s => s.properties.title === SHEET_EVENT_SELLERS);
+  if (!exists) {
+    await sheetsRequest('POST',
+      `https://sheets.googleapis.com/v4/spreadsheets/${EVENTS_GSHEET_ID}:batchUpdate`,
+      { requests: [{ addSheet: { properties: { title: SHEET_EVENT_SELLERS } } }] });
+    await sheetsUpdate(a1(SHEET_EVENT_SELLERS, 'A1:C1'), [EVENT_SELLERS_HEADERS], 'RAW', EVENTS_GSHEET_ID);
+    logEvent('info', 'Onglet event_sellers créé dans EVENTS');
+  }
+}
+
 async function publishStockView() {
   await ensureStockPublicTab();
+  await ensureEventSellersTab();   // (#26) onglet partagé des vendeurs ad-hoc
 
   // 1. Lignes stock (cartes + scellés) à partir des caches déjà chargés
   // (1.18.0) col K = DateEntree (ISO) pour les CARTES uniquement → pastille ancienneté côté Sales.
@@ -1968,7 +2014,8 @@ async function masterSyncTick(forced = false) {
     rows.forEach((row, i) => {
       const synced = (row[syncedColIdx0] || '').toString().trim();
       if (!synced) { pending.push({ rowIdx: i + 2, row }); return; }
-      if (synced === 'OK' || synced === 'OK_MANUAL' || synced === 'OK_RB' || synced === 'OK_MANUAL_RB') {
+      if (synced === 'OK' || synced === 'OK_MANUAL' || synced === 'OK_RB' || synced === 'OK_MANUAL_RB'
+          || synced === 'OK_NOSTOCK' || synced === 'OK_NOSTOCK_RB') {
         const sig = saleSignature(row);
         if (sig) appliedSig.add(sig);
       }
@@ -2045,7 +2092,7 @@ async function masterSyncTick(forced = false) {
             // laissé pending — réévalué au prochain tick (l'originale s'applique d'abord)
           } else {
             await markSyncedRow(p.rowIdx, rbResult.status);
-            if (rbResult.status === 'OK_RB' || rbResult.status === 'OK_MANUAL_RB') {
+            if (rbResult.status === 'OK_RB' || rbResult.status === 'OK_MANUAL_RB' || rbResult.status === 'OK_NOSTOCK_RB') {
               processed++;
               if (sig) appliedSig.add(sig); // {tx-RB}|key|src → dédup d'un -RB dupliqué
             } else { anomalies++; }
@@ -2053,6 +2100,24 @@ async function masterSyncTick(forced = false) {
           continue;
         }
         let result;
+        // (#26) Routage par TYPE DE VENTE (col O) AVANT le routage par source.
+        const typeVente = (row[salesHeaderInfo.typeVenteCol - 1] || '').toString().trim();
+        if (!typeVente) {
+          // Type manquant → jamais de MAJ stock (pas de "devine Pro"). Anomalie pour réconciliation.
+          await writeAnomaly(p.rowIdx, row, 'TYPE_VENTE_MANQUANT',
+            'Vente sans type de vente — aucune MAJ stock appliquée, à réconcilier');
+          await markSyncedRow(p.rowIdx, 'ANOMALY_NO_SALETYPE');
+          anomalies++;
+          continue;
+        }
+        if (!isProSaleType(typeVente)) {
+          // Vente hors-stock (privée / vendeur nommé) → archivée, jamais répercutée sur CENTRAL.
+          await markSyncedRow(p.rowIdx, 'OK_NOSTOCK');
+          processed++;
+          if (sig) appliedSig.add(sig);  // dédup d'un éventuel ré-append (relecture inconnue côté Sales)
+          continue;
+        }
+        // "Gardien Vente Pro" → comportement nominal : routage par source.
         if      (source === 'cartes') result = await applyCardSale(p.rowIdx, row);
         else if (source === 'scelle' || source === 'scellé') result = await applySealedSale(p.rowIdx, row);
         else if (source === 'manuel') result = await applyManualSale(p.rowIdx, row);
@@ -2349,6 +2414,11 @@ async function applyRollback(rowIdx, rbRow, appliedSig, allRows, syncedColIdx0) 
   let src = (rbRow[11] || '').toString().trim().toLowerCase(); if (src === 'scellé') src = 'scelle';
   const key = (rbRow[4] || '').toString().trim();
 
+  // (#26) Le -RB porte le Type_Vente de la vente d'origine (recopié par Sales). Une vente hors-stock
+  // (privée / vendeur nommé) n'a JAMAIS touché CENTRAL → son annulation est un no-op CENTRAL.
+  const typeVente = (rbRow[salesHeaderInfo.typeVenteCol - 1] || '').toString().trim();
+  if (typeVente && !isProSaleType(typeVente)) return { status: 'OK_NOSTOCK_RB' };
+
   if (src === 'manuel' || src === 'inconnu') return { status: 'OK_MANUAL_RB' }; // hors stock → rien à inverser
   if (src !== 'cartes' && src !== 'scelle') return { status: 'WARN_UNKNOWN_SOURCE' };
 
@@ -2530,7 +2600,7 @@ async function loadStats() {
   if (!isAuth() || !isAuthorizedMaster) return;
   document.getElementById('statsLastUpdate').textContent = 'Chargement…';
   try {
-    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 16);
+    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 17);
     const data = await sheetsGet(a1(SHEET_SALES, `A:${lastCol}`), EVENTS_GSHEET_ID);
     const rows = data.values || [];
     const allData = rows.slice(1);  // skip header
@@ -2785,15 +2855,20 @@ function renderSalesLog(rows) {
     const vendor = (r[1] || '').split(' ')[0];
     const name = r[5] || '—';
     const prix = parseFloat(r[10] || 0);
-    const synced = (r[14] || '').toString();   // col O = Synced (schéma 1.6.0)
+    // (#26) Synced n'est plus en col O (= Type_Vente) : résolu via salesHeaderInfo.
+    const syncedIdx = (salesHeaderInfo ? salesHeaderInfo.syncedCol : 16) - 1;
+    const synced = (r[syncedIdx] || '').toString();
+    const typeVente = salesHeaderInfo ? (r[salesHeaderInfo.typeVenteCol - 1] || '').toString().trim() : '';
     let icon = '';
     if (synced.startsWith('ANOMALY_'))      icon = ' ⚠';
-    else if (synced === 'OK' || synced === 'OK_MANUAL') icon = ' ✓';
+    else if (synced === 'OK' || synced === 'OK_MANUAL' || synced === 'OK_NOSTOCK') icon = ' ✓';
     else                                    icon = ' ⏳';
+    const typeBadge = typeVente ? `<span class="sale-vendor" style="color:var(--muted);">${esc(typeVente)}</span>` : '';
     return `<div class="sale-row">
       <span class="sale-time">${esc(time)}${icon}</span>
       <span class="sale-vendor">${esc(vendor)}</span>
       <span class="sale-name">${esc(name)}</span>
+      ${typeBadge}
       <span class="sale-price">${parseFloat(prix.toFixed(2))}€</span>
     </div>`;
   }).join('');
@@ -2856,14 +2931,15 @@ function closeCloseEventModal() {
 }
 async function loadCloseSummary() {
   try {
-    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 16);
+    const lastCol = colIdx2letter(salesHeaderInfo ? salesHeaderInfo.headerCount : 17);
     const [salesR, anomR] = await Promise.all([
       sheetsGet(a1(SHEET_SALES, `A:${lastCol}`), EVENTS_GSHEET_ID),
       sheetsGet(a1(SHEET_ANOMALIES, `A:L`), EVENTS_GSHEET_ID),
     ]);
     const sales = (salesR.values || []).slice(1);
     const anoms = (anomR.values || []).slice(1);
-    const pending = sales.filter(r => !(r[14] || '').toString().trim()).length;  // col O = Synced (schéma 1.6.0)
+    const syncedIdx = (salesHeaderInfo ? salesHeaderInfo.syncedCol : 16) - 1;  // (#26) plus r[14]
+    const pending = sales.filter(r => !(r[syncedIdx] || '').toString().trim()).length;
     const totalCA = sales.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
     const txs = new Set(sales.map(r => r[3])).size;
     document.getElementById('closeModalSummary').innerHTML = `
@@ -2925,6 +3001,9 @@ async function confirmCloseEvent() {
     btn.textContent = '⏳ Vidage buffers…';
     await sheetsClear(a1(SHEET_SALES, `A2:${lastCol}`), EVENTS_GSHEET_ID);
     await sheetsClear(a1(SHEET_ANOMALIES, `A2:L`), EVENTS_GSHEET_ID);
+    // (#26) Vide la liste partagée des vendeurs ad-hoc (best-effort : ne bloque pas la clôture).
+    try { await sheetsClear(a1(SHEET_EVENT_SELLERS, `A2:C`), EVENTS_GSHEET_ID); }
+    catch (e) { console.warn('clear event_sellers échoué (non bloquant):', e && e.message); }
 
     // 7. Vider event_name dans app_state
     await sheetsUpdate(a1(SHEET_STATE, `B2`), [['']], 'RAW', EVENTS_GSHEET_ID);

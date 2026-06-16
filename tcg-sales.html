@@ -1,10 +1,31 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.19.1 (Session #25 — 2026-06-15)
+  Version : 1.20.0 (Session #26 — 2026-06-16)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.20.0 2026-06-16  Session #26 (TYPES DE VENTE — JALON COORDONNÉ avec Master 1.20.0)
+         - [Feature #1] Le panneau "type de vente" ne propose plus des RÉGIMES TVA bruts mais des
+           TYPES DE VENTE lisibles et nominatifs : "Gardien Vente Pro", "Dams Vente Privée", "Ben",
+           "Sylvain" (base codée en dur) + "➕ Ajouter un vendeur…" (ajout à la volée). AUCUN défaut :
+           le sélecteur démarre sur un placeholder non sélectionnable et la validation est BLOQUÉE
+           tant qu'aucun type n'est choisi (comme l'acheteur obligatoire). Le choix PERSISTE d'une
+           vente à l'autre sur l'appareil (pas de re-pick forcé après chaque vente).
+         - [Sémantique] Seule "Gardien Vente Pro" déclenche la MAJ stock CENTRAL côté Master (TVA_Vente
+           = "Régime normal", écrit en col M par Sales). Tout autre libellé = vente HORS-STOCK :
+           archivée dans ventes_detail mais JAMAIS répercutée sur CENTRAL (statut Master OK_NOSTOCK).
+         - [Schéma] ventes_detail passe de A:N à A:O : nouvelle col O `Type_Vente` (le libellé choisi).
+           Synced/SyncedAt glissent en P/Q. NÉCESSITE Master ≥ 1.20.0 — déployer les deux ensemble,
+           HORS EVENT (après un 🏁, buffers vidés) pour que la réparation d'en-tête soit propre.
+         - [Partage] Onglet EVENTS `event_sellers` (append-only → zéro conflit d'écriture) : un vendeur
+           ajouté à la volée y est appended et devient visible par TOUS les vendeurs jusqu'au 🏁
+           (qui vide l'onglet). Lu au boot, au refresh stock, et à l'ouverture du sélecteur.
+         - [Cleanup] tvaVenteOptions / populateTvaSelect / resetTvaSelect retirés (le vendeur ne
+           choisit plus de régime TVA). Le Master peut continuer à publier la liste TVA en col L de
+           STOCK_PUBLIC — Sales l'ignore désormais.
+         - Aucune modification de l'outbox, du roll-back (le -RB porte le même Type_Vente → no-op
+           CENTRAL pour une vente hors-stock), du heartbeat ni de la sécurité.
   1.19.1 2026-06-15  Session #25 (correctif UI : hover "collé" sur boutons de remise tactile)
          - [Fix #6] Après désélection d'une remise, le bouton gardait un contour + chiffre orange
            (état :hover persistant sur tactile). Le :hover est désormais sous @media (hover: hover)
@@ -764,7 +785,7 @@ body::before{content:'';position:fixed;inset:0;
   .cart-item-name{font-size:.88rem;}
   .modal-panel{padding:18px;}
   .modal-field input,.modal-field select{font-size:1rem;padding:12px;}
-  #tvaVenteSelect,#buyerInput{font-size:1rem!important;}
+  #saleTypeSelect,#buyerInput{font-size:1rem!important;}
   .reel{width:42px;}
 }
 
@@ -894,8 +915,8 @@ body::before{content:'';position:fixed;inset:0;
             <span style="font-family:'Space Mono',monospace;font-size:.55rem;color:var(--muted);"> · Master</span>
           </div>
         </div>
-        <select id="tvaVenteSelect" class="bot-select">
-          <option value="Régime normal">Régime normal</option>
+        <select id="saleTypeSelect" class="bot-select" onchange="onSaleTypeChange()">
+          <option value="" disabled selected>— Type de vente —</option>
         </select>
       </div>
 
@@ -1008,6 +1029,25 @@ body::before{content:'';position:fixed;inset:0;
   </div>
 </div>
 
+<!-- Modal: Ajouter un vendeur (type de vente à la volée) [#26] -->
+<div class="modal-backdrop hidden" id="addSellerModal" onclick="if(event.target===this)closeAddSeller()">
+  <div class="modal-panel">
+    <div class="modal-title">➕ Ajouter un vendeur</div>
+    <div class="modal-subtitle">Visible par tous les vendeurs jusqu'à la clôture de l'event</div>
+    <div class="modal-info">
+      Crée un nouveau type de vente nominatif (vente hors-stock, non répercutée sur le stock central).
+    </div>
+    <div class="modal-field">
+      <label>Nom du vendeur</label>
+      <input id="newSellerName" type="text" placeholder="Ex: Hugo" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeAddSeller()">Annuler</button>
+      <button class="btn btn-primary" onclick="confirmAddSeller()">Ajouter</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Ajuster le total -->
 <div class="modal-backdrop hidden" id="adjustTotalModal" onclick="if(event.target===this)closeAdjustTotal()">
   <div class="modal-panel">
@@ -1087,7 +1127,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.19.1';
+const APP_VERSION      = '1.20.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1109,6 +1149,17 @@ const SHEET_ANOMALIES = 'anomalies';
 const SHEET_STATE     = 'app_state';
 // Vue stock publiée par master dans EVENTS (Option 1) : source du stock côté vendeur.
 const SHEET_STOCK_PUBLIC = 'STOCK_PUBLIC';
+// (#26) Liste partagée des vendeurs ajoutés à la volée (append-only). Vidée au 🏁 par le Master.
+const SHEET_EVENT_SELLERS = 'event_sellers';
+
+// (#26) TYPES DE VENTE — libellés lisibles présentés au vendeur (remplace le picker régime TVA).
+//  - PRO_SALE_TYPE = la SEULE valeur qui déclenche la MAJ stock CENTRAL côté Master.
+//  - Les autres (privée / vendeurs nommés) sont archivées mais ne touchent jamais CENTRAL.
+const PRO_SALE_TYPE   = 'Gardien Vente Pro';
+const BASE_SALE_TYPES = [PRO_SALE_TYPE, 'Dams Vente Privée', 'Ben', 'Sylvain'];
+// Régime TVA écrit en col M de ventes_detail (le vendeur ne le choisit plus ; Master l'utilise
+// pour une "Gardien Vente Pro", défaut "Régime normal" — décision #26).
+const SALE_TVA_DEFAULT = 'Régime normal';
 
 // Emails autorisés comme "Master" (master a sa propre app, on garde la constante pour info éventuelle)
 // (la détection master n'est plus utilisée dans l'app vendeur)
@@ -1162,8 +1213,11 @@ let masterLastChangeAt = 0;     // instant local (Date.now) du dernier changemen
 let lastConfirmedEvent = null;  // dernier nom d'event confirmé ('' = master en ligne sans event)
 let cartStampEvent     = null;  // event sous lequel le panier restauré au boot a été construit (null = inconnu)
 let cartEventReconciled = false;// réconciliation initiale (1ère confirmation post-boot) faite ?
-// Liste des régimes TVA_Vente proposables au vendeur (lue dans Scelle_Transactions!AG8:AG23, "réservée" exclu)
-let tvaVenteOptions = [];
+// (#26) Types de vente : vendeurs ajoutés à la volée (lus depuis EVENTS/event_sellers, append-only)
+// + type actuellement sélectionné (null = aucun → validation bloquée).
+let eventSellers     = [];      // libellés ajoutés en cours d'event (hors base codée en dur)
+let selectedSaleType = null;    // libellé choisi par le vendeur ('' / null = pas encore choisi)
+let eventSellersLoadedAt = 0;   // dernière lecture réussie de event_sellers
 
 // Cart : { uid, key, name, type, category, licence, qty, prixUnit, prixOriginal, source, rowRef?, currentQty?, sheetRow?, qtyColLetter?, etat?, dupStatus?, priceModified? }
 let cart         = [];
@@ -1395,10 +1449,16 @@ function updateValidateButton() {
   const hasBlockingDup = cart.some(c => c.dupStatus === 'red');
   // Bloque si acheteur requis (Master ne le fournit pas) et vide
   const buyerMissing = !getResolvedBuyer();
+  // (#26) Bloque tant qu'aucun type de vente n'est choisi
+  const saleTypeMissing = !getSaleType();
   if (hasBlockingDup) {
     btn.disabled = true;
     btn.classList.add('warn');
     btn.textContent = '⚠ Doublon impossible — retirez-le';
+  } else if (saleTypeMissing) {
+    btn.disabled = true;
+    btn.classList.add('warn');
+    btn.textContent = '⚠ Choisissez le type de vente';
   } else if (buyerMissing) {
     btn.disabled = true;
     btn.classList.add('warn');
@@ -1580,6 +1640,12 @@ async function sheetsGet(range, gsheetId = CENTRAL_GSHEET_ID) {
 async function sheetsAppend(range, values, inputOption = 'USER_ENTERED', gsheetId = CENTRAL_GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=${inputOption}&insertDataOption=INSERT_ROWS`;
   return sheetsRequest('POST', url, { values });
+}
+
+// (#26) Écriture par plage (PUT values). Utilisé pour poser l'en-tête de event_sellers à sa création.
+async function sheetsUpdate(range, values, inputOption = 'USER_ENTERED', gsheetId = CENTRAL_GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${gsheetId}/values/${encodeURIComponent(range)}?valueInputOption=${inputOption}`;
+  return sheetsRequest('PUT', url, { values });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1801,28 +1867,146 @@ setInterval(() => {
 }, HEARTBEAT_POLL_MS);
 
 // ═══════════════════════════════════════════════════════════════
-// TYPE DE VENTE (TVA_Vente) + ACHETEUR
+// TYPE DE VENTE (#26) + ACHETEUR
 // ═══════════════════════════════════════════════════════════════
-function populateTvaSelect() {
-  const sel = document.getElementById('tvaVenteSelect');
-  if (!sel) return;
-  const prev = sel.value;
-  sel.innerHTML = '';
-  tvaVenteOptions.forEach(opt => {
-    const o = document.createElement('option');
-    o.value = opt; o.textContent = opt;
-    sel.appendChild(o);
-  });
-  // Restaure la sélection précédente si encore présente, sinon défaut "Régime normal"
-  const def = tvaVenteOptions.find(o => normAccent(o) === normAccent('Régime normal')) || tvaVenteOptions[0];
-  sel.value = (prev && tvaVenteOptions.includes(prev)) ? prev : def;
+// Sentinelle de l'option "ajouter un vendeur" (jamais une vraie valeur de vente).
+const ADD_SELLER_SENTINEL = '__add_seller__';
+
+// Liste affichée = base codée en dur ∪ vendeurs ajoutés à la volée, dédupliquée (accents/casse).
+function allSaleTypes() {
+  const seen = new Set();
+  const out = [];
+  for (const t of [...BASE_SALE_TYPES, ...eventSellers]) {
+    const v = (t || '').toString().trim();
+    if (!v) continue;
+    const k = normAccent(v);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(v);
+  }
+  return out;
 }
 
-function resetTvaSelect() {
-  const sel = document.getElementById('tvaVenteSelect');
+// (Re)construit le <select>. Conserve la sélection courante si elle existe encore ; sinon laisse
+// le placeholder (AUCUN défaut — le vendeur DOIT choisir, décision #26).
+function populateSaleTypeSelect() {
+  const sel = document.getElementById('saleTypeSelect');
   if (!sel) return;
-  const def = tvaVenteOptions.find(o => normAccent(o) === normAccent('Régime normal')) || tvaVenteOptions[0];
-  if (def) sel.value = def;
+  const types = allSaleTypes();
+  sel.innerHTML = '';
+  // Placeholder non sélectionnable
+  const ph = document.createElement('option');
+  ph.value = ''; ph.textContent = '— Type de vente —'; ph.disabled = true;
+  sel.appendChild(ph);
+  types.forEach(t => {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = t;
+    sel.appendChild(o);
+  });
+  // Option d'ajout à la volée (toujours en dernier)
+  const add = document.createElement('option');
+  add.value = ADD_SELLER_SENTINEL; add.textContent = '➕ Ajouter un vendeur…';
+  sel.appendChild(add);
+  // Restaure la sélection si toujours présente, sinon placeholder
+  if (selectedSaleType && types.some(t => normAccent(t) === normAccent(selectedSaleType))) {
+    sel.value = types.find(t => normAccent(t) === normAccent(selectedSaleType));
+  } else {
+    selectedSaleType = null;
+    sel.value = '';
+  }
+  updateValidateButton();
+}
+
+// Changement du sélecteur : soit on choisit un type, soit on déclenche l'ajout d'un vendeur.
+function onSaleTypeChange() {
+  const sel = document.getElementById('saleTypeSelect');
+  if (!sel) return;
+  if (sel.value === ADD_SELLER_SENTINEL) {
+    // Revenir à la sélection précédente le temps de la saisie, puis ouvrir la modale.
+    sel.value = selectedSaleType || '';
+    openAddSeller();
+    return;
+  }
+  selectedSaleType = sel.value || null;
+  updateValidateButton();
+}
+
+// Type de vente effectivement retenu pour la vente (null si non choisi).
+function getSaleType() {
+  return (selectedSaleType && selectedSaleType.trim()) ? selectedSaleType.trim() : null;
+}
+
+// Lit la liste partagée des vendeurs ajoutés (EVENTS/event_sellers, col A, hors en-tête).
+// Best-effort : un échec (onglet absent, réseau) laisse la base intacte.
+async function loadEventSellers() {
+  if (!isAuth()) return;
+  try {
+    const r = await sheetsGet(a1(SHEET_EVENT_SELLERS, 'A2:A'), EVENTS_GSHEET_ID);
+    const names = (r.values || []).map(row => (row[0] || '').toString().trim()).filter(Boolean);
+    // Dédup (un même vendeur a pu être appended plusieurs fois — append-only)
+    const seen = new Set(); eventSellers = [];
+    for (const n of names) { const k = normAccent(n); if (!seen.has(k)) { seen.add(k); eventSellers.push(n); } }
+    eventSellersLoadedAt = Date.now();
+    populateSaleTypeSelect();
+  } catch (e) {
+    logEvent('warn', 'lecture event_sellers impossible', { err: e.message });
+  }
+}
+
+// Crée l'onglet event_sellers (+ en-tête) s'il manque. Les vendeurs ont l'accès Éditeur sur EVENTS.
+async function ensureEventSellersTab() {
+  const meta = await sheetsRequest('GET',
+    `https://sheets.googleapis.com/v4/spreadsheets/${EVENTS_GSHEET_ID}?fields=sheets.properties`);
+  const exists = (meta.sheets || []).some(s => s.properties.title === SHEET_EVENT_SELLERS);
+  if (!exists) {
+    await sheetsRequest('POST',
+      `https://sheets.googleapis.com/v4/spreadsheets/${EVENTS_GSHEET_ID}:batchUpdate`,
+      { requests: [{ addSheet: { properties: { title: SHEET_EVENT_SELLERS } } }] });
+    await sheetsUpdate(a1(SHEET_EVENT_SELLERS, 'A1:C1'),
+      [['Vendeur', 'Ajouté_par', 'Timestamp']], 'RAW', EVENTS_GSHEET_ID);
+  }
+}
+
+function openAddSeller() {
+  const inp = document.getElementById('newSellerName');
+  if (inp) inp.value = '';
+  document.getElementById('addSellerModal').classList.remove('hidden');
+  if (inp) setTimeout(() => inp.focus(), 50);
+}
+function closeAddSeller() {
+  document.getElementById('addSellerModal').classList.add('hidden');
+  focusScan();
+}
+
+// Ajoute un vendeur : sélection locale immédiate (optimiste) + append partagé (append-only).
+async function confirmAddSeller() {
+  const inp = document.getElementById('newSellerName');
+  const name = (inp ? inp.value : '').trim();
+  if (!name) { showToast('⚠ Saisissez un nom', true); return; }
+  // Collision avec la sentinelle / placeholder
+  if (name === ADD_SELLER_SENTINEL || normAccent(name) === normAccent('— Type de vente —')) {
+    showToast('⚠ Nom invalide', true); return;
+  }
+  // Ajout local immédiat (visible tout de suite sur cet appareil)
+  if (!allSaleTypes().some(t => normAccent(t) === normAccent(name))) eventSellers.push(name);
+  selectedSaleType = name;
+  populateSaleTypeSelect();
+  const sel = document.getElementById('saleTypeSelect'); if (sel) sel.value = name;
+  updateValidateButton();
+  closeAddSeller();
+  // Partage best-effort (crée l'onglet au besoin, puis append). N'empêche pas la vente locale.
+  try {
+    if (!isAuth()) throw new Error('non connecté');
+    await ensureEventSellersTab();
+    await sheetsAppend(a1(SHEET_EVENT_SELLERS, 'A:C'),
+      [[ safeForSheets(name), safeForSheets(gUserName || gUserEmail || ''), new Date().toISOString() ]],
+      'RAW', EVENTS_GSHEET_ID);
+    logEvent('info', 'vendeur ajouté', { name });
+    showToast(`✓ Vendeur "${name}" ajouté (visible par tous)`);
+  } catch (e) {
+    logEvent('warn', 'partage vendeur échoué (local conservé)', { name, err: e.message });
+    showToast('⚠ Vendeur ajouté localement — partage à réessayer', true);
+  }
 }
 
 // Le nom d'event publié par le Master (app_state col B) impose l'acheteur :
@@ -1887,13 +2071,8 @@ async function loadStockCache() {
 
     stockCacheCards.clear();
     stockCacheSealed.clear();
-    const tvaRaw = [];
 
     for (const row of rows) {
-      // Option TVA (col L = index 11) — indépendante des lignes de stock
-      const tv = (row[11] || '').toString().trim();
-      if (tv) tvaRaw.push(tv);
-
       const key = (row[0] || '').toString().trim();
       if (!key) continue;
       const kind     = (row[1] || '').toString().trim().toLowerCase();
@@ -1915,19 +2094,9 @@ async function loadStockCache() {
       }
     }
 
-    // Régimes TVA_Vente proposables : master publie la liste brute ; on applique le même filtre qu'avant.
-    const seen = new Set();
-    tvaVenteOptions = tvaRaw.filter(v => {
-      if (!v) return false;
-      if (isReservedValue(v)) return false;          // "réservée" = verrou, jamais un choix de vente
-      if (isNotForSaleStatus(v)) return false;       // "pas vendu" = statut, pas un régime TVA
-      const k = normAccent(v);
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-    if (tvaVenteOptions.length === 0) tvaVenteOptions = ['Régime normal'];
-    populateTvaSelect();
+    // (#26) La liste TVA brute (col L de STOCK_PUBLIC) n'est plus consommée par Sales : le vendeur
+    // ne choisit plus de régime. On rafraîchit en revanche la liste partagée des vendeurs ajoutés.
+    loadEventSellers();
 
     lastCacheRefresh = Date.now();
     updateCachePill('fresh');
@@ -2305,7 +2474,8 @@ function clearCartSilent() {
   // Vide sans confirmation ni snapshot (après validation)
   cart = [];
   renderCart();
-  resetTvaSelect(); // le type de vente revient à "Régime normal" pour la vente suivante
+  // (#26) Le type de vente PERSISTE d'une vente à l'autre sur l'appareil (pas de re-pick forcé) :
+  // on ne le réinitialise pas ici. Le vendeur change de type uniquement s'il le souhaite.
   // Réinitialise l'acheteur : on repart du défaut (nom d'event) s'il existe, sinon champ vide
   const bi = document.getElementById('buyerInput');
   if (bi) bi.value = '';
@@ -2933,9 +3103,15 @@ async function validateSale() {
     if (input && !input.classList.contains('hidden')) input.focus();
     return;
   }
-  // Type de vente (TVA_Vente) — défaut "Régime normal"
-  const tvaSel = document.getElementById('tvaVenteSelect');
-  const tvaVente = (tvaSel && tvaSel.value) ? tvaSel.value : 'Régime normal';
+  // (#26) Type de vente obligatoire — le vendeur doit avoir fait un choix explicite.
+  const saleType = getSaleType();
+  if (!saleType) {
+    showToast('⚠ Choisissez le type de vente avant de valider', true);
+    return;
+  }
+  // TVA_Vente (col M) : le vendeur ne choisit plus le régime — valeur par défaut, le Master tranche
+  // pour une "Gardien Vente Pro" (décision #26 : toujours "Régime normal").
+  const tvaVente = SALE_TVA_DEFAULT;
 
   const btn = document.getElementById('btnValidate');
   btn.disabled = true;
@@ -2947,7 +3123,7 @@ async function validateSale() {
   const txId = now.getTime().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
   // Build rows : 1 ligne par item du panier (quantité = c.qty)
-  // Schéma ventes_detail : A:N — D=txId, M=TVA_Vente, N=Acheteur (Synced/SyncedAt = O/P, Master)
+  // Schéma ventes_detail : A:O — D=txId, M=TVA_Vente, N=Acheteur, O=Type_Vente (Synced/SyncedAt = P/Q, Master)
   const rows = cart.map(c => [
     ts,
     safeForSheets(gUserName),
@@ -2962,11 +3138,12 @@ async function validateSale() {
     Math.round(c.prixUnit * c.qty * 100) / 100,  // col K — total ligne arrondi 2 déc. (évite la micro-dérive flottante)
     c.source,
     safeForSheets(tvaVente),
-    safeForSheets(acheteur)
+    safeForSheets(acheteur),
+    safeForSheets(saleType)                       // col O — type de vente (#26)
   ]);
 
   const total = getCartTotal(); // capturer AVANT de vider
-  const payload = { range: a1(SHEET_SALES, 'A:N'), values: rows, ts, txId, total, tvaVente, acheteur, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
+  const payload = { range: a1(SHEET_SALES, 'A:O'), values: rows, ts, txId, total, tvaVente, acheteur, saleType, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
 
   // OUTBOX : on met TOUJOURS en file d'abord (état 'pending'), puis on tente l'envoi.
   // Rien n'est jamais perdu : tant que l'envoi n'est pas confirmé, l'entrée reste en file.
@@ -3067,8 +3244,9 @@ async function rollbackLastSale() {
 function sendRollbackCompensation(payload) {
   const rbTxId = payload.txId + '-RB';
   const ts = new Date().toISOString();
-  const tva = payload.tvaVente || 'Régime normal';
+  const tva = payload.tvaVente || SALE_TVA_DEFAULT;
   const buyer = payload.acheteur || '';
+  const saleType = payload.saleType || '';  // (#26) recopié → Master no-op CENTRAL si hors-stock
   // Une ligne -RB par article : qty négative ; col K = prix d'origine (cartes, à restaurer dans Q
   // par Master) ou total négatif (scellé/manuel, informatif — Master utilise |qty| + le txId estampillé).
   const rows = (payload.cartSnapshot || []).map(c => {
@@ -3079,10 +3257,11 @@ function sendRollbackCompensation(payload) {
       ts, safeForSheets(gUserName), safeForSheets(gUserEmail), rbTxId,
       safeForSheets(c.key), safeForSheets(c.name), safeForSheets(c.type),
       safeForSheets(c.category), safeForSheets(c.licence),
-      -c.qty, colK, c.source, safeForSheets(tva), safeForSheets(buyer)
+      -c.qty, colK, c.source, safeForSheets(tva), safeForSheets(buyer),
+      safeForSheets(saleType)   // col O
     ];
   });
-  const rbPayload = { range: a1(SHEET_SALES, 'A:N'), values: rows, ts, txId: rbTxId, total: -payload.total };
+  const rbPayload = { range: a1(SHEET_SALES, 'A:O'), values: rows, ts, txId: rbTxId, total: -payload.total };
   queueOfflineSale(rbPayload);
   logEvent('info', 'roll-back mis en file', { rbTxId, n: rows.length });
   showToast(`↶ Annulation envoyée (${rows.length} art.)`);
@@ -3097,7 +3276,7 @@ function sendRollbackCompensation(payload) {
 async function moveToAnomalies(entry, reason) {
   const p = entry.payload;
   const vals = p.values || [];
-  // vals[i] = [ts, vendeur, email, txId, clé, nom, type, cat, licence, qty, total, source, tva, acheteur]
+  // vals[i] = [ts, vendeur, email, txId, clé, nom, type, cat, licence, qty, total, source, tva, acheteur, typeVente]
   let rows = vals.map((r, idx) => [
     p.ts,                                       // A Timestamp
     p.txId,                                     // B TX_ID
@@ -3257,6 +3436,17 @@ async function init() {
   }
 
   updateNet();
+  // (#26) Sélecteur de type de vente : placeholder + base codée en dur dès le boot (avant auth).
+  populateSaleTypeSelect();
+  // Rafraîchit la liste partagée des vendeurs à l'ouverture du sélecteur (best-effort, anti-spam 5s).
+  const stSel = document.getElementById('saleTypeSelect');
+  if (stSel) {
+    const refreshSellers = () => {
+      if (isAuth() && (Date.now() - eventSellersLoadedAt) > 5000) loadEventSellers();
+    };
+    stSel.addEventListener('mousedown', refreshSellers);
+    stSel.addEventListener('focus', refreshSellers);
+  }
   // (#21 v1.12.0) Migration : purge de tout ancien jeton resté en clair sur le disque.
   lsClear(LS_TOKEN);
   // GIS : on initialise le client mais on NE déclenche PAS de demande automatique au boot.
