@@ -1,10 +1,17 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.22.2 (Session #26 — 2026-06-16)
+  Version : 1.23.0 (Session #26 — 2026-06-16)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.23.0 2026-06-16  Session #26 (Répartition à l'euro par article ; Sales seul)
+         - [Feature] Quand une remise % OU un ajustement manuel du total est appliqué, le prix de
+           CHAQUE ligne est arrondi à l'EURO (méthode du plus grand reste), de sorte que la somme des
+           lignes = total exact. Arrondi par LIGNE (pas par unité : pour qty>1 le total de ligne reste
+           entier, mais imposer un prix unitaire entier rendrait la somme parfois inatteignable).
+           L'ajustement manuel snappe désormais le total négocié à l'euro le plus proche.
+           applyTargetTotalCents() → applyTargetTotalEuros(). Aucun schéma touché.
   1.22.2 2026-06-16  Session #26 (CORRECTIF split : moyens d'ajout n'apparaissaient pas)
          - [Fix] Les chips "+ ajouter un moyen" étaient construits dans renderSplitMeans() (appelé
            seulement à l'ouverture/ajout/suppression), pas dans updateSplitFooter() (appelé à chaque
@@ -1181,7 +1188,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.22.2';
+const APP_VERSION      = '1.23.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -2739,7 +2746,7 @@ function applyDiscount(pct) {
   const base = cart.reduce((s, c) => s + (c.prixOriginal || 0) * c.qty, 0);
   if (base <= 0) { showToast('⚠ Rien à réduire', true); return; }
   const targetEuros = Math.ceil(base * (1 - pct / 100));   // arrondi euro supérieur
-  if (!applyTargetTotalCents(targetEuros * 100)) return;
+  if (!applyTargetTotalEuros(targetEuros)) return;          // (#26 v1.23.0) répartition à l'euro par ligne
   activeDiscountPct = pct;
   renderCart();
   updateDiscountButtons();
@@ -2970,23 +2977,27 @@ function attachPhotoToItem(item) {
 // Répartit un total CIBLE (en centimes) sur les articles, proportionnellement à leur
 // valeur de ligne actuelle, méthode du plus grand reste → total EXACT au centime.
 // Utilisé par les rouleaux (zone bas) et par le modal "± Total" (fallback).
-function applyTargetTotalCents(targetCents) {
+// (#26 v1.23.0) Répartit un total cible en EUROS ENTIERS sur les lignes du panier (méthode du
+// plus grand reste) : chaque ligne reçoit un total entier d'euros et Σ lignes = targetEuros exact.
+// Pour qty>1, le prix unitaire peut être fractionnaire mais le TOTAL de ligne reste entier
+// (donc col K, qui = round(prixUnit*qty), est un entier propre).
+function applyTargetTotalEuros(targetEuros) {
   if (cart.length === 0) return false;
-  targetCents = Math.max(0, Math.round(targetCents));
+  targetEuros = Math.max(0, Math.round(targetEuros));
   const weights = cart.map(c => c.prixUnit * c.qty);     // valeur de ligne actuelle
   const wTotal = weights.reduce((s, w) => s + w, 0);
   if (wTotal <= 0) { showToast('⚠ Impossible de répartir', true); return false; }
 
-  const ideal  = weights.map(w => targetCents * (w / wTotal));  // centimes réels
-  const lineC  = ideal.map(x => Math.floor(x));                 // centimes plancher
-  let leftover = targetCents - lineC.reduce((s, x) => s + x, 0);
+  const ideal  = weights.map(w => targetEuros * (w / wTotal));  // euros réels
+  const lineE  = ideal.map(x => Math.floor(x));                 // euros plancher
+  let leftover = targetEuros - lineE.reduce((s, x) => s + x, 0);
   const order = ideal
     .map((x, i) => ({ i, frac: x - Math.floor(x), w: weights[i] }))
     .sort((a, b) => (b.frac - a.frac) || (b.w - a.w));
-  for (let k = 0; k < leftover; k++) lineC[order[k].i]++;
+  for (let k = 0; k < leftover; k++) lineE[order[k].i]++;
 
   cart.forEach((c, i) => {
-    const lineEuros = lineC[i] / 100;
+    const lineEuros = lineE[i];                 // total de ligne, entier
     c.prixUnit = c.qty > 0 ? lineEuros / c.qty : lineEuros;
     c.priceModified = Math.abs(c.prixUnit - c.prixOriginal) > 0.005;
   });
@@ -3015,15 +3026,16 @@ function confirmAdjustTotal() {
   if (isNaN(raw) || raw < 0) { showToast('⚠ Total invalide', true); return; }
   if (cart.length === 0) { closeAdjustTotal(); return; }
 
-  const targetCents = Math.round(raw * 100);                 // au centime
-  if (targetCents === Math.round(cur * 100)) { closeAdjustTotal(); return; }  // inchangé
+  // (#26 v1.23.0) Le total négocié snappe à l'euro le plus proche → prix de chaque article à l'euro.
+  const targetEuros = Math.round(raw);
+  if (targetEuros === Math.round(cur)) { closeAdjustTotal(); return; }  // inchangé (à l'euro près)
 
-  if (!applyTargetTotalCents(targetCents)) return;
+  if (!applyTargetTotalEuros(targetEuros)) return;
 
   closeAdjustTotal();
   renderCart();
-  showToast('✓ Total ajusté à ' + formatPrice(targetCents / 100));
-  logEvent('info', 'Total ajusté (négociation)', { de: cur, vers: targetCents / 100 });
+  showToast('✓ Total ajusté à ' + formatPrice(targetEuros));
+  logEvent('info', 'Total ajusté (négociation)', { de: cur, vers: targetEuros });
 }
 
 document.getElementById('adjustNewTotal').addEventListener('keydown', e => {
