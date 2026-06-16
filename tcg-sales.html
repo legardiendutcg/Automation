@@ -1,10 +1,27 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.20.0 (Session #26 — 2026-06-16)
+  Version : 1.22.0 (Session #26 — 2026-06-16)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.22.0 2026-06-16  Session #26 (SPLIT DE PAIEMENT — JALON COORDONNÉ avec Master 1.22.0)
+         - [Feature #2] Paiement OBLIGATOIRE à chaque vente : "Valider la vente" (après ses verrous
+           habituels) ouvre un pop-up d'encaissement. Cash y est pré-rempli au total ; le vendeur
+           ventile entre les moyens, "reste à ventiler" affiché en continu, "Confirmer" actif
+           seulement quand la somme = total au centime → étape "Confirmer la vente ? Oui/Non".
+           Moyens proposés selon le type de vente (#1) :
+             • Gardien Vente Pro → Cash · QR code · Paypal Pro (entre proches) · CB
+             • hors-Pro          → Cash · Paypal Privé (entre proches) · QR code
+           Ajout d'un moyen = choix parmi les restants (pré-rempli au reste) ; 🗑 pour retirer ;
+           un moyen actif ne peut valoir 0. Fermeture (✕ / tap dehors) = annule l'encaissement.
+         - [Schéma] ventes_detail passe de A:O à A:T : 5 colonnes de paiement après Type_Vente
+           (P=Cash, Q=QR_code, R=Paypal_Pro, S=CB, T=Paypal_Prive). Synced/SyncedAt → U/V.
+           Montants (en €) portés UNIQUEMENT sur la 1ʳᵉ ligne de chaque vente → colonnes sommables
+           sans double comptage. NÉCESSITE Master ≥ 1.22.0 — déployer ensemble, HORS EVENT.
+         - [Roll-back] le -RB recopie la ventilation en NÉGATIF sur sa 1ʳᵉ ligne → compta nette juste.
+         - [Scan] le scan est ignoré pendant que le pop-up d'encaissement est ouvert (panier figé).
+         - Champs montants en ≥16px (clavier iOS) ; rappel double-clic gâchette si douchette BT.
   1.20.0 2026-06-16  Session #26 (TYPES DE VENTE — JALON COORDONNÉ avec Master 1.20.0)
          - [Feature #1] Le panneau "type de vente" ne propose plus des RÉGIMES TVA bruts mais des
            TYPES DE VENTE lisibles et nominatifs : "Gardien Vente Pro", "Dams Vente Privée", "Ben",
@@ -643,6 +660,23 @@ body::before{content:'';position:fixed;inset:0;
   font-size:16px;outline:none;transition:border-color .15s;}
 .modal-field input:focus{border-color:var(--accent);}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;}
+/* (#26 split) Pop-up d'encaissement */
+.pay-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.pay-row .pay-label{flex:1 1 auto;font-family:'Syne',sans-serif;font-size:.78rem;color:var(--fg);min-width:0;}
+.pay-row .pay-amt{flex:0 0 110px;width:110px;background:var(--bg);border:1px solid var(--border);
+  border-radius:8px;color:var(--fg);font-size:16px;padding:9px 10px;text-align:right;font-family:'Space Mono',monospace;}
+.pay-row .pay-amt:focus{border-color:var(--accent);outline:none;}
+.pay-row .pay-amt.invalid{border-color:var(--accent3,#ff6b6b);}
+.pay-row .pay-del{flex:0 0 auto;width:34px;height:34px;border:none;border-radius:8px;background:rgba(255,107,107,.15);
+  color:#ff8a8a;font-size:1rem;cursor:pointer;}
+.pay-add-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px;}
+.pay-chip{border:1px dashed var(--border);background:transparent;color:var(--fg);border-radius:999px;
+  padding:7px 12px;font-family:'Syne',sans-serif;font-size:.72rem;cursor:pointer;}
+.pay-chip:hover{border-color:var(--accent);}
+.pay-residual{font-family:'Space Mono',monospace;font-size:.8rem;text-align:right;margin-top:10px;padding-top:10px;
+  border-top:1px solid var(--border);}
+.pay-residual.ok{color:#5fe08a;}
+.pay-residual.bad{color:#ff8a8a;}
 /* (1.17.0) Bloc photo article (manuel / inconnu) */
 .photo-hint{font-family:'Syne',sans-serif;font-size:.62rem;color:var(--muted);text-transform:none;letter-spacing:0;font-weight:400;}
 .photo-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
@@ -1048,6 +1082,17 @@ body::before{content:'';position:fixed;inset:0;
   </div>
 </div>
 
+<!-- Modal: Encaissement (split paiement) [#26] -->
+<div class="modal-backdrop hidden" id="paymentSplitModal" onclick="if(event.target===this)closePaymentSplit()">
+  <div class="modal-panel">
+    <div class="modal-title">💳 Encaissement</div>
+    <div class="modal-subtitle" id="paySubtitle">—</div>
+    <div id="payMeans"></div>
+    <div class="pay-residual" id="payResidual"></div>
+    <div class="modal-actions" id="payActions"></div>
+  </div>
+</div>
+
 <!-- Modal: Ajuster le total -->
 <div class="modal-backdrop hidden" id="adjustTotalModal" onclick="if(event.target===this)closeAdjustTotal()">
   <div class="modal-panel">
@@ -1127,7 +1172,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.20.0';
+const APP_VERSION      = '1.22.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1160,6 +1205,20 @@ const BASE_SALE_TYPES = [PRO_SALE_TYPE, 'Dams Vente Privée', 'Ben', 'Sylvain'];
 // Régime TVA écrit en col M de ventes_detail (le vendeur ne le choisit plus ; Master l'utilise
 // pour une "Gardien Vente Pro", défaut "Régime normal" — décision #26).
 const SALE_TVA_DEFAULT = 'Régime normal';
+
+// (#26 split) Moyens de paiement. Les CLÉS = en-têtes des colonnes P→T de ventes_detail.
+const PAY_MEANS = {
+  Cash:         'Cash',
+  QR_code:      'QR code',
+  Paypal_Pro:   'Paypal Pro (entre proches)',
+  CB:           'CB',
+  Paypal_Prive: 'Paypal Privé (entre proches)',
+};
+// Ordre de cascade proposé selon le type de vente.
+const PAY_ORDER_PRO     = ['Cash', 'QR_code', 'Paypal_Pro', 'CB'];
+const PAY_ORDER_PRIVATE = ['Cash', 'Paypal_Prive', 'QR_code'];
+// Ordre PHYSIQUE des 5 colonnes de paiement dans ventes_detail (P,Q,R,S,T).
+const PAYMENT_COLS = ['Cash', 'QR_code', 'Paypal_Pro', 'CB', 'Paypal_Prive'];
 
 // Emails autorisés comme "Master" (master a sa propre app, on garde la constante pour info éventuelle)
 // (la détection master n'est plus utilisée dans l'app vendeur)
@@ -1218,6 +1277,10 @@ let cartEventReconciled = false;// réconciliation initiale (1ère confirmation 
 let eventSellers     = [];      // libellés ajoutés en cours d'event (hors base codée en dur)
 let selectedSaleType = null;    // libellé choisi par le vendeur ('' / null = pas encore choisi)
 let eventSellersLoadedAt = 0;   // dernière lecture réussie de event_sellers
+
+// (#26 split) État du pop-up d'encaissement (null = fermé).
+// { totalCents, order:[ids], active:[{id,cents}], saleType, acheteur, confirming:bool }
+let splitState = null;
 
 // Cart : { uid, key, name, type, category, licence, qty, prixUnit, prixOriginal, source, rowRef?, currentQty?, sheetRow?, qtyColLetter?, etat?, dupStatus?, priceModified? }
 let cart         = [];
@@ -2227,6 +2290,8 @@ document.addEventListener('focusout', () => {
 });
 
 async function processScan(rawValue) {
+  // (#26 split) Pendant l'encaissement, le panier est figé : on ignore les scans.
+  if (splitState) { showToast('⚠ Terminez l\'encaissement en cours', true); return; }
   const statusEl = document.getElementById('scanStatus');
   statusEl.textContent = 'Recherche de "' + rawValue.substring(0, 30) + '"…';
   scanZone.classList.add('scanning');
@@ -3087,15 +3152,27 @@ async function scanCameraLoop() {
 // ═══════════════════════════════════════════════════════════════
 // VALIDATE SALE
 // ═══════════════════════════════════════════════════════════════
-async function validateSale() {
+// ═══════════════════════════════════════════════════════════════
+// ENCAISSEMENT — split de paiement (#26, v1.22.0)
+// ═══════════════════════════════════════════════════════════════
+function eurToCents(v) {
+  const n = parseFloat(String(v == null ? '' : v).replace(/\s/g, '').replace(',', '.'));
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+}
+function centsToEur(c) { return (c / 100).toFixed(2).replace('.', ','); }
+function splitSumCents()     { return splitState ? splitState.active.reduce((s, m) => s + m.cents, 0) : 0; }
+function splitResidualCents(){ return splitState ? splitState.totalCents - splitSumCents() : 0; }
+function splitIsBalanced()   { return splitState && splitResidualCents() === 0
+                                      && splitState.active.length >= 1
+                                      && splitState.active.every(m => m.cents > 0); }
+
+// "Valider la vente" : verrous habituels puis OUVERTURE du pop-up d'encaissement (#26 : paiement obligatoire).
+function validateSale() {
   if (cart.length === 0) return;
   if (!isAuth()) { showToast('⚠ Connectez-vous d\'abord', true); return; }
-  // Check blocking dup (red)
   if (cart.some(c => c.dupStatus === 'red')) {
-    showToast('⚠ Retirez les doublons rouges avant validation', true);
-    return;
+    showToast('⚠ Retirez les doublons rouges avant validation', true); return;
   }
-  // Acheteur obligatoire (saisi par le vendeur si le Master n'en fournit pas)
   const acheteur = getResolvedBuyer();
   if (!acheteur) {
     showToast('⚠ Renseignez l\'acheteur avant de valider', true);
@@ -3103,60 +3180,159 @@ async function validateSale() {
     if (input && !input.classList.contains('hidden')) input.focus();
     return;
   }
-  // (#26) Type de vente obligatoire — le vendeur doit avoir fait un choix explicite.
   const saleType = getSaleType();
-  if (!saleType) {
-    showToast('⚠ Choisissez le type de vente avant de valider', true);
-    return;
-  }
-  // TVA_Vente (col M) : le vendeur ne choisit plus le régime — valeur par défaut, le Master tranche
-  // pour une "Gardien Vente Pro" (décision #26 : toujours "Régime normal").
-  const tvaVente = SALE_TVA_DEFAULT;
+  if (!saleType) { showToast('⚠ Choisissez le type de vente avant de valider', true); return; }
+  openPaymentSplit(saleType, acheteur);
+}
 
+function openPaymentSplit(saleType, acheteur) {
+  const totalCents = Math.round(getCartTotal() * 100);
+  const order = isProSaleType(saleType) ? PAY_ORDER_PRO : PAY_ORDER_PRIVATE;
+  splitState = {
+    totalCents, order, saleType, acheteur, confirming: false,
+    active: [{ id: order[0], cents: totalCents }],   // Cash pré-rempli au total
+  };
+  const nItems = cart.reduce((s, c) => s + c.qty, 0);
+  document.getElementById('paySubtitle').textContent =
+    `${nItems} article${nItems > 1 ? 's' : ''} · Total ${formatPrice(getCartTotal())}`;
+  document.getElementById('paymentSplitModal').classList.remove('hidden');
+  renderSplitMeans();
+  updateSplitFooter();
+}
+
+function closePaymentSplit() {
+  document.getElementById('paymentSplitModal').classList.add('hidden');
+  splitState = null;
+  focusScan();
+}
+
+function renderSplitMeans() {
+  if (!splitState) return;
+  const wrap = document.getElementById('payMeans');
+  let html = splitState.active.map(m => `
+    <div class="pay-row">
+      <span class="pay-label">${PAY_MEANS[m.id] || m.id}</span>
+      <input class="pay-amt" type="text" inputmode="decimal" data-id="${m.id}"
+             value="${centsToEur(m.cents)}" oninput="onSplitAmount('${m.id}', this.value)">
+      <button class="pay-del" onclick="removeSplitMean('${m.id}')" title="Retirer">🗑</button>
+    </div>`).join('');
+  // Chips d'ajout : moyens restants (dans l'ordre), seulement si reste > 0
+  const used = new Set(splitState.active.map(m => m.id));
+  const remaining = splitState.order.filter(id => !used.has(id));
+  if (splitResidualCents() > 0 && remaining.length) {
+    html += `<div class="pay-add-row">` +
+      remaining.map(id => `<button class="pay-chip" onclick="addSplitMean('${id}')">+ ${PAY_MEANS[id] || id}</button>`).join('') +
+      `</div>`;
+  }
+  wrap.innerHTML = html;
+}
+
+function onSplitAmount(id, val) {
+  if (!splitState) return;
+  const m = splitState.active.find(x => x.id === id);
+  if (m) m.cents = eurToCents(val);
+  updateSplitFooter();
+}
+
+function addSplitMean(id) {
+  if (!splitState) return;
+  const res = splitResidualCents();
+  splitState.active.push({ id, cents: res > 0 ? res : 0 });
+  renderSplitMeans();
+  updateSplitFooter();
+}
+
+function removeSplitMean(id) {
+  if (!splitState) return;
+  splitState.active = splitState.active.filter(m => m.id !== id);
+  renderSplitMeans();
+  updateSplitFooter();
+}
+
+function updateSplitFooter() {
+  if (!splitState) return;
+  const res = splitResidualCents();
+  const resEl = document.getElementById('payResidual');
+  resEl.classList.remove('ok', 'bad');
+  if (res === 0)      { resEl.classList.add('ok');  resEl.textContent = 'Équilibré ✓'; }
+  else if (res > 0)   {                              resEl.textContent = `Reste à ventiler : ${centsToEur(res)} €`; }
+  else                { resEl.classList.add('bad'); resEl.textContent = `Trop perçu : ${centsToEur(-res)} €`; }
+  // Marque en rouge les montants à 0 (un moyen actif ne peut valoir 0)
+  document.querySelectorAll('#payMeans .pay-amt').forEach(inp => {
+    const m = splitState.active.find(x => x.id === inp.dataset.id);
+    inp.classList.toggle('invalid', !!m && m.cents <= 0);
+  });
+  const actions = document.getElementById('payActions');
+  if (splitState.confirming) {
+    actions.innerHTML =
+      `<span style="flex:1;align-self:center;font-family:'Syne',sans-serif;font-size:.8rem;">Confirmer la vente ?</span>
+       <button class="btn btn-secondary" onclick="backFromConfirm()">Non</button>
+       <button class="btn btn-primary" onclick="confirmSplitStep2()">Oui</button>`;
+  } else {
+    const dis = splitIsBalanced() ? '' : 'disabled';
+    actions.innerHTML =
+      `<button class="btn btn-secondary" onclick="closePaymentSplit()">Annuler</button>
+       <button class="btn btn-primary" ${dis} onclick="confirmSplitStep1()">Confirmer</button>`;
+  }
+}
+
+function confirmSplitStep1() {
+  if (!splitIsBalanced()) return;
+  splitState.confirming = true;
+  updateSplitFooter();
+}
+function backFromConfirm() {
+  if (!splitState) return;
+  splitState.confirming = false;
+  updateSplitFooter();
+}
+function confirmSplitStep2() {
+  if (!splitState || !splitIsBalanced()) return;
+  const payCents = {};
+  splitState.active.forEach(m => { payCents[m.id] = (payCents[m.id] || 0) + m.cents; });
+  const { saleType, acheteur } = splitState;
+  closePaymentSplit();
+  finalizeSale(saleType, acheteur, payCents);
+}
+
+// Enregistre réellement la vente (outbox), avec la ventilation de paiement.
+function finalizeSale(saleType, acheteur, payCents) {
+  const tvaVente = SALE_TVA_DEFAULT;  // (#26) Master tranche le régime pour une vente Pro
   const btn = document.getElementById('btnValidate');
   btn.disabled = true;
 
   const now = new Date();
   const ts  = now.toISOString();
-  // txId unique : horodatage + suffixe aléatoire. Sert de CLÉ D'IDEMPOTENCE :
-  // c'est lui qu'on relit dans ventes_detail!D pour savoir si l'envoi a abouti.
   const txId = now.getTime().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
-  // Build rows : 1 ligne par item du panier (quantité = c.qty)
-  // Schéma ventes_detail : A:O — D=txId, M=TVA_Vente, N=Acheteur, O=Type_Vente (Synced/SyncedAt = P/Q, Master)
-  const rows = cart.map(c => [
-    ts,
-    safeForSheets(gUserName),
-    safeForSheets(gUserEmail),
-    txId,
-    safeForSheets(c.key),
-    safeForSheets(c.name),
-    safeForSheets(c.type),
-    safeForSheets(c.category),
-    safeForSheets(c.licence),
+  // Schéma ventes_detail A:T — paiements (P:T) UNIQUEMENT sur la 1ʳᵉ ligne (sommables sans double comptage).
+  const rows = cart.map((c, i) => [
+    ts, safeForSheets(gUserName), safeForSheets(gUserEmail), txId,
+    safeForSheets(c.key), safeForSheets(c.name), safeForSheets(c.type),
+    safeForSheets(c.category), safeForSheets(c.licence),
     c.qty,
-    Math.round(c.prixUnit * c.qty * 100) / 100,  // col K — total ligne arrondi 2 déc. (évite la micro-dérive flottante)
+    Math.round(c.prixUnit * c.qty * 100) / 100,   // col K
     c.source,
-    safeForSheets(tvaVente),
-    safeForSheets(acheteur),
-    safeForSheets(saleType)                       // col O — type de vente (#26)
+    safeForSheets(tvaVente),                       // col M
+    safeForSheets(acheteur),                       // col N
+    safeForSheets(saleType),                       // col O (#26)
+    ...PAYMENT_COLS.map(col => (i === 0 && payCents[col] > 0) ? Math.round(payCents[col]) / 100 : '')  // P:T
   ]);
 
-  const total = getCartTotal(); // capturer AVANT de vider
-  const payload = { range: a1(SHEET_SALES, 'A:O'), values: rows, ts, txId, total, tvaVente, acheteur, saleType, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
+  const total = getCartTotal();
+  const payload = { range: a1(SHEET_SALES, 'A:T'), values: rows, ts, txId, total, tvaVente, acheteur, saleType,
+                    split: payCents, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
 
-  // OUTBOX : on met TOUJOURS en file d'abord (état 'pending'), puis on tente l'envoi.
-  // Rien n'est jamais perdu : tant que l'envoi n'est pas confirmé, l'entrée reste en file.
   queueOfflineSale(payload);
-  logEvent('info', 'vente mise en file', { txId, n: rows.length, total, online: navigator.onLine });
+  logEvent('info', 'vente mise en file', { txId, n: rows.length, total, split: payCents, online: navigator.onLine });
   clearCartSilent();
-  armRollback(payload); // (#27) propose ↶ Annuler pendant la fenêtre de rétractation
+  armRollback(payload);
   btn.textContent = '✓ Valider la vente';
   updateValidateButton();
 
   if (navigator.onLine && isAuth()) {
     showToast(`✓ Vente validée · envoi… (${rows.length} art.) · ${formatPrice(total)}`);
-    flushOfflineQueue(); // confirme / bascule en anomalies en arrière-plan
+    flushOfflineQueue();
   } else {
     showToast(`✓ Vente mise en file (${rows.length} art.) · ${formatPrice(total)}`);
   }
@@ -3247,9 +3423,10 @@ function sendRollbackCompensation(payload) {
   const tva = payload.tvaVente || SALE_TVA_DEFAULT;
   const buyer = payload.acheteur || '';
   const saleType = payload.saleType || '';  // (#26) recopié → Master no-op CENTRAL si hors-stock
+  const split = payload.split || {};         // (#26 split) ventilation à recopier en négatif
   // Une ligne -RB par article : qty négative ; col K = prix d'origine (cartes, à restaurer dans Q
   // par Master) ou total négatif (scellé/manuel, informatif — Master utilise |qty| + le txId estampillé).
-  const rows = (payload.cartSnapshot || []).map(c => {
+  const rows = (payload.cartSnapshot || []).map((c, i) => {
     const colK = (c.source === 'cartes')
       ? c.prixOriginal
       : -(Math.round(c.prixUnit * c.qty * 100) / 100);
@@ -3258,10 +3435,11 @@ function sendRollbackCompensation(payload) {
       safeForSheets(c.key), safeForSheets(c.name), safeForSheets(c.type),
       safeForSheets(c.category), safeForSheets(c.licence),
       -c.qty, colK, c.source, safeForSheets(tva), safeForSheets(buyer),
-      safeForSheets(saleType)   // col O
+      safeForSheets(saleType),   // col O
+      ...PAYMENT_COLS.map(col => (i === 0 && split[col] > 0) ? -(Math.round(split[col]) / 100) : '')  // P:T (négatif)
     ];
   });
-  const rbPayload = { range: a1(SHEET_SALES, 'A:O'), values: rows, ts, txId: rbTxId, total: -payload.total };
+  const rbPayload = { range: a1(SHEET_SALES, 'A:T'), values: rows, ts, txId: rbTxId, total: -payload.total };
   queueOfflineSale(rbPayload);
   logEvent('info', 'roll-back mis en file', { rbTxId, n: rows.length });
   showToast(`↶ Annulation envoyée (${rows.length} art.)`);
@@ -3276,7 +3454,7 @@ function sendRollbackCompensation(payload) {
 async function moveToAnomalies(entry, reason) {
   const p = entry.payload;
   const vals = p.values || [];
-  // vals[i] = [ts, vendeur, email, txId, clé, nom, type, cat, licence, qty, total, source, tva, acheteur, typeVente]
+  // vals[i] = [ts, vendeur, email, txId, clé, nom, type, cat, licence, qty, total, source, tva, acheteur, typeVente, Cash, QR_code, Paypal_Pro, CB, Paypal_Prive]
   let rows = vals.map((r, idx) => [
     p.ts,                                       // A Timestamp
     p.txId,                                     // B TX_ID
