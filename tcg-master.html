@@ -1,8 +1,14 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.18.0 (Session #25 — 2026-06-15)
+  Version : 1.18.1 (Session #25 — 2026-06-15)
 =============================================================
+  1.18.1 2026-06-15  Session #25 (correctif : colonne Origine cartes résolue par libellé)
+         - [Fix #5] La colonne `Origine` des cartes était lue en col A en dur → vide (elle est en
+           col F, et sa position comme la ligne d'en-tête varient). Désormais résolue PAR LIBELLÉ
+           d'en-tête (norm. accents/apostrophes) sur la ligne d'en-tête détectée dynamiquement,
+           puis lue par sa lettre calculée. Conforme au principe « jamais de lettre figée ».
+           Échec/absence de "Origine" → log warn, pastilles indispo, reste non bloqué.
   1.18.0 2026-06-15  Session #25 (publication DateEntree pour pastilles d'ancienneté ; JALON COORDONNÉ avec Sales 1.18.0)
          - [Feature #5] STOCK_PUBLIC publie une 11ᵉ colonne `DateEntree` (col K, ISO YYYY-MM-DD),
            extraite de `Origine` ("xxxx_Nom_Vendeur_DDMMYYYY") par parseOrigineDate(). Cartes
@@ -842,7 +848,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.18.0';
+const APP_VERSION      = '1.18.1';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1359,13 +1365,25 @@ async function loadStockCache() {
     // Read N..AF starting at header+1 (we need col D=clé, col P=statut, plus all the others)
     const cardData = await sheetsGet(a1(SHEET_CARDS, `C${cardHeaderRow + 1}:AF`), CENTRAL_GSHEET_ID);
     const rows = cardData.values || [];
-    // (1.18.0) Colonne A = Origine ("xxxx_Nom_Vendeur_DDMMYYYY") — lue À PART pour ne PAS
-    // toucher au mapping positionnel C:AF éprouvé. Alignée par index de ligne. Sert UNIQUEMENT
-    // à publier la DATE D'ENTRÉE dans STOCK_PUBLIC (jamais le nom de lot brut → confidentialité).
+    // (1.18.0 → corrigé 1.18.1) Colonne `Origine` ("xxxx_Nom_Vendeur_DDMMYYYY") résolue PAR
+    // LIBELLÉ D'EN-TÊTE, jamais par lettre figée : son emplacement (col F aujourd'hui) ET la
+    // ligne d'en-tête (≈140, qui DESCEND à chaque lot acheté) varient. On relit la ligne
+    // d'en-tête détectée, on y trouve l'index de "Origine", puis on lit cette colonne entière.
+    // Sert UNIQUEMENT à publier la DATE D'ENTRÉE (jamais le nom de lot brut → confidentialité).
     let originCol = [];
     try {
-      const originData = await sheetsGet(a1(SHEET_CARDS, `A${cardHeaderRow + 1}:A`), CENTRAL_GSHEET_ID);
-      originCol = (originData.values || []).map(r => (r[0] || '').toString());
+      const hdrRes = await sheetsGet(a1(SHEET_CARDS, `A${cardHeaderRow}:AF${cardHeaderRow}`), CENTRAL_GSHEET_ID);
+      const hdr = (hdrRes.values && hdrRes.values[0]) || [];
+      const norm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[‘’‚‛]/g, "'").trim().toLowerCase();
+      const originIdx = hdr.findIndex(h => norm(h) === 'origine');
+      if (originIdx >= 0) {
+        const colLetter = colIdx2letter(originIdx + 1);   // 0-based → lettre (F = index 5 → "F")
+        const originData = await sheetsGet(a1(SHEET_CARDS, `${colLetter}${cardHeaderRow + 1}:${colLetter}`), CENTRAL_GSHEET_ID);
+        originCol = (originData.values || []).map(r => (r[0] || '').toString());
+        logEvent('info', 'Colonne Origine (cartes) résolue par libellé', { colonne: colLetter, ligneEntete: cardHeaderRow });
+      } else {
+        logEvent('warn', 'Colonne "Origine" introuvable dans l\'en-tête cartes — pastilles ancienneté indispo', { ligneEntete: cardHeaderRow });
+      }
     } catch (e) {
       logEvent('warn', 'Lecture colonne Origine (cartes) échouée — pastilles ancienneté indispo', { message: e && e.message });
     }
