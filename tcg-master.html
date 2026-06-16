@@ -1,8 +1,20 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.20.0 (Session #26 — 2026-06-16)
+  Version : 1.21.0 (Session #26 — 2026-06-16)
 =============================================================
+  1.21.0 2026-06-16  Session #26 (Dashboard : panneau "CA par vendeur" + réagencement de la grille ; Master seul)
+         - [Feature] Nouveau donut "CA par vendeur" : CA ventilé par Type_Vente (col O de ventes_detail).
+           Réutilise renderDonut() → un vendeur ajouté à la volée reçoit une couleur de secours
+           automatiquement. Les lignes -RB portent le même Type_Vente → elles se déduisent du bon
+           segment (cohérent avec le CA total). Palette TYPE_COLORS : "Gardien Vente Pro" en jaune
+           accent pour ressortir. NÉCESSITE Sales ≥ 1.20.0 (émetteur de Type_Vente) — déjà déployé.
+         - [Layout] dash-grid réagencé : KPI en bandeau pleine largeur en haut, puis 3 colonnes —
+           donuts (catégorie+licence) à gauche sur toute la hauteur, donut vendeur + faits/ventes au
+           centre, "CA par heure" à droite sur toute la hauteur (désormais plus haut).
+           grid-template-areas : "kpis kpis kpis" / "donuts vendeur hours" / "donuts center hours".
+           Empilement mobile mis à jour (kpis → donuts → vendeur → center → hours).
+         - Sales NON touché (reste 1.20.0). Aucune modification de schéma, sync, sécurité.
   1.20.0 2026-06-16  Session #26 (TYPES DE VENTE — JALON COORDONNÉ avec Sales 1.20.0)
          - [Feature #1] ventes_detail passe de A:P à A:Q : nouvelle col O `Type_Vente` (libellé choisi
            par le vendeur). Synced/SyncedAt glissent en P/Q. Le Master résout Synced/SyncedAt PAR
@@ -557,10 +569,11 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 .cards-row .card{display:flex;flex-direction:column;}
 
 /* Grille stats */
-.dash-grid{display:grid;grid-template-columns:1.1fr 0.9fr 1.3fr;grid-template-rows:auto 1fr;gap:12px;
-  grid-template-areas:"kpis kpis hours" "donuts center hours";align-items:stretch;}
+.dash-grid{display:grid;grid-template-columns:1.05fr 1.05fr 1.05fr;grid-template-rows:auto 1fr 1fr;gap:12px;
+  grid-template-areas:"kpis kpis kpis" "donuts vendeur hours" "donuts center hours";align-items:stretch;}
 .area-kpis{grid-area:kpis;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
 .area-donuts{grid-area:donuts;display:flex;flex-direction:column;gap:12px;}
+.area-vendeur{grid-area:vendeur;}
 .area-center{grid-area:center;}
 .area-hours{grid-area:hours;}
 .dpanel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:11px 13px;min-width:0;display:flex;flex-direction:column;}
@@ -612,7 +625,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 
 @media(max-width:760px){
   .cards-row,.area-kpis{grid-template-columns:1fr 1fr;}
-  .dash-grid{grid-template-columns:1fr;grid-template-areas:"kpis" "donuts" "center" "hours";}
+  .dash-grid{grid-template-columns:1fr;grid-template-areas:"kpis" "donuts" "vendeur" "center" "hours";}
 }
 </style>
 </head>
@@ -701,6 +714,11 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
           <div class="pt">CA par licence</div>
           <div class="donut-wrap"><div id="donutLicSvg"></div><div class="legend two" id="donutLicLeg"></div></div>
         </div>
+      </div>
+      <!-- (#26) Donut CA par vendeur (Type_Vente) -->
+      <div class="area-vendeur dpanel">
+        <div class="pt">CA par vendeur</div>
+        <div class="donut-wrap"><div id="donutVendeurSvg"></div><div class="legend two" id="donutVendeurLeg"></div></div>
       </div>
       <!-- Center : ⭐ Faits marquants (convention) ⇄ 🏠 Récap comptoir (pas de nom d'event) -->
       <div class="area-center dpanel">
@@ -866,7 +884,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.20.0';
+const APP_VERSION      = '1.21.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -2631,6 +2649,13 @@ async function loadStats() {
     allData.forEach(r => { const k = (String(r[8] || '').trim()) || 'Autre'; byLic[k] = (byLic[k] || 0) + (parseFloat(r[10]) || 0); });
     renderDonut('donutLicSvg', 'donutLicLeg', byLic, LIC_COLORS, true);
 
+    // (#26) CA par vendeur = ventilation du CA par Type_Vente (col O). Les -RB (négatifs) se
+    // déduisent du bon segment. Type vide → "Sans type" (ne devrait pas arriver : Sales bloque).
+    const byType = {};
+    const tvIdx = salesHeaderInfo ? (salesHeaderInfo.typeVenteCol - 1) : 14;
+    allData.forEach(r => { const k = (String(r[tvIdx] || '').trim()) || 'Sans type'; byType[k] = (byType[k] || 0) + (parseFloat(r[10]) || 0); });
+    renderDonut('donutVendeurSvg', 'donutVendeurLeg', byType, TYPE_COLORS, true);
+
     if (currentEventName) renderFacts(computeFacts(allData));
     else                  renderCounter(allData);
     renderHours(computeHours(allData));
@@ -2650,7 +2675,7 @@ async function loadStats() {
 
 function renderStatsEmpty() {
   ['kpiCA','kpiNb','kpiTx','kpiAvg'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
-  ['donutCatSvg','donutLicSvg','donutCatLeg','donutLicLeg','factsList','hoursBars'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+  ['donutCatSvg','donutLicSvg','donutVendeurSvg','donutCatLeg','donutLicLeg','donutVendeurLeg','factsList','hoursBars'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
   const sl = document.getElementById('salesLog');  if (sl) sl.innerHTML = '<div style="font-family:\'Space Mono\',monospace;font-size:.65rem;color:var(--muted);">Aucune vente pour cet event.</div>';
   const an = document.getElementById('anomalies'); if (an) an.innerHTML = '<div style="font-family:\'Space Mono\',monospace;font-size:.65rem;color:var(--muted);">—</div>';
   ['salesLogBadge','anomBadge'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '0'; });
@@ -2679,6 +2704,9 @@ window.addEventListener('resize', () => { try { fitKpis(); } catch (e) {} });
 
 const CAT_COLORS = { 'cartes':'#e8ff47', 'scelles':'#47c8ff', 'goodies':'#ff6b9d', 'protections':'#fbbf24' };
 const LIC_COLORS = { 'pokemon':'#ffcb05', 'one piece':'#ef4444', 'lorcana':'#a855f7', 'yu gi oh':'#f97316', 'yugioh':'#f97316', 'magic':'#38bdf8', 'panini':'#34d399' };
+// (#26) Couleurs par type de vente (clés NORMALISÉES via normKey : accents retirés, séparateurs→espaces).
+// "Gardien Vente Pro" en jaune accent pour ressortir ; les vendeurs ad-hoc reçoivent une couleur de secours.
+const TYPE_COLORS = { 'gardien vente pro':'#e8ff47', 'dams vente privee':'#47c8ff', 'ben':'#ff6b9d', 'sylvain':'#fbbf24' };
 const DONUT_FALLBACK = ['#8b95a5','#c084fc','#22d3ee','#f472b6','#a3e635','#fb923c','#60a5fa','#facc15'];
 function normKey(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim(); }
 
