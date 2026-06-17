@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<!--
+=============================================================
+  TCG EAN-SCAN — Le Gardien du TCG
+  Version : 0.1.0 (Session #27 — Increment A du chantier scellé)
+=============================================================
+  0.1.0  Création. Enrichissement EAN du scellé, SANS split (décision A).
+         - Scan douchette CS7501 (reconstruction keydown) + saisie manuelle ;
+           validation checksum EAN-13 (non bloquante, override possible).
+         - 4 champs cascadants (Code Série → Nom Série auto / Type / Nom_Item),
+           sources = union Scelle_Stock + Scelle_Transactions (distinct) ;
+           Type lu en LIVE entre bornes Début_/Fin_Liste_Types (repli en dur).
+           Saisie manuelle possible sur chaque champ (nouvelle série/type/nom).
+         - Multi-SKU pour un même EAN (ex. ETB ME1 Lucario / Gardevoir).
+         - Étape 2 : candidats Scelle_Stock filtrés série+type (élargissable),
+           classés par simRatio (Dice-bigrammes) vs noms définis ; sélection
+           multiple, chaque ligne affectée à UN SKU (1 ligne → 1 SKU = no-split).
+         - Étape 3 (écriture, sans split) :
+             · Scelle_Stock : Nom_Item écrasé par le nom canonique + EAN renseigné.
+             · Scelle_Transactions : EAN estampé sur les lignes correspondantes
+               (code+type exacts, nom sim≥0.90) — OPTIONNEL, coché par défaut.
+             · EAN_MAPPING (créé masqué si absent) : 1 ligne par SKU,
+               schéma EAN | cle_scellee | code_serie | type_item | nom_item |
+               id_product_cm | source | maj_ts. Idempotent (dédup ean|cle).
+             · La colonne `Key` n'est JAMAIS touchée (bascule clé-EAN = incrément
+               dédié ultérieur, jalon coordonné — décision A).
+         - Toute écriture passe par un APERÇU (dry-run) listant from→to, puis
+           confirmation explicite. Journal local (anneau) avec valeurs AVANT
+           pour rollback manuel ; exportLog() en console.
+         - Étape 4 : vue des lignes Scelle_Stock encore sans EAN.
+         Réutilise l'OAuth client + GSHEET_ID de tcg-intake/dedup. Scope écriture.
+=============================================================
+-->
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com; frame-src https://accounts.google.com; img-src 'self' data:; object-src 'none'; base-uri 'self';">
+<title>TCG · Scan & enrichissement EAN scellé</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0c10; --surface:#11141a; --surface2:#1a1e26;
+  --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.15);
+  --text:#f5f7fa; --dim:#a8b0bd; --muted:#5e6878;
+  --accent:#e8ff47; --accent2:#47c8ff; --accent3:#ff6b9d;
+  --success:#4ade80; --warning:#fbbf24; --danger:#ff6b6b; --critical:#dc2626;
+  --radius:12px; --radius-sm:6px;
+  --syne:'Syne',sans-serif; --mono:'Space Mono',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--syne);
+  min-height:100vh;overflow-x:hidden;-webkit-font-smoothing:antialiased;font-size:15px}
+.hidden{display:none!important}
+code,.mono{font-family:var(--mono)}
+button{font-family:inherit;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ── Topbar ── */
+header{display:flex;justify-content:space-between;align-items:center;gap:16px;
+  max-width:1100px;margin:0 auto;padding:20px 24px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:14px;min-width:0}
+.logo-mark{width:56px;height:56px;border-radius:14px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--accent) 0%,#bfe000 100%);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--syne);font-weight:800;font-size:1.5rem;color:#0a0c10;
+  box-shadow:0 6px 18px rgba(232,255,71,.18);letter-spacing:-.04em}
+.brand h1{font-size:1.5rem;font-weight:800;letter-spacing:-.03em;line-height:1}
+.brand h1 span{color:var(--accent)}
+.brand .sub{font-family:var(--mono);font-size:.56rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.16em;margin-top:6px}
+.google-panel{display:flex;align-items:center;gap:9px;background:var(--surface);
+  border:1px solid var(--border);border-radius:24px;padding:7px 15px;cursor:pointer;transition:border-color .15s}
+.google-panel:hover{border-color:var(--accent)}
+.google-panel.connected{border-color:rgba(74,222,128,.35)}
+.g-dot{width:9px;height:9px;border-radius:50%;background:var(--danger);flex-shrink:0}
+.google-panel.connected .g-dot{background:var(--success)}
+.g-txt{font-family:var(--mono);font-size:.66rem;color:var(--muted);white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+.google-panel.connected .g-txt{color:var(--success)}
+
+/* ── App shell ── */
+.app{max-width:1100px;margin:0 auto;padding:22px 24px 90px}
+.section-title{font-family:var(--mono);font-size:.62rem;text-transform:uppercase;
+  letter-spacing:.15em;color:var(--muted);margin:0 0 8px}
+
+/* ── Cards / fields / buttons ── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;overflow:hidden}
+.card-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.card-title{font-size:.98rem;font-weight:700;letter-spacing:-.01em}
+.card-body{padding:16px}
+.field{margin-bottom:14px}
+.field-label{display:block;font-family:var(--mono);font-size:.6rem;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
+.field input,.field select{width:100%;background:var(--bg);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-family:var(--syne);font-size:.92rem;outline:none;transition:border-color .15s}
+.field input:focus,.field select:focus{border-color:var(--accent)}
+.field-hint{font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:6px}
+.btn{padding:9px 14px;border-radius:var(--radius-sm);font-family:var(--syne);font-weight:600;
+  font-size:.76rem;border:none;transition:all .15s;text-transform:uppercase;letter-spacing:.04em}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:var(--bg)}
+.btn-primary:not(:disabled):hover{background:#f0ff5e}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:not(:disabled):hover{border-color:var(--accent2);color:var(--accent2)}
+.btn-ghost{background:transparent;color:var(--dim);border:1px solid var(--border)}
+.btn-ghost:not(:disabled):hover{border-color:var(--muted);color:var(--text)}
+.btn-sm{padding:6px 10px;font-size:.64rem}
+.flex-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+.badge{font-family:var(--mono);font-size:.55rem;padding:3px 8px;border-radius:10px;
+  background:var(--surface2);border:1px solid var(--border);color:var(--dim);white-space:nowrap}
+.badge.green{background:rgba(74,222,128,.1);color:var(--success);border-color:rgba(74,222,128,.3)}
+.badge.yellow{background:rgba(251,191,36,.1);color:var(--warning);border-color:rgba(251,191,36,.3)}
+.badge.red{background:rgba(255,107,107,.1);color:var(--danger);border-color:rgba(255,107,107,.3)}
+.badge.cyan{background:rgba(71,200,255,.1);color:var(--accent2);border-color:rgba(71,200,255,.3)}
+
+/* ── Read-only-by-default banner ── */
+.safety{display:flex;align-items:center;gap:10px;margin:0 0 18px;padding:10px 14px;
+  border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius-sm);
+  background:linear-gradient(90deg,rgba(232,255,71,.06),transparent);font-size:.78rem;color:var(--dim)}
+.safety b{color:var(--accent);font-weight:700}
+
+/* ── Load card ── */
+.hero{text-align:center;padding:30px 0 6px}
+.hero h2{font-size:1.8rem;font-weight:800;letter-spacing:-.03em;margin-bottom:8px}
+.hero h2 span{color:var(--accent)}
+.hero p{max-width:540px;margin:0 auto;color:var(--dim);font-size:.9rem;line-height:1.5}
+.load-card{margin:26px auto 0;max-width:480px}
+.load-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px dashed var(--border);font-size:.82rem}
+.load-row:last-child{border-bottom:none}
+.load-row .lbl{font-family:var(--mono);color:var(--dim);font-size:.66rem}
+.load-row .val{font-family:var(--mono);font-size:.66rem;color:var(--muted)}
+.load-row .val.ok{color:var(--success)}
+
+/* ── Stepper ── */
+.stepper{display:flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:22px}
+.step{flex:1;padding:12px 14px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;gap:3px}
+.step:last-child{border-right:none}
+.step .num{font-family:var(--mono);font-size:.58rem;letter-spacing:.14em;color:var(--muted)}
+.step .nm{font-size:.8rem;font-weight:600;color:var(--dim)}
+.step.active{background:var(--surface2)}
+.step.active .num{color:var(--accent)} .step.active .nm{color:var(--text)}
+.step.done .num{color:var(--success)}
+.step.clickable{cursor:pointer} .step.clickable:hover{background:var(--surface2)}
+
+/* ── Scan box ── */
+.scanbox{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.scanbox .field{flex:1;min-width:220px;margin-bottom:0}
+.ean-status{font-family:var(--mono);font-size:.64rem;margin-top:6px}
+.ean-status.ok{color:var(--success)} .ean-status.warn{color:var(--warning)}
+
+/* ── SKU chips ── */
+.sku-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.sku-row{display:flex;gap:8px;align-items:center}
+.sku-row input{flex:1}
+.sku-tag{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.62rem;
+  padding:4px 9px;border-radius:20px;border:1px solid var(--border-strong);background:var(--surface2)}
+
+/* ── Tables ── */
+.scroll{max-height:62vh;overflow:auto;border:1px solid var(--border);border-radius:var(--radius-sm)}
+table.grid{width:100%;border-collapse:collapse;font-size:.82rem}
+table.grid th,table.grid td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+table.grid th{font-family:var(--mono);font-size:.58rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);font-weight:400;position:sticky;top:0;background:var(--surface2);z-index:5}
+table.grid td.mono{font-family:var(--mono);font-size:.74rem;color:var(--dim)}
+table.grid tr:hover td{background:rgba(255,255,255,.02)}
+table.grid tr.sel td{background:rgba(232,255,71,.05)}
+table.grid input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent);cursor:pointer}
+table.grid select.skupick{background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 7px;font-family:var(--syne);font-size:.76rem;max-width:240px}
+.ratio{font-family:var(--mono);font-size:.7rem}
+.ratio.hi{color:var(--success)} .ratio.mid{color:var(--warning)} .ratio.lo{color:var(--muted)}
+.diff-from{color:var(--muted);text-decoration:line-through}
+.diff-to{color:var(--accent)}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.toolbar input.search{flex:1;min-width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);padding:9px 12px;font-family:var(--mono);font-size:.78rem}
+
+/* ── Preview ── */
+.prev-block{margin-bottom:16px}
+.prev-block h4{font-size:.82rem;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.empty{text-align:center;padding:42px 20px;color:var(--dim)}
+.empty .big{font-size:1.1rem;color:var(--text);margin-bottom:6px;font-weight:700}
+
+.nav-foot{display:flex;justify-content:space-between;gap:12px;margin-top:22px}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(160%);
+  background:var(--surface2);border:1px solid var(--border-strong);color:var(--text);padding:11px 18px;
+  border-radius:var(--radius-sm);font-size:.84rem;z-index:200;transition:transform .25s;max-width:90vw}
+.toast.show{transform:translateX(-50%) translateY(0)}
+
+/* ── Overlay auth ── */
+.fs-overlay{position:fixed;inset:0;z-index:8000;display:none;align-items:center;justify-content:center;padding:24px;
+  background:radial-gradient(circle at 50% 40%,rgba(10,12,16,.5),rgba(10,12,16,.9))}
+.fs-overlay.show{display:flex}
+.fs-card{background:var(--surface);border:1px solid var(--border-strong);border-radius:18px;padding:34px 30px;text-align:center;max-width:420px;width:100%;box-shadow:0 24px 60px rgba(0,0,0,.55)}
+.fs-card h3{font-size:1.3rem;font-weight:800;letter-spacing:-.02em;margin-bottom:10px}
+.fs-card p{color:var(--dim);font-size:.86rem;line-height:1.5;margin-bottom:18px}
+
+@media(max-width:760px){
+  .stepper{flex-direction:column}
+  .step{border-right:none;border-bottom:1px solid var(--border)}
+  .step:last-child{border-bottom:none}
+  .scanbox .field{min-width:100%}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo-mark">EAN</div>
+    <div>
+      <h1>Scan &amp; <span>enrichissement</span></h1>
+      <div class="sub">Le Gardien du TCG · scellé · Increment A</div>
+    </div>
+  </div>
+  <div class="google-panel" id="authPanel" onclick="onAuthClick()">
+    <span class="g-dot" id="authDot"></span>
+    <span class="g-txt" id="authText">hors ligne — se connecter</span>
+  </div>
+</header>
+
+<div class="app">
+  <div class="safety">
+    <span><b>Aucune écriture sans ton feu vert.</b> L'app lit ta Sheet, prépare un aperçu détaillé (avant → après) et n'écrit qu'après confirmation. Chaque écriture est journalisée avec les valeurs d'origine.</span>
+  </div>
+
+  <!-- ÉCRAN 0 : chargement -->
+  <section id="screenLoad">
+    <div class="hero">
+      <h2>Relier tes <span>codes-barres</span> à ton stock scellé</h2>
+      <p>Scanne un article, définis son identité, rattache-le aux lignes de <code>Scelle_Stock</code>. L'EAN est écrit dans les deux onglets ; la table <code>EAN_MAPPING</code> est alimentée. Pas de split à ce stade.</p>
+    </div>
+    <div class="card load-card">
+      <div class="card-body">
+        <div class="load-row"><span class="lbl">Authentification Google</span><span class="val" id="ldAuth">en attente</span></div>
+        <div class="load-row"><span class="lbl">Scelle_Stock</span><span class="val" id="ldStock">—</span></div>
+        <div class="load-row"><span class="lbl">Scelle_Transactions</span><span class="val" id="ldTrans">—</span></div>
+        <div class="load-row"><span class="lbl">Table EAN_MAPPING</span><span class="val" id="ldMap">—</span></div>
+        <div class="load-row"><span class="lbl">Lignes sans EAN (stock)</span><span class="val" id="ldNoEan">—</span></div>
+        <div class="flex-row" style="margin-top:16px">
+          <button class="btn btn-primary" id="loadBtn" onclick="loadData()" disabled>Charger les données</button>
+          <button class="btn btn-secondary" id="startBtn" onclick="goPass(1)" disabled>Commencer →</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ÉCRANS DE TRAVAIL -->
+  <section id="screenWork" class="hidden">
+    <div class="stepper" id="stepper"></div>
+    <div id="passBody"></div>
+    <div class="nav-foot">
+      <button class="btn btn-ghost" id="prevBtn" onclick="prevPass()">← Précédent</button>
+      <button class="btn btn-primary" id="nextBtn" onclick="nextPass()">Suivant →</button>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="fs-overlay" id="authOverlay">
+  <div class="fs-card">
+    <div class="logo-mark" style="margin:0 auto 16px">EAN</div>
+    <h3>Connexion requise</h3>
+    <p>Cet outil écrit dans ta Google Sheet centrale. Connecte-toi avec le compte Google autorisé pour continuer.</p>
+    <button class="btn btn-primary" onclick="requestToken(true)">Se connecter avec Google</button>
+  </div>
+</div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+/* ===========================================================================
+   CONFIG — alignée sur tcg-intake / tcg-ean-dedup (même projet OAuth, même classeur)
+   =========================================================================== */
+const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
+const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+const SHEET_STOCK     = 'Scelle_Stock';
+const SHEET_TRANS     = 'Scelle_Transactions';
+const SHEET_MAP       = 'EAN_MAPPING';
+const MAP_HEADERS     = ['EAN','cle_scellee','code_serie','type_item','nom_item','id_product_cm','source','maj_ts'];
+const APP_SOURCE      = 'tcg-ean-scan';
+const APP_VERSION     = '0.1.0';
+/* Écriture → scope complet (≠ dedup qui était readonly). */
+const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
+const NA              = 'n.a.';
+const SHEET_TYPE_COL  = 'G';
+const TYPE_BORDER_START = 'Début_Liste_Types';
+const TYPE_BORDER_END   = 'Fin_Liste_Types';
+const TRANS_MATCH_RATIO = 0.90;   // seuil pour estamper l'EAN sur une ligne Transactions
+const TYPE_OPTIONS_FALLBACK = ['Pokebox','Display de boosters','Coffret','Ultra-Premium','ETB',
+  'Booster','Display de Mini-Tins','Blister','Tripack','Deck','Display de Bundles',
+  'Protection Acrylique','Funko Pop','Goodies','Valisette','Duopack',
+  'Stades et Stratégies de Combat','Figurine','Peluches','Pokeball','Maillot','Portfolio'];
+const LS_LOG = 'tcg_ean_scan_log_v1';
+
+/* ===========================================================================
+   ÉTAT GIS (repris de tcg-ean-dedup)
+   =========================================================================== */
+let gAccessToken=null, gTokenExpiry=0, tokenClient=null, gisReady=false,
+    pendingInteractive=false, refreshTimer=null, gUserEmail='', gUserName='';
+function isAuthenticated(){ return gAccessToken && Date.now() < gTokenExpiry; }
+function waitForGis(t=10000){ return new Promise((res,rej)=>{ if(window.google&&google.accounts&&google.accounts.oauth2) return res(); const t0=Date.now(); const iv=setInterval(()=>{ if(window.google&&google.accounts&&google.accounts.oauth2){clearInterval(iv);res();} else if(Date.now()-t0>t){clearInterval(iv);rej(new Error('GIS'));} },100); }); }
+async function initGisClient(){ try{ await waitForGis(); }catch(e){ toast('⚠ Google Identity non chargé'); return; } tokenClient=google.accounts.oauth2.initTokenClient({ client_id:OAUTH_CLIENT_ID, scope:GSHEET_SCOPES+' https://www.googleapis.com/auth/userinfo.email profile', callback:onTokenResponse, error_callback:onAuthError }); gisReady=true; updateAuthUI(); }
+function requestToken(i){ if(!gisReady||!tokenClient){ if(i) toast('⚠ Auth pas prête (recharge la page)'); return; } pendingInteractive=i; try{ tokenClient.requestAccessToken({prompt:''}); }catch(e){ onAuthError({type:'request_failed'}); } }
+async function onTokenResponse(resp){ if(!resp||resp.error||!resp.access_token){ onAuthError(resp||{type:'no_token'}); return; } gAccessToken=resp.access_token; gTokenExpiry=Date.now()+(parseInt(resp.expires_in||'3600',10)*1000); scheduleTokenRefresh(); if(!gUserEmail) await fetchUserInfo(); updateAuthUI(); document.getElementById('authOverlay').classList.remove('show'); if(pendingInteractive) toast('✓ Connecté · '+(gUserName||gUserEmail||'Google')); pendingInteractive=false; }
+function onAuthError(err){ const m=(err&&(err.type||err.error||err.message))||'inconnue'; if(m==='popup_failed_to_open') toast('⚠ Popup bloquée — autorise les popups'); else if(pendingInteractive&&m!=='popup_closed') toast('✗ Connexion : '+m); pendingInteractive=false; updateAuthUI(); }
+function scheduleTokenRefresh(){ if(refreshTimer) clearTimeout(refreshTimer); const d=Math.max(10000,gTokenExpiry-Date.now()-5*60*1000); refreshTimer=setTimeout(()=>{ if(gAccessToken) requestToken(false); },d); }
+async function fetchUserInfo(){ try{ const res=await fetch('https://www.googleapis.com/oauth2/v2/userinfo',{headers:{Authorization:'Bearer '+gAccessToken}}); const info=await res.json(); gUserEmail=info.email||''; gUserName=info.name||info.email||''; }catch(e){} }
+function logout(){ if(refreshTimer){clearTimeout(refreshTimer);refreshTimer=null;} gAccessToken=null;gTokenExpiry=0;gUserEmail='';gUserName=''; updateAuthUI(); toast('Déconnecté'); }
+function onAuthClick(){ if(isAuthenticated()) logout(); else requestToken(true); }
+function updateAuthUI(){
+  const on=isAuthenticated();
+  document.getElementById('authPanel').classList.toggle('connected',on);
+  document.getElementById('authDot');
+  document.getElementById('authText').textContent = on ? (gUserName||gUserEmail||'connecté') : 'hors ligne — se connecter';
+  document.getElementById('ldAuth').textContent = on ? 'connecté' : 'en attente';
+  document.getElementById('ldAuth').className = 'val '+(on?'ok':'');
+  document.getElementById('loadBtn').disabled = !on;
+}
+
+/* ===========================================================================
+   PLOMBERIE SHEETS (lecture + écriture, reprise de tcg-master)
+   =========================================================================== */
+function a1(sheet,rng){ return "'"+String(sheet).replace(/'/g,"''")+"'!"+rng; }
+function colLetter(idx){ let s='',n=idx; do{ s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; }while(n>=0); return s; }
+async function sheetsRequest(method,url,body){
+  const opt={ method, headers:{ Authorization:'Bearer '+gAccessToken } };
+  if(body!==undefined){ opt.headers['Content-Type']='application/json'; opt.body=JSON.stringify(body); }
+  const res=await fetch(url,opt);
+  if(!res.ok) throw new Error(`Sheets ${method} ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+async function sheetsGet(range,spreadsheetId=GSHEET_ID){
+  return sheetsRequest('GET',`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`);
+}
+async function sheetsValuesBatch(data,spreadsheetId=GSHEET_ID){
+  // data: [{range, values}]
+  return sheetsRequest('POST',`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`,
+    { valueInputOption:'USER_ENTERED', data });
+}
+async function sheetsAppend(range,values,spreadsheetId=GSHEET_ID){
+  return sheetsRequest('POST',`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,{ values });
+}
+async function sheetsBatch(requests,spreadsheetId=GSHEET_ID){
+  return sheetsRequest('POST',`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,{ requests });
+}
+async function getSpreadsheetSheets(spreadsheetId=GSHEET_ID){
+  const r=await sheetsRequest('GET',`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title,hidden)`);
+  return (r.sheets||[]).map(s=>s.properties);
+}
+
+/* ===========================================================================
+   NORMALISATION & CLÉ (reprise de tcg-ean-dedup)
+   =========================================================================== */
+function eanNorm(s){ return String(s==null?'':s).trim().toLowerCase().replace(/\s+/g,' '); }
+function isNA(s){ const v=eanNorm(s); return v==='' || v===NA || v==='nan'; }
+function buildSealedKey(r){
+  const cs=eanNorm(r.codeSerie), ni=eanNorm(r.nomItem);
+  if(isNA(r.codeSerie)) return 'COFFRET|||'+ni;
+  return cs+'|||'+eanNorm(r.typeItem)+'|||'+ni;
+}
+function simRatio(a,b){
+  a=eanNorm(a); b=eanNorm(b);
+  if(a===b) return 1; if(a.length<2||b.length<2) return a===b?1:0;
+  const big=s=>{const m=new Map();for(let i=0;i<s.length-1;i++){const g=s.slice(i,i+2);m.set(g,(m.get(g)||0)+1);}return m;};
+  const A=big(a),B=big(b); let inter=0,szA=0,szB=0;
+  A.forEach(v=>szA+=v); B.forEach(v=>szB+=v);
+  A.forEach((v,g)=>{ if(B.has(g)) inter+=Math.min(v,B.get(g)); });
+  return (2*inter)/(szA+szB);
+}
+/* Validation EAN-13 (checksum). Renvoie {ok, reason}. Non bloquant côté UI. */
+function validateEan(raw){
+  const d=String(raw||'').replace(/\D/g,'');
+  if(d.length===0) return {ok:false,reason:'vide'};
+  if(d.length!==13) return {ok:false,reason:`${d.length} chiffres (attendu 13)`};
+  let sum=0; for(let i=0;i<12;i++){ sum += (+d[i]) * (i%2?3:1); }
+  const chk=(10-(sum%10))%10;
+  return chk===(+d[12]) ? {ok:true,reason:'EAN-13 valide'} : {ok:false,reason:'checksum invalide'};
+}
+
+/* ===========================================================================
+   LECTURE — détection entête par libellé (reprise + colonnes EAN / Key)
+   =========================================================================== */
+const COLS = {
+  codeSerie:['code série','code serie'], nomSerie:['nom série','nom serie'],
+  typeItem:['type_item','type item'], nomItem:['nom_item','nom item'],
+  qty:['quantité','quantite','qté','qte'], ean:['ean','code barre','code-barres','codebarre','code-barre'],
+  key:['key','clé','cle'], cote:['côte/u','cote/u','côte / u','cote / u']
+};
+function resolveHeader(rows){
+  for(let i=0;i<Math.min(60,rows.length);i++){
+    const low=(rows[i]||[]).map(c=>eanNorm(c));
+    if(low.includes('origine') && low.includes('key')) return i;
+  }
+  for(let i=0;i<Math.min(60,rows.length);i++){
+    const low=(rows[i]||[]).map(c=>eanNorm(c));
+    if(low.some(c=>COLS.nomItem.includes(c))) return i;
+  }
+  return 0;
+}
+function colIndex(headerRow,aliases){
+  const low=headerRow.map(c=>eanNorm(c));
+  for(const a of aliases){ const i=low.indexOf(a); if(i>=0) return i; }
+  return -1;
+}
+function parseSheet(values, sheetName){
+  if(!values||!values.length) return {rows:[], idx:{}, headerRow:0};
+  const h=resolveHeader(values);
+  const header=values[h]||[];
+  const idx={}; for(const k in COLS) idx[k]=colIndex(header,COLS[k]);
+  const rows=[];
+  for(let r=h+1;r<values.length;r++){
+    const row=values[r]||[];
+    const nomItem=idx.nomItem>=0?(row[idx.nomItem]||''):'';
+    if(eanNorm(nomItem)==='') continue;
+    rows.push({
+      sheet:sheetName, rowNum:r+1,
+      codeSerie:idx.codeSerie>=0?(row[idx.codeSerie]||''):'',
+      nomSerie:idx.nomSerie>=0?(row[idx.nomSerie]||''):'',
+      typeItem:idx.typeItem>=0?(row[idx.typeItem]||''):'',
+      nomItem:String(nomItem),
+      qty:idx.qty>=0?(row[idx.qty]||''):'',
+      ean:idx.ean>=0?String(row[idx.ean]||'').trim():'',
+    });
+  }
+  return {rows, idx, headerRow:h};
+}
+
+/* ===========================================================================
+   ÉTAT MÉTIER
+   =========================================================================== */
+const STATE = {
+  stock:{rows:[],idx:{},headerRow:0}, trans:{rows:[],idx:{},headerRow:0},
+  byCode:new Map(),     // codeNorm -> {code, nomSerie, types:Set, names:Set}
+  typeList:[], typeListSource:'',
+  mapSet:new Set(),     // "eanNorm|cle" déjà présents dans EAN_MAPPING
+  pass:0,
+  // session de scan en cours
+  scan:{ ean:'', code:'', nomSerie:'', type:'', names:[''] , sel:new Map() /* rowNum -> skuIndex */, broaden:false, stamp:true, search:'' },
+};
+
+function buildDistinct(){
+  STATE.byCode.clear();
+  const all=STATE.stock.rows.concat(STATE.trans.rows);
+  const serieName=new Map(); // codeNorm -> Map(nomSerie->count)
+  for(const r of all){
+    const ck=eanNorm(r.codeSerie); if(!ck) continue;
+    if(!STATE.byCode.has(ck)) STATE.byCode.set(ck,{code:r.codeSerie,nomSerie:'',types:new Set(),names:new Set()});
+    const e=STATE.byCode.get(ck);
+    if(r.typeItem) e.types.add(r.typeItem);
+    if(r.nomItem) e.names.add(r.nomItem);
+    if(!serieName.has(ck)) serieName.set(ck,new Map());
+    if(r.nomSerie){ const m=serieName.get(ck); m.set(r.nomSerie,(m.get(r.nomSerie)||0)+1); }
+  }
+  for(const [ck,e] of STATE.byCode){ // nomSerie le plus fréquent
+    const m=serieName.get(ck); if(m&&m.size){ let best='',bc=-1; for(const[n,c]of m){if(c>bc){bc=c;best=n;}} e.nomSerie=best; }
+  }
+}
+
+async function loadTypeList(){
+  try{
+    const r=await sheetsGet(a1(SHEET_STOCK,`${SHEET_TYPE_COL}1:${SHEET_TYPE_COL}200`));
+    const vals=(r.values||[]).map(row=>row[0]);
+    let si=-1,ei=-1;
+    for(let i=0;i<vals.length;i++){ const v=String(vals[i]==null?'':vals[i]).trim();
+      if(v===TYPE_BORDER_START) si=i; else if(v===TYPE_BORDER_END&&si>=0){ei=i;break;} }
+    if(si>=0&&ei>si+1){ const out=[],seen=new Set();
+      for(let i=si+1;i<ei;i++){ const v=String(vals[i]==null?'':vals[i]).trim(); if(!v) continue;
+        const k=v.toLowerCase(); if(seen.has(k))continue; seen.add(k); out.push(v); }
+      if(out.length){ STATE.typeList=out; STATE.typeListSource='live'; return; } }
+  }catch(e){ console.warn('Liste types live indisponible:',e.message); }
+  STATE.typeList=TYPE_OPTIONS_FALLBACK.slice(); STATE.typeListSource='fallback';
+}
+
+async function ensureMapping(){
+  const sheets=await getSpreadsheetSheets();
+  const found=sheets.find(s=>eanNorm(s.title)===eanNorm(SHEET_MAP));
+  if(!found){
+    await sheetsBatch([{ addSheet:{ properties:{ title:SHEET_MAP, hidden:true } } }]);
+    await sheetsValuesBatch([{ range:a1(SHEET_MAP,'A1'), values:[MAP_HEADERS] }]);
+    STATE.mapSet.clear();
+    return {created:true,count:0};
+  }
+  // charge l'existant pour l'idempotence (EAN col A, cle col B)
+  const r=await sheetsGet(a1(SHEET_MAP,'A2:B'));
+  const rows=r.values||[]; STATE.mapSet.clear();
+  for(const row of rows){ const e=eanNorm(row[0]); const c=String(row[1]||''); if(e) STATE.mapSet.add(e+'|'+c); }
+  return {created:false,count:rows.length};
+}
+
+async function loadData(){
+  if(!isAuthenticated()){ requestToken(true); return; }
+  const btn=document.getElementById('loadBtn'); btn.disabled=true; btn.textContent='Chargement…';
+  try{
+    document.getElementById('ldStock').textContent='lecture…';
+    const s=await sheetsGet(a1(SHEET_STOCK,'A1:AZ20000'));
+    STATE.stock=parseSheet(s.values||[],SHEET_STOCK);
+    if(STATE.stock.idx.ean<0) throw new Error(`Colonne EAN introuvable dans ${SHEET_STOCK}`);
+    document.getElementById('ldStock').textContent=STATE.stock.rows.length+' lignes'; document.getElementById('ldStock').className='val ok';
+
+    document.getElementById('ldTrans').textContent='lecture…';
+    const t=await sheetsGet(a1(SHEET_TRANS,'A1:AZ20000'));
+    STATE.trans=parseSheet(t.values||[],SHEET_TRANS);
+    document.getElementById('ldTrans').textContent=STATE.trans.rows.length+' lignes'; document.getElementById('ldTrans').className='val ok';
+
+    await loadTypeList();
+    buildDistinct();
+
+    document.getElementById('ldMap').textContent='vérification…';
+    const m=await ensureMapping();
+    document.getElementById('ldMap').textContent=m.created?'créée (masquée)':m.count+' entrées'; document.getElementById('ldMap').className='val ok';
+
+    const noEan=STATE.stock.rows.filter(r=>!r.ean).length;
+    document.getElementById('ldNoEan').textContent=noEan+' à traiter'; document.getElementById('ldNoEan').className='val ok';
+
+    document.getElementById('startBtn').disabled=false;
+    btn.textContent='Recharger';
+    toast(`✓ ${STATE.stock.rows.length} stock · ${STATE.byCode.size} séries · ${STATE.typeList.length} types (${STATE.typeListSource}) · ${noEan} sans EAN`);
+  }catch(e){
+    console.error(e); toast('✗ '+e.message);
+    document.getElementById('ldStock').textContent='erreur'; document.getElementById('ldStock').className='val';
+  }finally{ btn.disabled=false; }
+}
+
+/* ===========================================================================
+   NAVIGATION (wizard)
+   =========================================================================== */
+const PASSES=[
+  {n:'01',nm:'Scanner & définir'},
+  {n:'02',nm:'Rattacher au stock'},
+  {n:'03',nm:'Aperçu & écriture'},
+  {n:'04',nm:'Sans EAN'},
+];
+function goPass(p){
+  STATE.pass=p;
+  document.getElementById('screenLoad').classList.add('hidden');
+  document.getElementById('screenWork').classList.remove('hidden');
+  renderStepper(); renderPass();
+  document.getElementById('prevBtn').style.visibility = p<=1?'hidden':'visible';
+  const nb=document.getElementById('nextBtn');
+  nb.style.visibility = (p>=3)?'hidden':'visible';
+  nb.textContent = p===2 ? 'Aperçu →' : 'Suivant →';
+  window.scrollTo(0,0);
+}
+function renderStepper(){
+  document.getElementById('stepper').innerHTML=PASSES.map((s,i)=>{
+    const p=i+1; const cls=p===STATE.pass?'active':(p<STATE.pass?'done':'');
+    return `<div class="step ${cls} clickable" onclick="goPass(${p})"><span class="num">${s.n}</span><span class="nm">${s.nm}</span></div>`;
+  }).join('');
+}
+function renderPass(){ if(STATE.pass===1) renderScan(); else if(STATE.pass===2) renderMatch(); else if(STATE.pass===3) renderPreview(); else if(STATE.pass===4) renderNoEan(); }
+function prevPass(){ if(STATE.pass>1) goPass(STATE.pass-1); }
+function nextPass(){
+  if(STATE.pass===1){ if(!scanReady()){ toast('Renseigne l\'EAN, la série, le type et au moins un nom'); return; } goPass(2); }
+  else if(STATE.pass===2){ if(STATE.scan.sel.size===0){ toast('Sélectionne au moins une ligne de stock'); return; } goPass(3); }
+}
+
+/* ===========================================================================
+   PASSE 1 — scan + définition (champs cascadants)
+   =========================================================================== */
+function scanReady(){ const s=STATE.scan; return s.ean.replace(/\D/g,'').length>0 && eanNorm(s.code)!=='' && eanNorm(s.type)!=='' && s.names.some(n=>n.trim()); }
+function codeEntry(){ return STATE.byCode.get(eanNorm(STATE.scan.code)); }
+
+function renderScan(){
+  const s=STATE.scan; const ce=codeEntry();
+  const v=validateEan(s.ean);
+  const codeOpts=[...STATE.byCode.values()].sort((a,b)=>a.code.localeCompare(b.code));
+  const typeUniverse = ce ? [...new Set([...ce.types, ...STATE.typeList])] : STATE.typeList;
+  const nameUniverse = ce ? [...ce.names].filter(n=> !s.type || true) : [];
+
+  let html=`<div class="card"><div class="card-header"><span class="card-title">📷 Article scanné</span>
+      <span class="badge ${v.ok?'green':'yellow'}">${esc(v.reason)}</span></div>
+    <div class="card-body">
+      <div class="scanbox">
+        <div class="field"><label class="field-label">Code-barres (EAN)</label>
+          <input id="eanInput" inputmode="numeric" autocomplete="off" placeholder="scanne ou saisis l'EAN…" value="${esc(s.ean)}"
+            oninput="STATE.scan.ean=this.value;refreshEanStatus()" onkeydown="onEanKey(event)">
+          <div class="ean-status ${v.ok?'ok':'warn'}" id="eanStatus">${v.ok?'✓ '+esc(v.reason):'⚠ '+esc(v.reason)}</div>
+        </div>
+      </div>
+    </div></div>`;
+
+  // Série (code → nom auto)
+  html+=`<div class="card"><div class="card-header"><span class="card-title">🏷️ Identité de l'article</span></div><div class="card-body">
+    <div class="field"><label class="field-label">Code de la série</label>
+      ${selectOrManual('code', s.code, codeOpts.map(c=>c.code), 'code série…')}
+      ${ce?`<div class="field-hint">Nom de série : <b style="color:var(--dim)">${esc(ce.nomSerie||'—')}</b> · ${ce.types.size} type(s), ${ce.names.size} nom(s) connus</div>`
+           : (eanNorm(s.code)?`<div class="field-hint" style="color:var(--accent2)">nouvelle série (saisie manuelle)</div>`:'')}
+    </div>
+    <div class="field"><label class="field-label">Nom de la série</label>
+      <input value="${esc(s.nomSerie|| (ce?ce.nomSerie:''))}" oninput="STATE.scan.nomSerie=this.value" placeholder="${ce?esc(ce.nomSerie):'nom de la série…'}"></div>
+    <div class="field"><label class="field-label">Type d'article</label>
+      ${selectOrManual('type', s.type, typeUniverse, 'type…')}</div>
+    <div class="field"><label class="field-label">Nom(s) de l'article — un SKU par ligne</label>
+      <div class="sku-list" id="skuList">${renderSkuRows(nameUniverse)}</div>
+      <div class="flex-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="addSku()">+ Ajouter un SKU (même EAN)</button></div>
+      <div class="field-hint">Plusieurs noms = plusieurs SKU pour un seul EAN (ex. ETB ME1 Lucario / Gardevoir).</div>
+    </div>
+  </div></div>`;
+
+  document.getElementById('passBody').innerHTML=html;
+}
+function selectOrManual(key,val,opts,ph){
+  const norm=eanNorm(val);
+  const inList = opts.some(o=>eanNorm(o)===norm) && norm!=='';
+  const isManual = norm!=='' && !inList;
+  const optHtml=['<option value="">— choisir —</option>']
+    .concat(opts.slice().sort((a,b)=>String(a).localeCompare(String(b))).map(o=>`<option value="${esc(o)}" ${eanNorm(o)===norm?'selected':''}>${esc(o)}</option>`))
+    .concat([`<option value="__manual__" ${isManual?'selected':''}>✎ saisie manuelle…</option>`]).join('');
+  let h=`<select onchange="onSelectField('${key}',this.value)">${optHtml}</select>`;
+  if(isManual) h+=`<input style="margin-top:8px" value="${esc(val)}" oninput="onManualField('${key}',this.value)" placeholder="${esc(ph)}">`;
+  return h;
+}
+function onSelectField(key,val){
+  if(val==='__manual__'){ STATE.scan[key]=''; STATE.scan['_manual_'+key]=true; }
+  else { STATE.scan[key]=val; STATE.scan['_manual_'+key]=false;
+    if(key==='code'){ const ce=codeEntry(); if(ce) STATE.scan.nomSerie=ce.nomSerie; } }
+  renderScan();
+}
+function onManualField(key,val){ STATE.scan[key]=val; if(key==='code'||key==='type'){ /* pas de re-render pour ne pas perdre le focus */ } }
+function renderSkuRows(nameUniverse){
+  const s=STATE.scan;
+  return s.names.map((nm,i)=>{
+    const list = nameUniverse.length ? `<datalist id="nm${i}">`+nameUniverse.map(n=>`<option value="${esc(n)}">`).join('')+`</datalist>` : '';
+    return `<div class="sku-row">
+      <input list="nm${i}" value="${esc(nm)}" placeholder="nom du SKU #${i+1}…" oninput="STATE.scan.names[${i}]=this.value">${list}
+      ${s.names.length>1?`<button class="btn btn-ghost btn-sm" onclick="removeSku(${i})">✕</button>`:''}
+    </div>`;
+  }).join('');
+}
+function addSku(){ STATE.scan.names.push(''); renderScan(); }
+function removeSku(i){ STATE.scan.names.splice(i,1); if(!STATE.scan.names.length) STATE.scan.names=['']; renderScan(); }
+function refreshEanStatus(){ const v=validateEan(STATE.scan.ean); const el=document.getElementById('eanStatus'); if(el){ el.textContent=(v.ok?'✓ ':'⚠ ')+v.reason; el.className='ean-status '+(v.ok?'ok':'warn'); } }
+function onEanKey(e){ if(e.key==='Enter'){ e.preventDefault(); refreshEanStatus(); const codeSel=document.querySelector('select'); if(codeSel) codeSel.focus(); } }
+
+/* ===========================================================================
+   PASSE 2 — rattachement (candidats classés)
+   =========================================================================== */
+function definedSkus(){ // [{code,nomSerie,type,nom}]
+  const s=STATE.scan;
+  return s.names.map(n=>n.trim()).filter(Boolean)
+    .map(nom=>({code:s.code, nomSerie:s.nomSerie, type:s.type, nom}));
+}
+function scoreRow(row){ const skus=definedSkus(); let best=0,bi=0;
+  skus.forEach((sk,i)=>{ const r=simRatio(row.nomItem,sk.nom); if(r>best){best=r;bi=i;} }); return {ratio:best, skuIndex:bi}; }
+function candidates(){
+  const s=STATE.scan; const cN=eanNorm(s.code), tN=eanNorm(s.type);
+  let rows=STATE.stock.rows.map(r=>({r, ...scoreRow(r)}));
+  if(!s.broaden) rows=rows.filter(x=>eanNorm(x.r.codeSerie)===cN && eanNorm(x.r.typeItem)===tN);
+  if(s.search){ const q=eanNorm(s.search); rows=rows.filter(x=>eanNorm(x.r.nomItem).includes(q)); }
+  rows.sort((a,b)=>b.ratio-a.ratio);
+  return rows;
+}
+function renderMatch(){
+  const s=STATE.scan; const skus=definedSkus();
+  const cand=candidates();
+  const ratioCls=r=>r>=.85?'hi':(r>=.6?'mid':'lo');
+  let html=`<div class="card"><div class="card-header"><span class="card-title">🔗 Rattacher au stock</span>
+      <span class="badge cyan">EAN ${esc(s.ean.replace(/\D/g,''))}</span></div>
+    <div class="card-body">
+      <div class="field-hint" style="margin-bottom:12px">SKU définis : ${skus.map(k=>`<span class="sku-tag">${esc(k.nom)}</span>`).join(' ')||'<span style="color:var(--warning)">aucun</span>'}</div>
+      <div class="toolbar">
+        <input class="search" placeholder="filtrer par nom…" value="${esc(s.search)}" oninput="STATE.scan.search=this.value;renderMatch()">
+        <label class="flex-row" style="font-size:.78rem;color:var(--dim);gap:6px"><input type="checkbox" ${s.broaden?'checked':''} onchange="STATE.scan.broaden=this.checked;renderMatch()" style="width:16px;height:16px;accent-color:var(--accent)"> élargir (ignorer série+type)</label>
+        <span class="badge">${cand.length} candidat(s)</span>
+      </div>`;
+  if(!cand.length){
+    html+=`<div class="empty"><div class="big">Aucun candidat</div><div>${s.broaden?'Aucune ligne de stock ne ressemble à ce nom.':'Aucune ligne avec ce code série + type. Active « élargir » pour voir tout le stock.'}</div></div>`;
+  }else{
+    const multi=skus.length>1;
+    html+=`<div class="scroll"><table class="grid"><thead><tr>
+      <th style="width:38px"></th><th>Nom_Item (stock)</th><th>Type</th><th>Série</th><th>Qté</th><th>Match</th>${multi?'<th>→ SKU</th>':''}</tr></thead><tbody>`;
+    for(const x of cand.slice(0,800)){
+      const sel=STATE.scan.sel.has(x.r.rowNum);
+      const chosen=STATE.scan.sel.get(x.r.rowNum);
+      const skuIdx = chosen!=null?chosen:x.skuIndex;
+      const hasEan = x.r.ean ? `<span class="badge yellow" title="EAN déjà présent">EAN ${esc(x.r.ean)}</span>` : '';
+      html+=`<tr class="${sel?'sel':''}">
+        <td><input type="checkbox" ${sel?'checked':''} onchange="toggleSel(${x.r.rowNum},${skuIdx})"></td>
+        <td>${esc(x.r.nomItem)} ${hasEan}</td>
+        <td class="mono">${esc(x.r.typeItem)}</td>
+        <td class="mono">${esc(x.r.codeSerie||NA)}</td>
+        <td class="mono">${esc(x.r.qty)}</td>
+        <td><span class="ratio ${ratioCls(x.ratio)}">${Math.round(x.ratio*100)}%</span></td>
+        ${multi?`<td><select class="skupick" onchange="setSelSku(${x.r.rowNum},this.value)" ${sel?'':'disabled'}>${skus.map((k,i)=>`<option value="${i}" ${i===skuIdx?'selected':''}>${esc(k.nom)}</option>`).join('')}</select></td>`:''}
+      </tr>`;
+    }
+    html+=`</tbody></table></div>`;
+    if(cand.length>800) html+=`<div class="field-hint" style="margin-top:10px">Affichage limité à 800 lignes — affine le filtre.</div>`;
+    html+=`<div class="field-hint" style="margin-top:12px">${STATE.scan.sel.size} ligne(s) sélectionnée(s). Rappel Increment A : 1 ligne → 1 SKU (pas de répartition de quantité ; le split arrive en Increment B).</div>`;
+  }
+  html+=`</div></div>`;
+  document.getElementById('passBody').innerHTML=html;
+}
+function toggleSel(rowNum,skuIdx){ const m=STATE.scan.sel; if(m.has(rowNum)) m.delete(rowNum); else m.set(rowNum,skuIdx); renderMatch(); }
+function setSelSku(rowNum,v){ if(STATE.scan.sel.has(rowNum)) STATE.scan.sel.set(rowNum,parseInt(v,10)); }
+
+/* ===========================================================================
+   PASSE 3 — aperçu (dry-run) + écriture
+   =========================================================================== */
+function rowByNum(num){ return STATE.stock.rows.find(r=>r.rowNum===num); }
+function buildPlan(){
+  const s=STATE.scan; const skus=definedSkus(); const ean=s.ean.replace(/\D/g,'');
+  const idxS=STATE.stock.idx;
+  const stockWrites=[]; // {row, nomFrom, nomTo, eanFrom, eanTo}
+  const usedSkus=new Set();
+  for(const [rowNum,skuIdx] of STATE.scan.sel){
+    const r=rowByNum(rowNum); if(!r) continue; const sk=skus[skuIdx]||skus[0]; usedSkus.add(skuIdx);
+    stockWrites.push({ row:rowNum, nomFrom:r.nomItem, nomTo:sk.nom, eanFrom:r.ean, eanTo:ean,
+      nomCol:colLetter(idxS.nomItem), eanCol:colLetter(idxS.ean) });
+  }
+  // EAN_MAPPING : 1 ligne par SKU effectivement utilisé, dédupliqué contre l'existant
+  const mapRows=[];
+  skus.forEach((sk,i)=>{
+    if(!usedSkus.has(i)) return;
+    const cle=buildSealedKey({codeSerie:sk.code,typeItem:sk.type,nomItem:sk.nom});
+    const dup=STATE.mapSet.has(eanNorm(ean)+'|'+cle);
+    mapRows.push({ ean, cle, code:sk.code, type:sk.type, nom:sk.nom, dup });
+  });
+  // Transactions à estamper (optionnel) : code+type exacts, sim≥seuil vs un SKU utilisé, EAN vide
+  const transWrites=[];
+  if(s.stamp){
+    const idxT=STATE.trans.idx;
+    if(idxT.ean>=0){
+      const usedNames=[...usedSkus].map(i=>skus[i].nom);
+      for(const r of STATE.trans.rows){
+        if(r.ean) continue;
+        if(eanNorm(r.codeSerie)!==eanNorm(s.code) || eanNorm(r.typeItem)!==eanNorm(s.type)) continue;
+        const best=Math.max(0,...usedNames.map(n=>simRatio(r.nomItem,n)));
+        if(best>=TRANS_MATCH_RATIO) transWrites.push({ row:r.rowNum, eanFrom:r.ean, eanTo:ean, eanCol:colLetter(idxT.ean), nom:r.nomItem });
+      }
+    }
+  }
+  return {ean, stockWrites, mapRows, transWrites, transHasEanCol:STATE.trans.idx.ean>=0};
+}
+function renderPreview(){
+  const plan=buildPlan(); const newMap=plan.mapRows.filter(m=>!m.dup);
+  let html=`<div class="card"><div class="card-header"><span class="card-title">👁️ Aperçu de l'écriture</span>
+      <span class="badge">aucune donnée modifiée pour l'instant</span></div><div class="card-body">`;
+
+  // Stock
+  html+=`<div class="prev-block"><h4>📦 ${SHEET_STOCK} <span class="badge">${plan.stockWrites.length} ligne(s)</span></h4>`;
+  if(plan.stockWrites.length){
+    html+=`<div class="scroll" style="max-height:34vh"><table class="grid"><thead><tr><th>Ligne</th><th>Nom_Item</th><th>EAN</th></tr></thead><tbody>`;
+    for(const w of plan.stockWrites){
+      const nomChg = eanNorm(w.nomFrom)!==eanNorm(w.nomTo);
+      html+=`<tr><td class="mono">${w.row}</td>
+        <td>${nomChg?`<span class="diff-from">${esc(w.nomFrom)}</span> → <span class="diff-to">${esc(w.nomTo)}</span>`:`${esc(w.nomTo)} <span class="badge">inchangé</span>`}</td>
+        <td>${w.eanFrom?`<span class="diff-from mono">${esc(w.eanFrom)}</span> → `:''}<span class="diff-to mono">${esc(w.eanTo)}</span></td></tr>`;
+    }
+    html+=`</tbody></table></div>`;
+  } else html+=`<div class="field-hint">Rien à écrire.</div>`;
+  html+=`</div>`;
+
+  // Transactions
+  html+=`<div class="prev-block"><h4>🧾 ${SHEET_TRANS} <span class="badge">${plan.transWrites.length} ligne(s)</span>
+    <label class="flex-row" style="font-size:.72rem;color:var(--dim);gap:6px;font-weight:400;margin-left:auto"><input type="checkbox" ${STATE.scan.stamp?'checked':''} onchange="STATE.scan.stamp=this.checked;renderPreview()" style="width:15px;height:15px;accent-color:var(--accent)"> estamper l'EAN ici aussi</label></h4>`;
+  if(!plan.transHasEanCol) html+=`<div class="field-hint" style="color:var(--warning)">Colonne EAN absente de ${SHEET_TRANS} — estampage ignoré.</div>`;
+  else if(STATE.scan.stamp && plan.transWrites.length){
+    html+=`<div class="field-hint">Lignes appariées (code+type identiques, nom ≥${Math.round(TRANS_MATCH_RATIO*100)}% similaire) :</div>
+      <div class="scroll" style="max-height:24vh;margin-top:6px"><table class="grid"><thead><tr><th>Ligne</th><th>Nom_Item (transaction)</th><th>EAN</th></tr></thead><tbody>`;
+    for(const w of plan.transWrites) html+=`<tr><td class="mono">${w.row}</td><td>${esc(w.nom)}</td><td class="diff-to mono">${esc(w.eanTo)}</td></tr>`;
+    html+=`</tbody></table></div>`;
+  } else if(STATE.scan.stamp) html+=`<div class="field-hint">Aucune ligne de transaction à estamper.</div>`;
+  else html+=`<div class="field-hint">Estampage désactivé.</div>`;
+  html+=`</div>`;
+
+  // Mapping
+  html+=`<div class="prev-block"><h4>🗂️ ${SHEET_MAP} <span class="badge">${newMap.length} ajout(s)</span></h4>`;
+  if(plan.mapRows.length){
+    html+=`<div class="scroll" style="max-height:24vh"><table class="grid"><thead><tr><th>EAN</th><th>nom_item</th><th>type</th><th>clé scellée</th><th></th></tr></thead><tbody>`;
+    for(const m of plan.mapRows) html+=`<tr><td class="mono">${esc(m.ean)}</td><td>${esc(m.nom)}</td><td class="mono">${esc(m.type)}</td><td class="mono" style="font-size:.66rem">${esc(m.cle)}</td><td>${m.dup?'<span class="badge">déjà présent</span>':'<span class="badge green">nouveau</span>'}</td></tr>`;
+    html+=`</tbody></table></div>`;
+  } else html+=`<div class="field-hint">Aucun SKU rattaché.</div>`;
+  html+=`</div>`;
+
+  const total=plan.stockWrites.length+(STATE.scan.stamp?plan.transWrites.length:0)+newMap.length;
+  html+=`<div class="flex-row" style="margin-top:8px">
+      <button class="btn btn-primary" id="commitBtn" onclick="commitPlan()" ${total?'':'disabled'}>✓ Confirmer l'écriture (${total} opération${total>1?'s':''})</button>
+      <button class="btn btn-ghost" onclick="goPass(2)">← Revoir la sélection</button>
+    </div>
+    <div class="field-hint" style="margin-top:8px">La colonne <code>Key</code> n'est pas touchée (bascule clé-EAN = incrément dédié).</div>`;
+  html+=`</div></div>`;
+  document.getElementById('passBody').innerHTML=html;
+}
+
+async function commitPlan(){
+  if(!isAuthenticated()){ requestToken(true); return; }
+  const plan=buildPlan(); const btn=document.getElementById('commitBtn');
+  btn.disabled=true; btn.textContent='Écriture…';
+  const backup={ ts:new Date().toISOString(), app:APP_VERSION, ean:plan.ean, stock:[], trans:[], map:[] };
+  try{
+    // 1) Scelle_Stock : nom + ean par cellule (values:batchUpdate)
+    const data=[];
+    for(const w of plan.stockWrites){
+      data.push({ range:a1(SHEET_STOCK,`${w.nomCol}${w.row}`), values:[[w.nomTo]] });
+      data.push({ range:a1(SHEET_STOCK,`${w.eanCol}${w.row}`), values:[[w.eanTo]] });
+      backup.stock.push({row:w.row, nomFrom:w.nomFrom, eanFrom:w.eanFrom});
+    }
+    // 2) Scelle_Transactions : ean
+    if(STATE.scan.stamp){
+      for(const w of plan.transWrites){
+        data.push({ range:a1(SHEET_TRANS,`${w.eanCol}${w.row}`), values:[[w.eanTo]] });
+        backup.trans.push({row:w.row, eanFrom:w.eanFrom});
+      }
+    }
+    if(data.length) await sheetsValuesBatch(data);
+    // 3) EAN_MAPPING : append des nouveaux
+    const newMap=plan.mapRows.filter(m=>!m.dup);
+    if(newMap.length){
+      const ts=new Date().toISOString();
+      const vals=newMap.map(m=>[m.ean,m.cle,m.code,m.type,m.nom,'',APP_SOURCE,ts]);
+      await sheetsAppend(a1(SHEET_MAP,'A1'),vals);
+      newMap.forEach(m=>{ STATE.mapSet.add(eanNorm(m.ean)+'|'+m.cle); backup.map.push({ean:m.ean,cle:m.cle}); });
+    }
+    // mise à jour de l'état local (les lignes ont maintenant un EAN + nom canonique)
+    for(const w of plan.stockWrites){ const r=rowByNum(w.row); if(r){ r.nomItem=w.nomTo; r.ean=w.eanTo; } }
+    if(STATE.scan.stamp) for(const w of plan.transWrites){ const r=STATE.trans.rows.find(x=>x.rowNum===w.row); if(r) r.ean=w.eanTo; }
+    logEvent('WRITE',backup);
+    toast(`✓ ${plan.ean} enregistré · ${plan.stockWrites.length} stock · ${STATE.scan.stamp?plan.transWrites.length:0} trans · ${newMap.length} mapping`);
+    resetScan(); goPass(1);
+  }catch(e){
+    console.error(e); logEvent('WRITE_ERROR',{error:e.message,backup});
+    toast('✗ Écriture interrompue : '+e.message+' — voir exportLog()');
+    btn.disabled=false; btn.textContent='✓ Réessayer';
+  }
+}
+function resetScan(){ STATE.scan={ ean:'', code:'', nomSerie:'', type:'', names:[''], sel:new Map(), broaden:false, stamp:true, search:'' }; }
+
+/* ===========================================================================
+   PASSE 4 — lignes sans EAN
+   =========================================================================== */
+function renderNoEan(){
+  const rows=STATE.stock.rows.filter(r=>!r.ean).sort((a,b)=>String(a.codeSerie).localeCompare(String(b.codeSerie))||String(a.nomItem).localeCompare(String(b.nomItem)));
+  let html=`<div class="card"><div class="card-header"><span class="card-title">⛳ Stock encore sans EAN</span><span class="badge ${rows.length?'yellow':'green'}">${rows.length} ligne(s)</span></div><div class="card-body">`;
+  if(!rows.length){ html+=`<div class="empty"><div class="big">Tout est relié 🎉</div><div>Aucune ligne de ${SHEET_STOCK} sans EAN.</div></div>`; }
+  else{
+    html+=`<div class="field-hint" style="margin-bottom:10px">Ce qu'il te reste à scanner. (L'étape suivante de réconciliation viendra plus tard.)</div>
+      <div class="scroll"><table class="grid"><thead><tr><th>Ligne</th><th>Nom_Item</th><th>Type</th><th>Série</th><th>Qté</th></tr></thead><tbody>`;
+    for(const r of rows.slice(0,1500)) html+=`<tr><td class="mono">${r.rowNum}</td><td>${esc(r.nomItem)}</td><td class="mono">${esc(r.typeItem)}</td><td class="mono">${esc(r.codeSerie||NA)}</td><td class="mono">${esc(r.qty)}</td></tr>`;
+    html+=`</tbody></table></div>`;
+    if(rows.length>1500) html+=`<div class="field-hint" style="margin-top:10px">Affichage limité à 1500 lignes.</div>`;
+  }
+  html+=`</div></div>`;
+  document.getElementById('passBody').innerHTML=html;
+}
+
+/* ===========================================================================
+   JOURNAL (anneau localStorage) — sauvegarde des valeurs AVANT écriture
+   =========================================================================== */
+function logEvent(type,payload){
+  try{
+    const log=JSON.parse(localStorage.getItem(LS_LOG)||'[]');
+    log.push({t:new Date().toISOString(),type,...payload});
+    while(log.length>200) log.shift();
+    localStorage.setItem(LS_LOG,JSON.stringify(log));
+  }catch(e){ console.warn('journal:',e.message); }
+}
+window.exportLog=function(){ try{ return JSON.parse(localStorage.getItem(LS_LOG)||'[]'); }catch(e){ return []; } };
+
+/* ===========================================================================
+   UTILITAIRES
+   =========================================================================== */
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+let toastTimer=null;
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),3000); }
+
+window.addEventListener('DOMContentLoaded',()=>{ initGisClient(); });
+</script>
+</body>
+</html>
