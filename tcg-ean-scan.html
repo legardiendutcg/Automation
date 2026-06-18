@@ -2,8 +2,43 @@
 <!--
 =============================================================
   TCG EAN-SCAN — Le Gardien du TCG
-  Version : 0.2.0 (Session #27 — Increment A du chantier scellé)
+  Version : 0.4.0 (Session #28 — cascade série→type→nom + picker série combiné)
 =============================================================
+  0.4.0  Cascade de définition & picker série combiné (session #28).
+         - Picker « Série » UNIQUE combinant code + nom (« EV9.0 Aventures
+           Ensemble », « EV3.5 151 ») ; le choix renseigne code ET nom de série.
+           « n.a. » (coffret multi-séries) est toujours EN PREMIER, le reste trié
+           alpha par libellé. Mode « ✎ nouvelle série » = saisie manuelle code+nom.
+         - Type d'article : par défaut SEULS les types existant pour la série
+           choisie (stock+transactions), triés alpha. Lien « ➕ voir tous les types »
+           pour accéder à la liste complète ; « ↩ limiter à cette série » pour revenir.
+           (Saisie manuelle toujours possible pour un type inédit.)
+         - Nom(s) : par défaut les noms de la série ET du type choisis ; lien
+           « ➕ tous les noms de la série » pour élargir au seul filtre série ;
+           « ↩ limiter à ce type » pour revenir. Champ libre conservé.
+         - Cascade : changer de série réinitialise type+noms ; changer de type
+           réinitialise l'élargissement des noms. Toutes les listes triées alpha.
+  0.3.1  Fix lecture de la liste de types (session #28).
+         - La colonne de la liste des types (bornes Début_/Fin_Liste_Types) était
+           lue en DUR (SHEET_TYPE_COL='G'). L'insertion de la colonne EAN en D a
+           décalé Type_Item de G→H : l'app ne trouvait plus les bornes et retombait
+           silencieusement sur la liste codée en dur (nouvelles valeurs invisibles).
+           → La colonne est désormais résolue PAR EN-TÊTE (Type_Item, via
+           STATE.stock.idx.typeItem), conformément à la règle permanente du projet.
+           SHEET_TYPE_COL devient un simple repli. Le toast affiche la colonne lue
+           (« live (H) ») pour vérification.
+  0.3.0  Confort de scan en série (session #28).
+         - [#1] Focus automatique sur le champ EAN à chaque entrée dans
+           l'étape 1 (retour après écriture, clic sur le stepper, « Commencer »)
+           → la douchette CS7501 écrit dans le champ sans clic préalable.
+         - [#2] Pop-up « EAN déjà connu » à la validation du scan (touche Entrée) :
+           si l'EAN est déjà présent dans EAN_MAPPING et/ou sur des lignes de
+           Scelle_Stock, on l'affiche avec le ou les SKU rattachés. Deux issues :
+           « Scanner le suivant » (doublon → on saute) ou « Continuer quand même »
+           (reprint / variante partageant l'EAN — cas B).
+         - ensureMapping charge désormais EAN_MAPPING A2:H (au lieu de A2:B) pour
+           disposer du nom/type/série du référentiel ; STATE.mapByEan (Map digit→SKU)
+           alimentée au chargement ET après chaque écriture (cohérence en session).
   0.2.0  Améliorations (retour terrain après ~30 scans).
          - [#1] Prix d'achat UNITAIRE affiché dans toutes les listes de produits
            (candidats, aperçu, sans-EAN) = prix d'achat (total calculé) ÷ quantité.
@@ -109,6 +144,8 @@ header{display:flex;justify-content:space-between;align-items:center;gap:16px;
   border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-family:var(--syne);font-size:.92rem;outline:none;transition:border-color .15s}
 .field input:focus,.field select:focus{border-color:var(--accent)}
 .field-hint{font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:6px}
+.link{color:var(--accent2);cursor:pointer;text-decoration:underline;font-family:var(--mono)}
+.link:hover{color:var(--accent)}
 .btn{padding:9px 14px;border-radius:var(--radius-sm);font-family:var(--syne);font-weight:600;
   font-size:.76rem;border:none;transition:all .15s;text-transform:uppercase;letter-spacing:.04em}
 .btn:disabled{opacity:.4;cursor:not-allowed}
@@ -283,6 +320,13 @@ table.grid select.skupick{background:var(--bg);border:1px solid var(--border);co
   </div>
 </div>
 
+<!-- (#28) pop-up : EAN déjà rattaché -->
+<div class="fs-overlay" id="dupOverlay">
+  <div class="fs-card" id="dupCard" style="max-width:520px;text-align:left">
+    <div id="dupBody"></div>
+  </div>
+</div>
+
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 /* ===========================================================================
@@ -295,11 +339,11 @@ const SHEET_TRANS     = 'Scelle_Transactions';
 const SHEET_MAP       = 'EAN_MAPPING';
 const MAP_HEADERS     = ['EAN','cle_scellee','code_serie','type_item','nom_item','id_product_cm','source','maj_ts'];
 const APP_SOURCE      = 'tcg-ean-scan';
-const APP_VERSION     = '0.2.0';
+const APP_VERSION     = '0.4.0';
 /* Écriture → scope complet (≠ dedup qui était readonly). */
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
 const NA              = 'n.a.';
-const SHEET_TYPE_COL  = 'G';
+const SHEET_TYPE_COL  = 'G';  // repli de dernier recours ; la colonne réelle est résolue par l'en-tête Type_Item (cf. loadTypeList)
 const TYPE_BORDER_START = 'Début_Liste_Types';
 const TYPE_BORDER_END   = 'Fin_Liste_Types';
 const TRANS_MATCH_RATIO = 0.90;   // seuil pour estamper l'EAN sur une ligne Transactions
@@ -369,6 +413,7 @@ async function getSpreadsheetSheets(spreadsheetId=GSHEET_ID){
    NORMALISATION & CLÉ (reprise de tcg-ean-dedup)
    =========================================================================== */
 function eanNorm(s){ return String(s==null?'':s).trim().toLowerCase().replace(/\s+/g,' '); }
+function eanDigits(s){ return String(s==null?'':s).replace(/\D/g,''); }
 function headerNorm(s){ return eanNorm(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/['’`]/g,''); }
 function isNA(s){ const v=eanNorm(s); return v==='' || v===NA || v==='nan'; }
 function buildSealedKey(r){
@@ -453,9 +498,10 @@ const STATE = {
   byCode:new Map(),     // codeNorm -> {code, nomSerie, types:Set, names:Set}
   typeList:[], typeListSource:'',
   mapSet:new Set(),     // "eanNorm|cle" déjà présents dans EAN_MAPPING
+  mapByEan:new Map(),   // (#28) digits(EAN) -> [{cle,code,type,nom,source,ts}] pour le pop-up "déjà connu"
   pass:0,
   // session de scan en cours
-  scan:{ ean:'', code:'', nomSerie:'', type:'', names:[''] , sel:new Map() /* rowNum -> skuIndex */, broaden:false, stamp:true, search:'' },
+  scan:{ ean:'', code:'', nomSerie:'', type:'', names:[''] , sel:new Map() /* rowNum -> skuIndex */, broaden:false, stamp:true, search:'', allTypes:false, allNames:false, _manual_code:false },
 };
 
 function buildDistinct(){
@@ -478,7 +524,13 @@ function buildDistinct(){
 
 async function loadTypeList(){
   try{
-    const r=await sheetsGet(a1(SHEET_STOCK,`${SHEET_TYPE_COL}1:${SHEET_TYPE_COL}200`));
+    // 🔑 Colonne de la liste des types = colonne Type_Item, résolue PAR EN-TÊTE
+    //    (la liste vit dans cette colonne, entre les bornes Début_/Fin_Liste_Types).
+    //    Jamais de lettre figée : l'insertion d'une colonne (ex. EAN en D, #28) décale
+    //    Type_Item (G→H) et cassait silencieusement la lecture live → repli en dur.
+    const ti = (STATE.stock && STATE.stock.idx) ? STATE.stock.idx.typeItem : -1;
+    const col = (ti!=null && ti>=0) ? colLetter(ti) : SHEET_TYPE_COL;
+    const r=await sheetsGet(a1(SHEET_STOCK,`${col}1:${col}200`));
     const vals=(r.values||[]).map(row=>row[0]);
     let si=-1,ei=-1;
     for(let i=0;i<vals.length;i++){ const v=String(vals[i]==null?'':vals[i]).trim();
@@ -486,7 +538,7 @@ async function loadTypeList(){
     if(si>=0&&ei>si+1){ const out=[],seen=new Set();
       for(let i=si+1;i<ei;i++){ const v=String(vals[i]==null?'':vals[i]).trim(); if(!v) continue;
         const k=v.toLowerCase(); if(seen.has(k))continue; seen.add(k); out.push(v); }
-      if(out.length){ STATE.typeList=out; STATE.typeListSource='live'; return; } }
+      if(out.length){ STATE.typeList=out; STATE.typeListSource='live ('+col+')'; return; } }
   }catch(e){ console.warn('Liste types live indisponible:',e.message); }
   STATE.typeList=TYPE_OPTIONS_FALLBACK.slice(); STATE.typeListSource='fallback';
 }
@@ -497,13 +549,19 @@ async function ensureMapping(){
   if(!found){
     await sheetsBatch([{ addSheet:{ properties:{ title:SHEET_MAP, hidden:true } } }]);
     await sheetsValuesBatch([{ range:a1(SHEET_MAP,'A1'), values:[MAP_HEADERS] }]);
-    STATE.mapSet.clear();
+    STATE.mapSet.clear(); STATE.mapByEan.clear();
     return {created:true,count:0};
   }
-  // charge l'existant pour l'idempotence (EAN col A, cle col B)
-  const r=await sheetsGet(a1(SHEET_MAP,'A2:B'));
-  const rows=r.values||[]; STATE.mapSet.clear();
-  for(const row of rows){ const e=eanNorm(row[0]); const c=String(row[1]||''); if(e) STATE.mapSet.add(e+'|'+c); }
+  // charge l'existant : idempotence (EAN col A, cle col B) + détail pour le pop-up (jusqu'à H)
+  const r=await sheetsGet(a1(SHEET_MAP,'A2:H'));
+  const rows=r.values||[]; STATE.mapSet.clear(); STATE.mapByEan.clear();
+  for(const row of rows){
+    const e=eanNorm(row[0]); const c=String(row[1]||''); if(!e) continue;
+    STATE.mapSet.add(e+'|'+c);
+    const dig=eanDigits(row[0]); if(!dig) continue;
+    if(!STATE.mapByEan.has(dig)) STATE.mapByEan.set(dig,[]);
+    STATE.mapByEan.get(dig).push({ cle:c, code:row[2]||'', type:row[3]||'', nom:row[4]||'', source:row[6]||'', ts:row[7]||'' });
+  }
   return {created:false,count:rows.length};
 }
 
@@ -560,7 +618,13 @@ function goPass(p){
   nb.style.visibility = (p>=3)?'hidden':'visible';
   nb.textContent = p===2 ? 'Aperçu →' : 'Suivant →';
   window.scrollTo(0,0);
+  if(p===1) focusEan();   // (#28) focus direct du champ EAN pour scanner sans clic
 }
+/* (#28) Place le focus sur le champ EAN. La douchette CS7501 (clavier HID) écrit
+   alors dans le champ focalisé sans clic préalable. rAF = attendre le rendu du DOM.
+   Note iOS : le clavier logiciel ne se rouvre pas après un await (pas d'activation
+   utilisateur), mais le scanner Bluetooth n'en a pas besoin. */
+function focusEan(){ requestAnimationFrame(()=>{ const el=document.getElementById('eanInput'); if(el){ el.focus(); el.select(); } }); }
 function renderStepper(){
   document.getElementById('stepper').innerHTML=PASSES.map((s,i)=>{
     const p=i+1; const cls=p===STATE.pass?'active':(p<STATE.pass?'done':'');
@@ -583,9 +647,7 @@ function codeEntry(){ return STATE.byCode.get(eanNorm(STATE.scan.code)); }
 function renderScan(){
   const s=STATE.scan; const ce=codeEntry();
   const v=validateEan(s.ean);
-  const codeOpts=[...STATE.byCode.values()].sort((a,b)=>String(a.code).localeCompare(String(b.code),'fr',{sensitivity:'base'}));
-  const typeUniverse = ce ? [...new Set([...ce.types, ...STATE.typeList])] : STATE.typeList;
-  const nameUniverse = namesFor(eanNorm(s.code), eanNorm(s.type));
+  const cN=eanNorm(s.code), tN=eanNorm(s.type);
 
   let html=`<div class="card"><div class="card-header"><span class="card-title">📷 Article scanné</span>
       <span class="badge ${v.ok?'green':'yellow'}">${esc(v.reason)}</span></div>
@@ -599,26 +661,90 @@ function renderScan(){
       </div>
     </div></div>`;
 
-  // Série (code → nom auto)
+  // ── Élargissements (cascade) ──
+  const serieTypeCount = ce ? [...ce.types].filter(t=>eanNorm(t)).length : 0;
+  const moreTypes = ce ? STATE.typeList.some(t=>![...ce.types].some(x=>eanNorm(x)===eanNorm(t))) : false;
+  const namesType   = cN ? namesFor(cN,tN) : [];
+  const namesSerie  = cN ? namesFor(cN,'') : [];
+  const moreNames   = !!(cN && tN) && namesSerie.length>namesType.length;
+
+  // Identité : série (code + nom) → type → nom(s)
   html+=`<div class="card"><div class="card-header"><span class="card-title">🏷️ Identité de l'article</span></div><div class="card-body">
-    <div class="field"><label class="field-label">Code de la série</label>
-      ${selectOrManual('code', s.code, codeOpts.map(c=>c.code), 'code série…')}
-      ${ce?`<div class="field-hint">Nom de série : <b style="color:var(--dim)">${esc(ce.nomSerie||'—')}</b> · ${ce.types.size} type(s), ${ce.names.size} nom(s) connus</div>`
-           : (eanNorm(s.code)?`<div class="field-hint" style="color:var(--accent2)">nouvelle série (saisie manuelle)</div>`:'')}
+    <div class="field"><label class="field-label">Série (code + nom)</label>
+      ${renderSeriePicker()}
     </div>
-    <div class="field"><label class="field-label">Nom de la série</label>
-      <input value="${esc(s.nomSerie|| (ce?ce.nomSerie:''))}" oninput="STATE.scan.nomSerie=this.value" placeholder="${ce?esc(ce.nomSerie):'nom de la série…'}"></div>
     <div class="field"><label class="field-label">Type d'article</label>
-      ${selectOrManual('type', s.type, typeUniverse, 'type…')}</div>
+      ${selectOrManual('type', s.type, typeUniverse(), 'type…')}
+      ${ce && serieTypeCount>0 && (moreTypes||s.allTypes) ? `<div class="field-hint">${ s.allTypes
+          ? `Tous les types affichés · <span class="link" onclick="setAllTypes(false)">↩ limiter à cette série</span>`
+          : `${serieTypeCount} type(s) connu(s) pour cette série · <span class="link" onclick="setAllTypes(true)">➕ voir tous les types</span>` }</div>`
+        : (ce && serieTypeCount===0 ? `<div class="field-hint">Aucun type connu pour cette série — liste complète affichée.</div>` : '') }
+    </div>
     <div class="field"><label class="field-label">Nom(s) de l'article — un SKU par ligne</label>
-      <div class="sku-list" id="skuList">${renderSkuRows(nameUniverse)}</div>
+      <div class="sku-list" id="skuList">${renderSkuRows(nameUniverse())}</div>
       <div class="flex-row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="addSku()">+ Ajouter un SKU (même EAN)</button></div>
+      ${ cN && tN ? `<div class="field-hint">${ s.allNames
+          ? `Tous les noms de la série (${namesSerie.length}) · <span class="link" onclick="setAllNames(false)">↩ limiter à ce type</span>`
+          : `${namesType.length} nom(s) pour « ${esc(s.type)} »${ moreNames ? ` · <span class="link" onclick="setAllNames(true)">➕ tous les noms de la série</span>` : '' }` }</div>` : '' }
       <div class="field-hint">Plusieurs noms = plusieurs SKU pour un seul EAN (ex. ETB ME1 Lucario / Gardevoir).</div>
     </div>
   </div></div>`;
 
   document.getElementById('passBody').innerHTML=html;
 }
+
+/* ── Picker « série » combiné code + nom (n.a. en premier, puis tri alpha par libellé) ── */
+const alphaCmp=(a,b)=>String(a).localeCompare(String(b),'fr',{sensitivity:'base'});
+function serieLabel(code,nom){ if(isNA(code)) return 'n.a. — coffret multi-séries'; return nom?`${code} ${nom}`:String(code); }
+function serieOptions(){
+  const arr=[...STATE.byCode.values()].map(e=>({code:e.code,nomSerie:e.nomSerie||'',label:serieLabel(e.code,e.nomSerie)}));
+  arr.sort((a,b)=>{ const an=isNA(a.code),bn=isNA(b.code); if(an!==bn) return an?-1:1; return alphaCmp(a.label,b.label); });
+  return arr;
+}
+function renderSeriePicker(){
+  const s=STATE.scan; const opts=serieOptions(); const curNorm=eanNorm(s.code);
+  const known = curNorm!=='' && opts.some(o=>eanNorm(o.code)===curNorm);
+  const isManual = !!s._manual_code || (curNorm!=='' && !known);
+  let oh=['<option value="">— choisir une série —</option>'];
+  for(const o of opts) oh.push(`<option value="${esc(o.code)}" ${(!isManual && eanNorm(o.code)===curNorm)?'selected':''}>${esc(o.label)}</option>`);
+  oh.push(`<option value="__manual__" ${isManual?'selected':''}>✎ nouvelle série…</option>`);
+  let h=`<select onchange="onSeriePick(this.value)">${oh.join('')}</select>`;
+  if(isManual){
+    h+=`<div class="sku-row" style="margin-top:8px">
+      <input value="${esc(s.code)}" placeholder="code (ex. EV9.0 ou n.a.)" oninput="STATE.scan.code=this.value" onchange="renderScan()" style="flex:0 0 38%">
+      <input value="${esc(s.nomSerie)}" placeholder="nom de la série" oninput="STATE.scan.nomSerie=this.value">
+    </div>
+    <div class="field-hint" style="color:var(--accent2);margin-top:6px">Nouvelle série (saisie manuelle)</div>`;
+  } else if(known){
+    const ce=codeEntry();
+    h+=`<div class="field-hint">${ce?`${ce.types.size} type(s) · ${ce.names.size} nom(s) connus dans cette série`:''}</div>`;
+  }
+  return h;
+}
+function onSeriePick(val){
+  const s=STATE.scan;
+  if(val==='__manual__'){ s._manual_code=true; s.code=''; s.nomSerie=''; }
+  else { s._manual_code=false; s.code=val; const ce=codeEntry(); s.nomSerie=ce?ce.nomSerie:''; }
+  // cascade : changer de série invalide le type et les noms en aval
+  s.type=''; s.names=['']; s.allTypes=false; s.allNames=false;
+  renderScan();
+}
+/* Univers de types : par défaut ceux de la série (alpha) ; élargi = liste complète (alpha) ;
+   pas de série OU série sans type connu = liste complète. */
+function typeUniverse(){
+  const s=STATE.scan, ce=codeEntry();
+  const serieTypes=ce?[...ce.types].filter(t=>eanNorm(t)):[];
+  if(!ce || serieTypes.length===0 || s.allTypes) return [...new Set([...serieTypes,...STATE.typeList])].sort(alphaCmp);
+  return serieTypes.slice().sort(alphaCmp);
+}
+/* Univers de noms : par défaut série + type (alpha) ; élargi = tous les noms de la série (alpha). */
+function nameUniverse(){
+  const s=STATE.scan, cN=eanNorm(s.code);
+  if(!cN) return [];
+  return s.allNames ? namesFor(cN,'') : namesFor(cN,eanNorm(s.type));
+}
+function setAllTypes(v){ STATE.scan.allTypes=!!v; renderScan(); }
+function setAllNames(v){ STATE.scan.allNames=!!v; renderScan(); }
 function selectOrManual(key,val,opts,ph){
   const norm=eanNorm(val);
   const inList = opts.some(o=>eanNorm(o)===norm) && norm!=='';
@@ -632,8 +758,8 @@ function selectOrManual(key,val,opts,ph){
 }
 function onSelectField(key,val){
   if(val==='__manual__'){ STATE.scan[key]=''; STATE.scan['_manual_'+key]=true; }
-  else { STATE.scan[key]=val; STATE.scan['_manual_'+key]=false;
-    if(key==='code'){ const ce=codeEntry(); if(ce) STATE.scan.nomSerie=ce.nomSerie; } }
+  else { STATE.scan[key]=val; STATE.scan['_manual_'+key]=false; }
+  if(key==='type'){ STATE.scan.allNames=false; }   // les noms dépendent du type → on repart du filtre série+type
   renderScan();
 }
 function onManualField(key,val){ STATE.scan[key]=val; if(key==='code'||key==='type'){ /* pas de re-render pour ne pas perdre le focus */ } }
@@ -650,7 +776,79 @@ function renderSkuRows(nameUniverse){
 function addSku(){ STATE.scan.names.push(''); renderScan(); }
 function removeSku(i){ STATE.scan.names.splice(i,1); if(!STATE.scan.names.length) STATE.scan.names=['']; renderScan(); }
 function refreshEanStatus(){ const v=validateEan(STATE.scan.ean); const el=document.getElementById('eanStatus'); if(el){ el.textContent=(v.ok?'✓ ':'⚠ ')+v.reason; el.className='ean-status '+(v.ok?'ok':'warn'); } }
-function onEanKey(e){ if(e.key==='Enter'){ e.preventDefault(); refreshEanStatus(); const codeSel=document.querySelector('select'); if(codeSel) codeSel.focus(); } }
+function onEanKey(e){
+  if(e.key!=='Enter') return;
+  e.preventDefault();
+  refreshEanStatus();
+  if(checkExistingEan()) return;   // (#28) EAN déjà connu → pop-up, on ne déroule pas la définition
+  const codeSel=document.querySelector('select'); if(codeSel) codeSel.focus();
+}
+
+/* ===========================================================================
+   (#28) DÉTECTION « EAN DÉJÀ CONNU » + POP-UP
+   =========================================================================== */
+function findEanMatches(dig){
+  if(!dig) return {map:[], stock:[]};
+  const map=STATE.mapByEan.get(dig)||[];
+  const stock=STATE.stock.rows.filter(r=>eanDigits(r.ean)===dig);
+  return {map, stock};
+}
+/* Renvoie true si un pop-up a été affiché (EAN déjà présent). */
+function checkExistingEan(){
+  const dig=eanDigits(STATE.scan.ean);
+  if(dig.length<8) return false;                 // trop court pour être un EAN-8/13 réel
+  const {map,stock}=findEanMatches(dig);
+  if(!map.length && !stock.length) return false;
+  showDupPopup(dig, map, stock);
+  return true;
+}
+function showDupPopup(dig, mapHits, stockHits){
+  // dédupe les SKU du référentiel par (nom|type|série)
+  const seen=new Set(), skus=[];
+  for(const m of mapHits){ const k=eanNorm(m.nom)+'|'+eanNorm(m.type)+'|'+eanNorm(m.code); if(seen.has(k)) continue; seen.add(k); skus.push(m); }
+  const total=skus.length+stockHits.length;
+
+  let body=`<div class="logo-mark" style="margin:0 0 14px;background:linear-gradient(135deg,var(--warning),#d9920a);color:#0a0c10">!</div>
+    <h3>EAN déjà connu</h3>
+    <p style="margin-bottom:16px">Le code <code style="color:var(--text)">${esc(dig)}</code> est déjà rattaché à ${total>1?'ces articles':'cet article'} :</p>`;
+
+  if(skus.length){
+    body+=`<div class="section-title" style="margin-bottom:6px">Référentiel ${esc(SHEET_MAP)}</div><div class="sku-list" style="margin-bottom:14px">`;
+    for(const m of skus){
+      body+=`<div class="sku-row" style="align-items:flex-start">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600">${esc(m.nom||'(sans nom)')}</div>
+          <div class="field-hint" style="margin-top:2px">${esc(m.type||'—')}${m.code?' · '+esc(m.code):''}</div>
+        </div><span class="sku-tag">SKU</span></div>`;
+    }
+    body+=`</div>`;
+  }
+  if(stockHits.length){
+    body+=`<div class="section-title" style="margin-bottom:6px">Lignes de ${esc(SHEET_STOCK)}</div><div class="sku-list" style="margin-bottom:16px">`;
+    for(const r of stockHits.slice(0,12)){
+      body+=`<div class="sku-row" style="align-items:flex-start">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600">${esc(r.nomItem)}</div>
+          <div class="field-hint" style="margin-top:2px">ligne ${r.rowNum} · ${esc(r.typeItem||'—')}${r.codeSerie?' · '+esc(r.codeSerie):''} · qté ${esc(r.qty||'—')}</div>
+        </div></div>`;
+    }
+    if(stockHits.length>12) body+=`<div class="field-hint">+ ${stockHits.length-12} autre(s) ligne(s)…</div>`;
+    body+=`</div>`;
+  }
+
+  body+=`<div class="flex-row" style="gap:10px">
+      <button class="btn btn-primary" id="dupSkipBtn" onclick="dupSkip()">⏭️ Scanner le suivant</button>
+      <button class="btn btn-ghost" onclick="dupContinue()">Continuer quand même →</button>
+    </div>
+    <div class="field-hint" style="margin-top:10px">« Continuer » sert aux reprints (même produit, nouveau code) ou à l'ajout d'une variante partageant l'EAN (cas B).</div>`;
+
+  document.getElementById('dupBody').innerHTML=body;
+  document.getElementById('dupOverlay').classList.add('show');
+  requestAnimationFrame(()=>{ const b=document.getElementById('dupSkipBtn'); if(b) b.focus(); });
+}
+function closeDup(){ document.getElementById('dupOverlay').classList.remove('show'); }
+function dupSkip(){ closeDup(); STATE.scan.ean=''; refreshEanStatus(); const el=document.getElementById('eanInput'); if(el){ el.value=''; el.focus(); el.select(); } }
+function dupContinue(){ closeDup(); const codeSel=document.querySelector('select'); if(codeSel) codeSel.focus(); }
 
 /* ===========================================================================
    PASSE 2 — rattachement (candidats classés)
@@ -840,7 +1038,13 @@ async function commitPlan(){
       const ts=new Date().toISOString();
       const vals=newMap.map(m=>[m.ean,m.cle,m.code,m.type,m.nom,'',APP_SOURCE,ts]);
       await sheetsAppend(a1(SHEET_MAP,'A1'),vals);
-      newMap.forEach(m=>{ STATE.mapSet.add(eanNorm(m.ean)+'|'+m.cle); backup.map.push({ean:m.ean,cle:m.cle}); });
+      newMap.forEach(m=>{
+        STATE.mapSet.add(eanNorm(m.ean)+'|'+m.cle);
+        const dig=eanDigits(m.ean);
+        if(dig){ if(!STATE.mapByEan.has(dig)) STATE.mapByEan.set(dig,[]);
+          STATE.mapByEan.get(dig).push({ cle:m.cle, code:m.code, type:m.type, nom:m.nom, source:APP_SOURCE, ts }); }
+        backup.map.push({ean:m.ean,cle:m.cle});
+      });
     }
     // mise à jour de l'état local (les lignes ont maintenant un EAN + nom canonique)
     for(const w of plan.stockWrites){ const r=rowByNum(w.row); if(r){ r.nomItem=w.nomTo; r.ean=w.eanTo; } }
@@ -854,7 +1058,7 @@ async function commitPlan(){
     btn.disabled=false; btn.textContent='✓ Réessayer';
   }
 }
-function resetScan(){ STATE.scan={ ean:'', code:'', nomSerie:'', type:'', names:[''], sel:new Map(), broaden:false, stamp:true, search:'' }; }
+function resetScan(){ STATE.scan={ ean:'', code:'', nomSerie:'', type:'', names:[''], sel:new Map(), broaden:false, stamp:true, search:'', allTypes:false, allNames:false, _manual_code:false }; }
 
 /* ===========================================================================
    PASSE 4 — lignes sans EAN
