@@ -2,8 +2,20 @@
 <!--
 =============================================================
   TCG EAN-SCAN — Le Gardien du TCG
-  Version : 0.1.0 (Session #27 — Increment A du chantier scellé)
+  Version : 0.2.0 (Session #27 — Increment A du chantier scellé)
 =============================================================
+  0.2.0  Améliorations (retour terrain après ~30 scans).
+         - [#1] Prix d'achat UNITAIRE affiché dans toutes les listes de produits
+           (candidats, aperçu, sans-EAN) = prix d'achat (total calculé) ÷ quantité.
+           Robuste : gère le cas « unitaire lui-même formule » sans parser la formule.
+         - [#2/#5] Article absent du stock : on peut désormais avancer avec 0 ligne
+           sélectionnée et n'enregistrer QUE le mapping EAN (produit nouveau/à venir).
+           buildPlan mappe tous les SKU définis, indépendamment du stock.
+         - [#3] Liste des noms filtrée par série ET type, triée alphabétiquement
+           (insensible accents). Toutes les listes de choix triées alpha.
+         - [#4] Fix clavier iOS : le champ de filtre ne re-dessine plus toute l'étape
+           à chaque frappe (table isolée dans #candWrap → focus conservé).
+         - Détection de colonnes insensible aux accents/apostrophes (headerNorm).
   0.1.0  Création. Enrichissement EAN du scellé, SANS split (décision A).
          - Scan douchette CS7501 (reconstruction keydown) + saisie manuelle ;
            validation checksum EAN-13 (non bloquante, override possible).
@@ -283,7 +295,7 @@ const SHEET_TRANS     = 'Scelle_Transactions';
 const SHEET_MAP       = 'EAN_MAPPING';
 const MAP_HEADERS     = ['EAN','cle_scellee','code_serie','type_item','nom_item','id_product_cm','source','maj_ts'];
 const APP_SOURCE      = 'tcg-ean-scan';
-const APP_VERSION     = '0.1.0';
+const APP_VERSION     = '0.2.0';
 /* Écriture → scope complet (≠ dedup qui était readonly). */
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
 const NA              = 'n.a.';
@@ -357,6 +369,7 @@ async function getSpreadsheetSheets(spreadsheetId=GSHEET_ID){
    NORMALISATION & CLÉ (reprise de tcg-ean-dedup)
    =========================================================================== */
 function eanNorm(s){ return String(s==null?'':s).trim().toLowerCase().replace(/\s+/g,' '); }
+function headerNorm(s){ return eanNorm(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/['’`]/g,''); }
 function isNA(s){ const v=eanNorm(s); return v==='' || v===NA || v==='nan'; }
 function buildSealedKey(r){
   const cs=eanNorm(r.codeSerie), ni=eanNorm(r.nomItem);
@@ -389,7 +402,8 @@ const COLS = {
   codeSerie:['code série','code serie'], nomSerie:['nom série','nom serie'],
   typeItem:['type_item','type item'], nomItem:['nom_item','nom item'],
   qty:['quantité','quantite','qté','qte'], ean:['ean','code barre','code-barres','codebarre','code-barre'],
-  key:['key','clé','cle'], cote:['côte/u','cote/u','côte / u','cote / u']
+  key:['key','clé','cle'], cote:['côte/u','cote/u','côte / u','cote / u'],
+  prixAchat:["prix d'achat",'prix achat','prix_achat','prix d achat','prix dachat']
 };
 function resolveHeader(rows){
   for(let i=0;i<Math.min(60,rows.length);i++){
@@ -403,8 +417,8 @@ function resolveHeader(rows){
   return 0;
 }
 function colIndex(headerRow,aliases){
-  const low=headerRow.map(c=>eanNorm(c));
-  for(const a of aliases){ const i=low.indexOf(a); if(i>=0) return i; }
+  const low=headerRow.map(c=>headerNorm(c));
+  for(const a of aliases){ const i=low.indexOf(headerNorm(a)); if(i>=0) return i; }
   return -1;
 }
 function parseSheet(values, sheetName){
@@ -424,6 +438,7 @@ function parseSheet(values, sheetName){
       typeItem:idx.typeItem>=0?(row[idx.typeItem]||''):'',
       nomItem:String(nomItem),
       qty:idx.qty>=0?(row[idx.qty]||''):'',
+      prixAchat:idx.prixAchat>=0?(row[idx.prixAchat]||''):'',
       ean:idx.ean>=0?String(row[idx.ean]||'').trim():'',
     });
   }
@@ -556,7 +571,7 @@ function renderPass(){ if(STATE.pass===1) renderScan(); else if(STATE.pass===2) 
 function prevPass(){ if(STATE.pass>1) goPass(STATE.pass-1); }
 function nextPass(){
   if(STATE.pass===1){ if(!scanReady()){ toast('Renseigne l\'EAN, la série, le type et au moins un nom'); return; } goPass(2); }
-  else if(STATE.pass===2){ if(STATE.scan.sel.size===0){ toast('Sélectionne au moins une ligne de stock'); return; } goPass(3); }
+  else if(STATE.pass===2){ goPass(3); }
 }
 
 /* ===========================================================================
@@ -568,9 +583,9 @@ function codeEntry(){ return STATE.byCode.get(eanNorm(STATE.scan.code)); }
 function renderScan(){
   const s=STATE.scan; const ce=codeEntry();
   const v=validateEan(s.ean);
-  const codeOpts=[...STATE.byCode.values()].sort((a,b)=>a.code.localeCompare(b.code));
+  const codeOpts=[...STATE.byCode.values()].sort((a,b)=>String(a.code).localeCompare(String(b.code),'fr',{sensitivity:'base'}));
   const typeUniverse = ce ? [...new Set([...ce.types, ...STATE.typeList])] : STATE.typeList;
-  const nameUniverse = ce ? [...ce.names].filter(n=> !s.type || true) : [];
+  const nameUniverse = namesFor(eanNorm(s.code), eanNorm(s.type));
 
   let html=`<div class="card"><div class="card-header"><span class="card-title">📷 Article scanné</span>
       <span class="badge ${v.ok?'green':'yellow'}">${esc(v.reason)}</span></div>
@@ -609,10 +624,10 @@ function selectOrManual(key,val,opts,ph){
   const inList = opts.some(o=>eanNorm(o)===norm) && norm!=='';
   const isManual = norm!=='' && !inList;
   const optHtml=['<option value="">— choisir —</option>']
-    .concat(opts.slice().sort((a,b)=>String(a).localeCompare(String(b))).map(o=>`<option value="${esc(o)}" ${eanNorm(o)===norm?'selected':''}>${esc(o)}</option>`))
+    .concat(opts.slice().sort((a,b)=>String(a).localeCompare(String(b),'fr',{sensitivity:'base'})).map(o=>`<option value="${esc(o)}" ${eanNorm(o)===norm?'selected':''}>${esc(o)}</option>`))
     .concat([`<option value="__manual__" ${isManual?'selected':''}>✎ saisie manuelle…</option>`]).join('');
   let h=`<select onchange="onSelectField('${key}',this.value)">${optHtml}</select>`;
-  if(isManual) h+=`<input style="margin-top:8px" value="${esc(val)}" oninput="onManualField('${key}',this.value)" placeholder="${esc(ph)}">`;
+  if(isManual) h+=`<input style="margin-top:8px" value="${esc(val)}" oninput="onManualField('${key}',this.value)" onchange="renderScan()" placeholder="${esc(ph)}">`;
   return h;
 }
 function onSelectField(key,val){
@@ -657,46 +672,56 @@ function candidates(){
 }
 function renderMatch(){
   const s=STATE.scan; const skus=definedSkus();
-  const cand=candidates();
-  const ratioCls=r=>r>=.85?'hi':(r>=.6?'mid':'lo');
   let html=`<div class="card"><div class="card-header"><span class="card-title">🔗 Rattacher au stock</span>
       <span class="badge cyan">EAN ${esc(s.ean.replace(/\D/g,''))}</span></div>
     <div class="card-body">
       <div class="field-hint" style="margin-bottom:12px">SKU définis : ${skus.map(k=>`<span class="sku-tag">${esc(k.nom)}</span>`).join(' ')||'<span style="color:var(--warning)">aucun</span>'}</div>
       <div class="toolbar">
-        <input class="search" placeholder="filtrer par nom…" value="${esc(s.search)}" oninput="STATE.scan.search=this.value;renderMatch()">
-        <label class="flex-row" style="font-size:.78rem;color:var(--dim);gap:6px"><input type="checkbox" ${s.broaden?'checked':''} onchange="STATE.scan.broaden=this.checked;renderMatch()" style="width:16px;height:16px;accent-color:var(--accent)"> élargir (ignorer série+type)</label>
-        <span class="badge">${cand.length} candidat(s)</span>
-      </div>`;
-  if(!cand.length){
-    html+=`<div class="empty"><div class="big">Aucun candidat</div><div>${s.broaden?'Aucune ligne de stock ne ressemble à ce nom.':'Aucune ligne avec ce code série + type. Active « élargir » pour voir tout le stock.'}</div></div>`;
-  }else{
-    const multi=skus.length>1;
-    html+=`<div class="scroll"><table class="grid"><thead><tr>
-      <th style="width:38px"></th><th>Nom_Item (stock)</th><th>Type</th><th>Série</th><th>Qté</th><th>Match</th>${multi?'<th>→ SKU</th>':''}</tr></thead><tbody>`;
-    for(const x of cand.slice(0,800)){
-      const sel=STATE.scan.sel.has(x.r.rowNum);
-      const chosen=STATE.scan.sel.get(x.r.rowNum);
-      const skuIdx = chosen!=null?chosen:x.skuIndex;
-      const hasEan = x.r.ean ? `<span class="badge yellow" title="EAN déjà présent">EAN ${esc(x.r.ean)}</span>` : '';
-      html+=`<tr class="${sel?'sel':''}">
-        <td><input type="checkbox" ${sel?'checked':''} onchange="toggleSel(${x.r.rowNum},${skuIdx})"></td>
-        <td>${esc(x.r.nomItem)} ${hasEan}</td>
-        <td class="mono">${esc(x.r.typeItem)}</td>
-        <td class="mono">${esc(x.r.codeSerie||NA)}</td>
-        <td class="mono">${esc(x.r.qty)}</td>
-        <td><span class="ratio ${ratioCls(x.ratio)}">${Math.round(x.ratio*100)}%</span></td>
-        ${multi?`<td><select class="skupick" onchange="setSelSku(${x.r.rowNum},this.value)" ${sel?'':'disabled'}>${skus.map((k,i)=>`<option value="${i}" ${i===skuIdx?'selected':''}>${esc(k.nom)}</option>`).join('')}</select></td>`:''}
-      </tr>`;
-    }
-    html+=`</tbody></table></div>`;
-    if(cand.length>800) html+=`<div class="field-hint" style="margin-top:10px">Affichage limité à 800 lignes — affine le filtre.</div>`;
-    html+=`<div class="field-hint" style="margin-top:12px">${STATE.scan.sel.size} ligne(s) sélectionnée(s). Rappel Increment A : 1 ligne → 1 SKU (pas de répartition de quantité ; le split arrive en Increment B).</div>`;
-  }
-  html+=`</div></div>`;
+        <input class="search" placeholder="filtrer par nom…" value="${esc(s.search)}" oninput="STATE.scan.search=this.value;updateCandTable()">
+        <label class="flex-row" style="font-size:.78rem;color:var(--dim);gap:6px"><input type="checkbox" ${s.broaden?'checked':''} onchange="STATE.scan.broaden=this.checked;updateCandTable()" style="width:16px;height:16px;accent-color:var(--accent)"> élargir (ignorer série+type)</label>
+      </div>
+      <div id="candWrap"></div>
+    </div></div>`;
   document.getElementById('passBody').innerHTML=html;
+  updateCandTable();
 }
-function toggleSel(rowNum,skuIdx){ const m=STATE.scan.sel; if(m.has(rowNum)) m.delete(rowNum); else m.set(rowNum,skuIdx); renderMatch(); }
+function updateCandTable(){
+  const s=STATE.scan; const skus=definedSkus(); const cand=candidates();
+  const ratioCls=r=>r>=.85?'hi':(r>=.6?'mid':'lo');
+  const wrap=document.getElementById('candWrap'); if(!wrap) return;
+  let html=`<div class="field-hint" style="margin-bottom:10px">${cand.length} candidat(s) · ${s.sel.size} sélectionné(s)</div>`;
+  if(!cand.length){
+    html+=`<div class="empty"><div class="big">Aucun candidat en stock</div>
+      <div>${s.broaden?'Aucune ligne de stock ne ressemble à ce nom.':'Aucune ligne avec ce code série + type. Active « élargir » pour voir tout le stock,'}</div>
+      <div style="margin-top:14px">ou enregistre directement cet EAN dans le mapping (article pas encore en stock) :</div>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="goPass(3)">→ Enregistrer le mapping EAN seul</button></div>`;
+    wrap.innerHTML=html; return;
+  }
+  const multi=skus.length>1;
+  html+=`<div class="scroll"><table class="grid"><thead><tr>
+    <th style="width:38px"></th><th>Nom_Item (stock)</th><th>Type</th><th>Série</th><th>Qté</th><th>Prix u.</th><th>Match</th>${multi?'<th>→ SKU</th>':''}</tr></thead><tbody>`;
+  for(const x of cand.slice(0,800)){
+    const sel=s.sel.has(x.r.rowNum);
+    const chosen=s.sel.get(x.r.rowNum);
+    const skuIdx = chosen!=null?chosen:x.skuIndex;
+    const hasEan = x.r.ean ? `<span class="badge yellow" title="EAN déjà présent">EAN ${esc(x.r.ean)}</span>` : '';
+    html+=`<tr class="${sel?'sel':''}">
+      <td><input type="checkbox" ${sel?'checked':''} onchange="toggleSel(${x.r.rowNum},${skuIdx})"></td>
+      <td>${esc(x.r.nomItem)} ${hasEan}</td>
+      <td class="mono">${esc(x.r.typeItem)}</td>
+      <td class="mono">${esc(x.r.codeSerie||NA)}</td>
+      <td class="mono">${esc(x.r.qty)}</td>
+      <td class="mono">${fmtMoney(unitPrice(x.r))}</td>
+      <td><span class="ratio ${ratioCls(x.ratio)}">${Math.round(x.ratio*100)}%</span></td>
+      ${multi?`<td><select class="skupick" onchange="setSelSku(${x.r.rowNum},this.value)" ${sel?'':'disabled'}>${skus.map((k,i)=>`<option value="${i}" ${i===skuIdx?'selected':''}>${esc(k.nom)}</option>`).join('')}</select></td>`:''}
+    </tr>`;
+  }
+  html+=`</tbody></table></div>`;
+  if(cand.length>800) html+=`<div class="field-hint" style="margin-top:10px">Affichage limité à 800 lignes — affine le filtre.</div>`;
+  html+=`<div class="field-hint" style="margin-top:12px">1 ligne → 1 SKU (pas de répartition de quantité ; le split arrive en Increment B).</div>`;
+  wrap.innerHTML=html;
+}
+function toggleSel(rowNum,skuIdx){ const m=STATE.scan.sel; if(m.has(rowNum)) m.delete(rowNum); else m.set(rowNum,skuIdx); updateCandTable(); }
 function setSelSku(rowNum,v){ if(STATE.scan.sel.has(rowNum)) STATE.scan.sel.set(rowNum,parseInt(v,10)); }
 
 /* ===========================================================================
@@ -707,16 +732,14 @@ function buildPlan(){
   const s=STATE.scan; const skus=definedSkus(); const ean=s.ean.replace(/\D/g,'');
   const idxS=STATE.stock.idx;
   const stockWrites=[]; // {row, nomFrom, nomTo, eanFrom, eanTo}
-  const usedSkus=new Set();
   for(const [rowNum,skuIdx] of STATE.scan.sel){
-    const r=rowByNum(rowNum); if(!r) continue; const sk=skus[skuIdx]||skus[0]; usedSkus.add(skuIdx);
+    const r=rowByNum(rowNum); if(!r) continue; const sk=skus[skuIdx]||skus[0];
     stockWrites.push({ row:rowNum, nomFrom:r.nomItem, nomTo:sk.nom, eanFrom:r.ean, eanTo:ean,
       nomCol:colLetter(idxS.nomItem), eanCol:colLetter(idxS.ean) });
   }
-  // EAN_MAPPING : 1 ligne par SKU effectivement utilisé, dédupliqué contre l'existant
+  // EAN_MAPPING : 1 ligne par SKU défini (indépendant du stock), dédupliqué contre l'existant
   const mapRows=[];
-  skus.forEach((sk,i)=>{
-    if(!usedSkus.has(i)) return;
+  skus.forEach((sk)=>{
     const cle=buildSealedKey({codeSerie:sk.code,typeItem:sk.type,nomItem:sk.nom});
     const dup=STATE.mapSet.has(eanNorm(ean)+'|'+cle);
     mapRows.push({ ean, cle, code:sk.code, type:sk.type, nom:sk.nom, dup });
@@ -726,8 +749,8 @@ function buildPlan(){
   if(s.stamp){
     const idxT=STATE.trans.idx;
     if(idxT.ean>=0){
-      const usedNames=[...usedSkus].map(i=>skus[i].nom);
-      for(const r of STATE.trans.rows){
+      const usedNames=[...new Set([...STATE.scan.sel.values()])].map(i=>skus[i]&&skus[i].nom).filter(Boolean);
+      if(usedNames.length) for(const r of STATE.trans.rows){
         if(r.ean) continue;
         if(eanNorm(r.codeSerie)!==eanNorm(s.code) || eanNorm(r.typeItem)!==eanNorm(s.type)) continue;
         const best=Math.max(0,...usedNames.map(n=>simRatio(r.nomItem,n)));
@@ -745,15 +768,17 @@ function renderPreview(){
   // Stock
   html+=`<div class="prev-block"><h4>📦 ${SHEET_STOCK} <span class="badge">${plan.stockWrites.length} ligne(s)</span></h4>`;
   if(plan.stockWrites.length){
-    html+=`<div class="scroll" style="max-height:34vh"><table class="grid"><thead><tr><th>Ligne</th><th>Nom_Item</th><th>EAN</th></tr></thead><tbody>`;
+    html+=`<div class="scroll" style="max-height:34vh"><table class="grid"><thead><tr><th>Ligne</th><th>Nom_Item</th><th>EAN</th><th>Prix u.</th></tr></thead><tbody>`;
     for(const w of plan.stockWrites){
       const nomChg = eanNorm(w.nomFrom)!==eanNorm(w.nomTo);
+      const r0=rowByNum(w.row);
       html+=`<tr><td class="mono">${w.row}</td>
         <td>${nomChg?`<span class="diff-from">${esc(w.nomFrom)}</span> → <span class="diff-to">${esc(w.nomTo)}</span>`:`${esc(w.nomTo)} <span class="badge">inchangé</span>`}</td>
-        <td>${w.eanFrom?`<span class="diff-from mono">${esc(w.eanFrom)}</span> → `:''}<span class="diff-to mono">${esc(w.eanTo)}</span></td></tr>`;
+        <td>${w.eanFrom?`<span class="diff-from mono">${esc(w.eanFrom)}</span> → `:''}<span class="diff-to mono">${esc(w.eanTo)}</span></td>
+        <td class="mono">${r0?fmtMoney(unitPrice(r0)):'—'}</td></tr>`;
     }
     html+=`</tbody></table></div>`;
-  } else html+=`<div class="field-hint">Rien à écrire.</div>`;
+  } else html+=`<div class="field-hint">Aucune ligne de stock sélectionnée — <b style="color:var(--accent2)">nouveau produit</b> : seul le mapping EAN est enregistré.</div>`;
   html+=`</div>`;
 
   // Transactions
@@ -840,8 +865,8 @@ function renderNoEan(){
   if(!rows.length){ html+=`<div class="empty"><div class="big">Tout est relié 🎉</div><div>Aucune ligne de ${SHEET_STOCK} sans EAN.</div></div>`; }
   else{
     html+=`<div class="field-hint" style="margin-bottom:10px">Ce qu'il te reste à scanner. (L'étape suivante de réconciliation viendra plus tard.)</div>
-      <div class="scroll"><table class="grid"><thead><tr><th>Ligne</th><th>Nom_Item</th><th>Type</th><th>Série</th><th>Qté</th></tr></thead><tbody>`;
-    for(const r of rows.slice(0,1500)) html+=`<tr><td class="mono">${r.rowNum}</td><td>${esc(r.nomItem)}</td><td class="mono">${esc(r.typeItem)}</td><td class="mono">${esc(r.codeSerie||NA)}</td><td class="mono">${esc(r.qty)}</td></tr>`;
+      <div class="scroll"><table class="grid"><thead><tr><th>Ligne</th><th>Nom_Item</th><th>Type</th><th>Série</th><th>Qté</th><th>Prix u.</th></tr></thead><tbody>`;
+    for(const r of rows.slice(0,1500)) html+=`<tr><td class="mono">${r.rowNum}</td><td>${esc(r.nomItem)}</td><td class="mono">${esc(r.typeItem)}</td><td class="mono">${esc(r.codeSerie||NA)}</td><td class="mono">${esc(r.qty)}</td><td class="mono">${fmtMoney(unitPrice(r))}</td></tr>`;
     html+=`</tbody></table></div>`;
     if(rows.length>1500) html+=`<div class="field-hint" style="margin-top:10px">Affichage limité à 1500 lignes.</div>`;
   }
@@ -866,6 +891,26 @@ window.exportLog=function(){ try{ return JSON.parse(localStorage.getItem(LS_LOG)
    UTILITAIRES
    =========================================================================== */
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* Parse un nombre au format européen ("1 234,56 €" → 1234.56). */
+function parseNum(v){ if(v==null) return NaN; let s=String(v).trim(); if(!s) return NaN;
+  s=s.replace(/[^\d,.\-]/g,'');
+  if(s.indexOf(',')>=0 && s.indexOf('.')>=0) s=s.replace(/\./g,'').replace(',','.');
+  else if(s.indexOf(',')>=0) s=s.replace(',','.');
+  const n=parseFloat(s); return isNaN(n)?NaN:n; }
+/* Prix d'achat UNITAIRE = prix d'achat (total calculé) ÷ quantité. null si incalculable. */
+function unitPrice(r){ const tot=parseNum(r.prixAchat), q=parseNum(r.qty); if(isNaN(tot)||isNaN(q)||q===0) return null; return tot/q; }
+function fmtMoney(n){ if(n==null||isNaN(n)) return '—'; return n.toLocaleString('fr-BE',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; }
+/* Noms d'item existants pour un code série (et un type si choisi), triés alpha. */
+function namesFor(codeNorm,typeNorm){
+  if(!codeNorm) return [];
+  const set=new Set();
+  for(const r of STATE.stock.rows.concat(STATE.trans.rows)){
+    if(eanNorm(r.codeSerie)!==codeNorm) continue;
+    if(typeNorm && eanNorm(r.typeItem)!==typeNorm) continue;
+    if(r.nomItem) set.add(r.nomItem);
+  }
+  return [...set].sort((a,b)=>a.localeCompare(b,'fr',{sensitivity:'base'}));
+}
 let toastTimer=null;
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),3000); }
 
