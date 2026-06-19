@@ -2,10 +2,26 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.6.0 (Session #27 — 2026-06-19)
+  Version : 1.6.1 (Session #27 — 2026-06-19)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.6.1  2026-06-19  Session #27 — IMPRESSION calée sur la Brother HL-L2400DWE.
+         ⚠️ NON testé navigateur (à vérifier sur la Brother + planches CL40E réelles).
+         - [Fix 🔴] Décalage bas-droite à l'impression : la Brother a une zone NON
+           imprimable de 4,2 mm sur chaque bord (doc Brother) ; une planche pleine largeur
+           (210 mm) était décalée par le pilote → colonne 4 et rangée 10 hors découpes.
+           Correctif : @page { margin:4.2mm } déclare la vraie marge imprimante (le pilote
+           n'« ajuste »/ne réduit plus), et la planche est recentrée sur la page physique
+           via une marge négative de 4,2 mm → débordement symétrique dans la seule bande
+           non imprimable. Cellules conservées à 52,5 × 29,6 mm (alignement découpes intact).
+         - [Fix] Marge intérieure des étiquettes portée de 3 → 4,2 mm (zone utile 44,1 × 21,2
+           mm) pour couvrir EXACTEMENT la zone non imprimable → garantie zéro rognage. Zones
+           recalées (bannière 33×9,78 ; logo/QR carrés 10,3 ; texte 20,46×10,62 ; prix
+           12,54×10,62). Plafond police info abaissé à 8 pt (hauteur de zone réduite).
+         - Option commentée (transform:scale .99) si un effleurement résiduel apparaît.
+         - IMPRESSION : 100 % / « Taille réelle » ; marges pilote sur « Par défaut » (PAS
+           « Aucune » : on veut que l'imprimante applique sa marge matérielle).
   1.6.0  2026-06-19  Session #27 — ÉTIQUETTES : accès direct + mode prioritaire + fidélité PPTX.
          ⚠️ NON testé navigateur (à vérifier sur planches Multicom CL40E réelles).
          - [Feature] Accès DIRECT à l'étape 4 (impression) sans import préalable : #step4 est
@@ -535,9 +551,10 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
   box-shadow:0 8px 40px rgba(0,0,0,.4);
 }
 
-/* ── Label item : marge intérieure 3mm (zone utile 46.5 × 23.6 mm) ── */
+/* ── Label item : marge intérieure 4.2mm (zone utile 44.1 × 21.2 mm) ── */
 /* Cellule calée bord-à-bord sur les découpes Multicom CL40E (52.5 × 29.6 mm). */
-/* Le contenu reste à >= 3mm de chaque bord pour absorber tout décalage d'impression. */
+/* 4.2mm = zone NON imprimable de la Brother HL-L2400DWE en A4 : le contenu reste */
+/* à >= 4.2mm de chaque bord => GARANTIE qu'aucun élément n'est rogné à l'impression. */
 .label-item {
   width:52.5mm;
   height:29.6mm;
@@ -552,17 +569,17 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
 .label-item.selected  { outline:2px solid #1a56db; }
 .label-item.deselected { opacity:.25; }
 
-/* Bannière : left=3, top=3, 34.2×10.14 (ratio naturel 1140×338) */
+/* Bannière : left=4.2, top=4.2, 33×9.78 (ratio naturel 1140×338) */
 .z-banner {
-  position:absolute; left:3mm; top:3mm;
-  width:34.2mm; height:10.14mm; overflow:hidden;
+  position:absolute; left:4.2mm; top:4.2mm;
+  width:33mm; height:9.78mm; overflow:hidden;
 }
 .z-banner img { width:100%; height:100%; object-fit:fill; display:block; }
 
-/* Logo : left=38, top=3, 11.5×11.5 (carré) */
+/* Logo : left=38, top=4.2, 10.3×10.3 (carré) */
 .z-logo {
-  position:absolute; left:38mm; top:3mm;
-  width:11.5mm; height:11.5mm; overflow:hidden;
+  position:absolute; left:38mm; top:4.2mm;
+  width:10.3mm; height:10.3mm; overflow:hidden;
 }
 .z-logo img {
   width:100%; height:100%;
@@ -572,26 +589,26 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
   image-rendering:crisp-edges;
 }
 
-/* QR code : left=38, top=15.1, 11.5×11.5 (carré) */
+/* QR code : left=38, top=15.1, 10.3×10.3 (carré) */
 .z-qr {
   position:absolute; left:38mm; top:15.1mm;
-  width:11.5mm; height:11.5mm;
+  width:10.3mm; height:10.3mm;
   display:flex; align-items:center; justify-content:center;
 }
-.z-qr img { width:11mm; height:11mm; image-rendering:pixelated; display:block; }
+.z-qr img { width:9.8mm; height:9.8mm; image-rendering:pixelated; display:block; }
 
-/* Texte 3 lignes : left=3, top=13.94, 21.2×12.66 */
+/* Texte 3 lignes : left=4.2, top=14.78, 20.46×10.62 */
 .z-text {
-  position:absolute; left:3mm; top:13.94mm;
-  width:21.2mm; height:12.66mm;
+  position:absolute; left:4.2mm; top:14.78mm;
+  width:20.46mm; height:10.62mm;
   display:flex; flex-direction:column; justify-content:center;
 }
-.z-text span { display:block; white-space:nowrap; line-height:1.3; font-weight:600; color:#404040; }
+.z-text span { display:block; white-space:nowrap; line-height:1.25; font-weight:600; color:#404040; }
 
-/* Prix : left=24.2, top=13.94, 13×12.66 */
+/* Prix : left=24.66, top=14.78, 12.54×10.62 */
 .z-price {
-  position:absolute; left:24.2mm; top:13.94mm;
-  width:13mm; height:12.66mm;
+  position:absolute; left:24.66mm; top:14.78mm;
+  width:12.54mm; height:10.62mm;
   display:flex; align-items:center; justify-content:center;
   padding-right:1mm;
 }
@@ -626,25 +643,54 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
 .fade-up { animation:fadeUp .35s ease forwards; }
 
 /* ── Print ── */
-/* IMPORTANT : imprimer à 100% / "Taille réelle" (PAS "Ajuster à la page"),
-   marges du navigateur sur "Aucune". La règle @page ci-dessous neutralise déjà
-   les marges, mais le réglage d'échelle reste manuel dans la boîte d'impression. */
+/* Imprimante cible : Brother HL-L2400DWE (laser). Sa zone NON imprimable en A4
+   est de 4,2 mm sur chaque bord (doc Brother) : aucune laser de cette gamme ne fait
+   du bord-à-bord. Si on envoie une planche pleine largeur (210 mm), le pilote la
+   décale vers le bas-droite de 4,2 mm → colonne 4 et rangée 10 sortent des découpes.
+
+   Stratégie : on déclare la VRAIE marge imprimante via @page { margin:4.2mm }. Le
+   pilote n'« ajuste » donc plus rien et la planche est centrée dans la zone imprimable.
+   Les cellules gardent leur taille réelle (52,5 × 29,6 mm) → alignement sur les
+   découpes CL40E préservé. Le contenu, déjà en retrait de 3 mm dans chaque étiquette,
+   reste hors de la bande non imprimable → rien n'est rogné.
+
+   IMPRESSION : choisir 100 % / « Taille réelle » (PAS « Ajuster à la page »).
+   Laisser les marges du pilote sur « Par défaut » (et NON « Aucune » : on veut que
+   l'imprimante applique sa marge matérielle, pas qu'elle tente un bord-à-bord). */
 @page {
   size: A4;
-  margin: 0;
+  margin: 4.2mm;        /* = zone non imprimable Brother HL-L2400DWE */
 }
 @media print {
-  html, body { width:210mm; background:white !important; margin:0 !important; padding:0 !important; }
+  html, body { background:white !important; margin:0 !important; padding:0 !important; }
   body::before { display:none; }
   .app > * { display:none !important; }
   #content-4 { display:block !important; margin:0 !important; padding:0 !important; }
   .label-source-row, .flex-row, #labelEmpty { display:none !important; }
-  /* Grille 4×10 = 296mm sur 297mm : on recentre le 1mm restant (0.5 haut / 0.5 bas) */
-  .label-sheet { box-shadow:none; margin:0.5mm 0 0 0; padding:0; page-break-after:always; }
+
+  /* La planche fait 210 × 296 mm (taille réelle, alignée sur les découpes CL40E).
+     @page impose une marge de 4,2 mm ; on l'ANNULE avec une marge négative de 4,2 mm
+     pour caler la planche sur la PAGE PHYSIQUE (210 mm), donc centrée sur le papier.
+     Le débordement de 4,2 mm de chaque côté tombe pile dans la zone non imprimable,
+     où aucun contenu ne vit (marge intérieure 3 mm) → débordement symétrique, rien rogné. */
+  .label-sheet {
+    box-shadow:none;
+    margin:-4.2mm 0 0 -4.2mm;
+    padding:0;
+    page-break-after:always;
+  }
   /* Bordure d'écran retirée à l'impression pour ne pas marquer la ligne de découpe */
   .label-item { border:0 !important; }
   .label-item.deselected { visibility:hidden; }
   .label-item.selected { outline:none; }
+
+  /* ── OPTION anti-rognage renforcé ──
+     Si, malgré le centrage, le bord extrême du contenu des étiquettes de pourtour est
+     encore effleuré (la marge intérieure 3 mm est un peu < 4,2 mm), décommentez la
+     règle ci-dessous : elle réduit la planche de 1 % (≈ 0,5 mm par bord) SANS toucher
+     l'alignement perçu au centre. À n'activer qu'en cas de besoin constaté.
+  .label-sheet { transform:scale(0.99); transform-origin:top center; }
+  */
 }
 </style>
 </head>
@@ -1084,7 +1130,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';
@@ -2770,7 +2816,7 @@ const MM2PX    = 96 / 25.4;
 
 function _fitInfoSize(lines, maxWidthMm) {
   const maxPx = maxWidthMm * MM2PX;
-  for (let sz = 9; sz >= 5; sz -= 0.5) {
+  for (let sz = 8; sz >= 5; sz -= 0.5) {
     _fCtx.font = `600 ${sz}pt Arial`;
     const widest = Math.max(...lines.map(l => _fCtx.measureText(l).width));
     if (widest <= maxPx) return sz;
@@ -2813,8 +2859,8 @@ function renderLabelSheets() {
       if (card) {
         const lines    = [card.codeSerie, card.numCarte, card.etat];
         const priceStr = _formatPrice(card.prix);
-        const infoSz   = _fitInfoSize(lines, 21.2);
-        const priceSz  = _fitPriceSize(priceStr, 13);
+        const infoSz   = _fitInfoSize(lines, 20.46);
+        const priceSz  = _fitPriceSize(priceStr, 12.54);
 
         item.className = 'label-item ' + (card.selected ? 'selected' : 'deselected');
         item.innerHTML = `
