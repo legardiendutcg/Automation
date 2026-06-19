@@ -2,10 +2,23 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.6.1 (Session #27 — 2026-06-19)
+  Version : 1.6.2 (Session #27 — 2026-06-19)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.6.2  2026-06-19  Session #27 — IMPRESSION : retour à une grille NON mise à l'échelle.
+         ⚠️ NON testé navigateur (à vérifier sur la Brother + planches CL40E réelles).
+         - [Fix 🔴] Régression 1.6.1 : @page { margin:4.2mm } réduisait la zone à 288,6 mm
+           de haut → Chrome mettait la planche (296 mm) à l'échelle pour la faire rentrer,
+           comprimant la grille vers le centre (rangées hautes trop basses, basses trop
+           hautes ; colonnes idem). Correctif : retour à @page { margin:0 } et planche à sa
+           TAILLE RÉELLE 210 × 296 mm calée en haut-gauche, sans aucune mise à l'échelle.
+           Chaque cellule retombe alors pile sur sa découpe physique.
+         - La marge intérieure de 4,2 mm (introduite en 1.6.1) est CONSERVÉE : elle garantit
+           qu'aucun élément imprimé ne vit dans la bande non imprimable de la Brother, même si
+           le support de l'étiquette va jusqu'au bord.
+         - ⚠️ RÉGLAGE CHROME : « Échelle » doit être sur Custom = 100 (PAS « Default », qui
+           applique un shrink-to-fit et désaligne tout). Marges : Aucune. Papier : A4.
   1.6.1  2026-06-19  Session #27 — IMPRESSION calée sur la Brother HL-L2400DWE.
          ⚠️ NON testé navigateur (à vérifier sur la Brother + planches CL40E réelles).
          - [Fix 🔴] Décalage bas-droite à l'impression : la Brother a une zone NON
@@ -643,54 +656,46 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
 .fade-up { animation:fadeUp .35s ease forwards; }
 
 /* ── Print ── */
-/* Imprimante cible : Brother HL-L2400DWE (laser). Sa zone NON imprimable en A4
-   est de 4,2 mm sur chaque bord (doc Brother) : aucune laser de cette gamme ne fait
-   du bord-à-bord. Si on envoie une planche pleine largeur (210 mm), le pilote la
-   décale vers le bas-droite de 4,2 mm → colonne 4 et rangée 10 sortent des découpes.
+/* Imprimante cible : Brother HL-L2400DWE (laser), planches Multicom CL40E (jointives,
+   coins droits, 52,5 × 29,6 mm, 4×10 = 210 × 296 mm pleine page).
 
-   Stratégie : on déclare la VRAIE marge imprimante via @page { margin:4.2mm }. Le
-   pilote n'« ajuste » donc plus rien et la planche est centrée dans la zone imprimable.
-   Les cellules gardent leur taille réelle (52,5 × 29,6 mm) → alignement sur les
-   découpes CL40E préservé. Le contenu, déjà en retrait de 3 mm dans chaque étiquette,
-   reste hors de la bande non imprimable → rien n'est rogné.
+   PRINCIPE : sur des étiquettes pré-découpées, la grille imprimée doit faire
+   EXACTEMENT 210 × 296 mm — aucune mise à l'échelle, sinon chaque cellule rétrécit et
+   le décalage s'accumule vers les bords (rangées du haut trop basses, du bas trop
+   hautes ; colonnes idem). C'est pourquoi @page est en margin:0 et la planche est
+   calée en haut-gauche (origine 0,0), à sa taille réelle.
 
-   IMPRESSION : choisir 100 % / « Taille réelle » (PAS « Ajuster à la page »).
-   Laisser les marges du pilote sur « Par défaut » (et NON « Aucune » : on veut que
-   l'imprimante applique sa marge matérielle, pas qu'elle tente un bord-à-bord). */
+   La Brother a 4,2 mm non imprimables par bord : on l'ACCEPTE. Le contenu est en
+   retrait de 4,2 mm dans chaque étiquette (cf. .label-item), donc rien d'imprimé ne
+   tombe dans cette bande. Le SUPPORT (autocollant) reste, lui, parfaitement aligné.
+
+   ⚠️ RÉGLAGE CHROME OBLIGATOIRE : dans la boîte d'impression, « Échelle » doit être
+   sur Custom = 100 (PAS « Default » : Default applique un shrink-to-fit qui réduit la
+   page et désaligne tout). Papier A4, Marges : Aucune (ou Par défaut). */
 @page {
   size: A4;
-  margin: 4.2mm;        /* = zone non imprimable Brother HL-L2400DWE */
+  margin: 0;
 }
 @media print {
-  html, body { background:white !important; margin:0 !important; padding:0 !important; }
+  html, body { width:210mm; background:white !important; margin:0 !important; padding:0 !important; }
   body::before { display:none; }
   .app > * { display:none !important; }
   #content-4 { display:block !important; margin:0 !important; padding:0 !important; }
   .label-source-row, .flex-row, #labelEmpty { display:none !important; }
 
-  /* La planche fait 210 × 296 mm (taille réelle, alignée sur les découpes CL40E).
-     @page impose une marge de 4,2 mm ; on l'ANNULE avec une marge négative de 4,2 mm
-     pour caler la planche sur la PAGE PHYSIQUE (210 mm), donc centrée sur le papier.
-     Le débordement de 4,2 mm de chaque côté tombe pile dans la zone non imprimable,
-     où aucun contenu ne vit (marge intérieure 3 mm) → débordement symétrique, rien rogné. */
+  /* Planche à sa TAILLE RÉELLE (210 × 296 mm), calée en haut-gauche, sans échelle.
+     Chaque cellule tombe ainsi pile sur sa découpe physique. */
   .label-sheet {
     box-shadow:none;
-    margin:-4.2mm 0 0 -4.2mm;
+    margin:0;
     padding:0;
+    width:210mm;
     page-break-after:always;
   }
   /* Bordure d'écran retirée à l'impression pour ne pas marquer la ligne de découpe */
   .label-item { border:0 !important; }
   .label-item.deselected { visibility:hidden; }
   .label-item.selected { outline:none; }
-
-  /* ── OPTION anti-rognage renforcé ──
-     Si, malgré le centrage, le bord extrême du contenu des étiquettes de pourtour est
-     encore effleuré (la marge intérieure 3 mm est un peu < 4,2 mm), décommentez la
-     règle ci-dessous : elle réduit la planche de 1 % (≈ 0,5 mm par bord) SANS toucher
-     l'alignement perçu au centre. À n'activer qu'en cas de besoin constaté.
-  .label-sheet { transform:scale(0.99); transform-origin:top center; }
-  */
 }
 </style>
 </head>
@@ -1130,7 +1135,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.6.2';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';
