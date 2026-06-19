@@ -2,10 +2,21 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.6.2 (Session #27 — 2026-06-19)
+  Version : 1.6.3 (Session #27 — 2026-06-19)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.6.3  2026-06-19  Session #27 — IMPRESSION : compensation du décalage + calage manuel.
+         ⚠️ NON testé navigateur (à vérifier sur la Brother + planches CL40E réelles).
+         - [Fix 🔴] Avec Custom=100 (pas d'échelle), la grille restait décalée vers le
+           bas-droite : la Brother translate l'impression de +4,2 mm (sa zone imprimable
+           commence à 4,2 mm du bord). Compensation : translate(-4,2mm,-4,2mm) sur la planche
+           en @media print. Le contenu étant en retrait de 4,2 mm, ce recul ne rogne rien.
+         - [Feature] Panneau « Calage d'impression (mm) » dans l'étape 4 : deux champs X/Y
+           pour un ajustement fin par-dessus la compensation de base, piloté par les variables
+           CSS --cal-x / --cal-y. Réglage persistant (localStorage). Permet à l'utilisateur de
+           corriger un offset résiduel propre à sa mécanique sans retoucher le code.
+         - Rappel réglage Chrome : Échelle = Personnalisé/Custom = 100 ; Marges = Aucune ; A4.
   1.6.2  2026-06-19  Session #27 — IMPRESSION : retour à une grille NON mise à l'échelle.
          ⚠️ NON testé navigateur (à vérifier sur la Brother + planches CL40E réelles).
          - [Fix 🔴] Régression 1.6.1 : @page { margin:4.2mm } réduisait la zone à 288,6 mm
@@ -683,14 +694,20 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
   #content-4 { display:block !important; margin:0 !important; padding:0 !important; }
   .label-source-row, .flex-row, #labelEmpty { display:none !important; }
 
-  /* Planche à sa TAILLE RÉELLE (210 × 296 mm), calée en haut-gauche, sans échelle.
-     Chaque cellule tombe ainsi pile sur sa découpe physique. */
+  /* Planche à sa TAILLE RÉELLE (210 × 296 mm), sans échelle.
+     La Brother translate l'impression de +4,2 mm vers le bas-droite (sa zone imprimable
+     commence à 4,2 mm du bord). On COMPENSE par un décalage de -4,2 mm haut/gauche, piloté
+     par les variables --cal-x / --cal-y pour permettre un réglage fin (voir #calPanel).
+     Le contenu étant en retrait de 4,2 mm dans chaque étiquette, ce recul ne rogne aucun
+     contenu : seul le support (vide) sort de la zone imprimable. */
   .label-sheet {
     box-shadow:none;
     margin:0;
     padding:0;
     width:210mm;
     page-break-after:always;
+    transform:translate(calc(-4.2mm + var(--cal-x, 0mm)), calc(-4.2mm + var(--cal-y, 0mm)));
+    transform-origin:top left;
   }
   /* Bordure d'écran retirée à l'impression pour ne pas marquer la ligne de découpe */
   .label-item { border:0 !important; }
@@ -942,6 +959,33 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
   <!-- ═══════════════════════════════════════════════════════ -->
   <div class="tab hidden" id="content-4">
 
+    <div class="label-source-row" style="border-left:3px solid var(--accent2);">
+      <div style="width:100%;">
+        <div class="ls-title">Calage d'impression (mm)</div>
+        <div style="font-size:.72rem;color:var(--muted);margin:4px 0 8px;">
+          Si la grille imprimée est décalée par rapport aux découpes, ajustez ici.
+          Valeurs positives = déplace le contenu vers la droite (X) / vers le bas (Y).
+          Réglage conservé d'une session à l'autre.
+        </div>
+        <div class="flex-row" style="gap:16px;align-items:center;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:.8rem;">
+            X
+            <input type="number" id="calX" step="0.5" value="0" style="width:70px;"
+                   onchange="applyCalibration()" oninput="applyCalibration()">
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:.8rem;">
+            Y
+            <input type="number" id="calY" step="0.5" value="0" style="width:70px;"
+                   onchange="applyCalibration()" oninput="applyCalibration()">
+          </label>
+          <button class="btn btn-secondary btn-sm" onclick="resetCalibration()">Réinitialiser</button>
+          <span class="mono" style="font-size:.72rem;color:var(--muted);">
+            Compensation de base : −4,2 mm (zone non imprimable Brother)
+          </span>
+        </div>
+      </div>
+    </div>
+
     <div class="label-source-row" style="border-left:3px solid var(--accent);">
       <div>
         <div class="ls-title">Mode d'impression</div>
@@ -1135,7 +1179,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.6.2';
+const APP_VERSION = '1.6.3';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';
@@ -2814,6 +2858,39 @@ function togglePriorityMode(on) {
   }
 }
 
+// ── Calage d'impression (offset fin X/Y en mm, persistant) ──
+// La compensation de base (-4.2mm) est dans le CSS @media print ; ces variables
+// ajoutent un ajustement fin par-dessus, réglable par l'utilisateur selon le rendu réel.
+const CAL_KEY = 'tcgIntakePrintCal';
+
+function applyCalibration() {
+  const x = parseFloat(document.getElementById('calX').value) || 0;
+  const y = parseFloat(document.getElementById('calY').value) || 0;
+  document.documentElement.style.setProperty('--cal-x', x + 'mm');
+  document.documentElement.style.setProperty('--cal-y', y + 'mm');
+  try { localStorage.setItem(CAL_KEY, JSON.stringify({ x, y })); } catch(e) {}
+}
+
+function resetCalibration() {
+  document.getElementById('calX').value = 0;
+  document.getElementById('calY').value = 0;
+  applyCalibration();
+}
+
+function loadCalibration() {
+  let x = 0, y = 0;
+  try {
+    const saved = JSON.parse(localStorage.getItem(CAL_KEY) || '{}');
+    if (typeof saved.x === 'number') x = saved.x;
+    if (typeof saved.y === 'number') y = saved.y;
+  } catch(e) {}
+  const ex = document.getElementById('calX'), ey = document.getElementById('calY');
+  if (ex) ex.value = x;
+  if (ey) ey.value = y;
+  document.documentElement.style.setProperty('--cal-x', x + 'mm');
+  document.documentElement.style.setProperty('--cal-y', y + 'mm');
+}
+
 /* ── Mesure texte (canvas) pour auto-sizing ── */
 const _fCanvas = document.createElement('canvas');
 const _fCtx    = _fCanvas.getContext('2d');
@@ -3018,6 +3095,7 @@ document.getElementById('mappingCount').textContent = Object.keys(MAPPING).lengt
 // utile pour réimprimer ou pour le mode "étiquettes prioritaires".
 unlockStep(4);
 document.getElementById('step4-sub').textContent = 'Impression';
+loadCalibration();   // restaure le calage d'impression sauvegardé
 initGisClient();
 updateAuthUI();
 
