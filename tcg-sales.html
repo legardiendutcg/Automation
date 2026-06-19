@@ -1,10 +1,32 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.23.0 (Session #26 — 2026-06-16)
+  Version : 1.24.0 (Session #29 — 2026-06-19)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.24.0 2026-06-19  Session #29 (UX vente : refocus auto, pull-to-refresh, retrait caméra QR,
+                                  bandeau d'ancienneté, panneau doublon sur la quantité)
+         - [Feature] Refocus AUTO de la zone de scan après 5 s sans activité (timer réarmé sur
+           toute interaction). La douchette reste armée après une pause, sans re-tapper l'écran.
+           Garde-fous : onglet vente uniquement, hors modale, ne vole jamais un focus déjà posé
+           sur un autre champ (prix/qté/acheteur).
+         - [Feature] Pull-to-refresh : tirer la liste du panier vers le bas (quand elle est en
+           haut) rafraîchit le stock (refreshStockCache). Indicateur visuel + vibration.
+         - [Retrait] Carrousel caméra QR (2e sous-écran + swipe + dots) SUPPRIMÉ : la douchette
+           est l'unique voie de scan ; la saisie manuelle (+ manuel) couvre les articles sans code.
+           Code mort retiré (goPane/initSwipe/startCamera/stopCamera/scanCameraLoop, CSS .cam-*,
+           .swipe-*). La PHOTO d'article en saisie manuelle (input capture) reste intacte —
+           elle n'a jamais utilisé getUserMedia. → Backlog #31 (scan caméra QR KO) devient SANS OBJET.
+         - [UX] Slot bleu de scan : après ajout, affiche « ✓ ajouté » sans répéter le nom
+           (l'article est déjà visible dans le panier ; le nom complet reste dans le toast).
+         - [UX #5 refonte] Ancienneté des cartes : le NOM est désormais écrit dans un BANDEAU de
+           la couleur (vert <1 mois / bleu <3 / orange <6 / noir ≥6), au lieu d'un point devant.
+           Seuils et logique ageBadgeFor INCHANGÉS.
+         - [UX #5 refonte] Doublon : le signal passe du contour de ligne au PANNEAU autour de la
+           QUANTITÉ — orange si carte ANCIEN format scannée ≥2× / rouge si NOUVEAU format ≥2×.
+           Logique dupStatusFor INCHANGÉE (le rouge bloque toujours la validation).
+         - Aucune autre logique touchée (vente/outbox/sécurité/split/répartition intacts).
   1.23.0 2026-06-16  Session #26 (Répartition à l'euro par article ; Sales seul)
          - [Feature] Quand une remise % OU un ajustement manuel du total est appliqué, le prix de
            CHAQUE ligne est arrondi à l'EURO (méthode du plus grand reste), de sorte que la somme des
@@ -508,19 +530,19 @@ body::before{content:'';position:fixed;inset:0;
 .tab-content{display:none;}
 .tab-content.active{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;gap:8px;}
 
-/* ── ZONE MILIEU : carrousel panier ⇄ caméra (seule zone qui scrolle) ── */
+/* ── ZONE MILIEU : liste du panier (seule zone qui scrolle) ── */
 .zone-mid{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;
   background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
-.swipe-track{flex:1 1 auto;min-height:0;display:flex;width:200%;
-  transition:transform .28s cubic-bezier(.4,0,.2,1);}
-.swipe-track.no-anim{transition:none;}
-.swipe-pane{width:50%;min-width:50%;height:100%;display:flex;flex-direction:column;min-height:0;}
-.swipe-dots{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:8px;padding:5px 0 7px;}
-.swipe-dot{width:7px;height:7px;border-radius:50%;background:var(--border);cursor:pointer;
-  transition:background .15s,width .15s;}
-.swipe-dot.active{background:var(--accent2);width:18px;border-radius:4px;}
 .cart-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
-  padding:8px;display:flex;flex-direction:column;gap:7px;}
+  padding:8px;display:flex;flex-direction:column;gap:7px;overscroll-behavior:contain;}
+
+/* (1.24.0) Indicateur de pull-to-refresh (tirer la liste vers le bas) */
+.pull-refresh-ind{flex:0 0 auto;height:0;overflow:hidden;display:flex;align-items:center;
+  justify-content:center;font-family:'Space Mono',monospace;font-size:.58rem;font-weight:700;
+  text-transform:uppercase;letter-spacing:.06em;color:var(--accent2);
+  transition:height .12s ease;}
+.pull-refresh-ind.ready{color:var(--accent);}
+.pull-refresh-ind.loading{color:var(--accent2);}
 
 /* ── Emplacement de scan = 1er slot du panier (fine, 1 ligne) ── */
 .scan-slot{flex:0 0 auto;display:flex;align-items:center;gap:8px;
@@ -538,24 +560,6 @@ body::before{content:'';position:fixed;inset:0;
   color:var(--dim);cursor:pointer;}
 .slot-act:hover{border-color:var(--accent2);color:var(--accent2);}
 
-/* ── Caméra (sous-écran 2) ── */
-.cam-screen{flex:1 1 auto;min-height:0;position:relative;background:#05060a;overflow:hidden;
-  display:flex;align-items:center;justify-content:center;margin:8px;border-radius:10px;}
-.cam-screen video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
-.cam-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;}
-.cam-frame{position:relative;width:74%;height:42%;}
-.cam-frame i{position:absolute;width:24px;height:24px;border:3px solid var(--accent2);}
-.cam-frame i:nth-child(1){top:0;left:0;border-right:none;border-bottom:none;border-radius:6px 0 0 0;}
-.cam-frame i:nth-child(2){top:0;right:0;border-left:none;border-bottom:none;border-radius:0 6px 0 0;}
-.cam-frame i:nth-child(3){bottom:0;left:0;border-right:none;border-top:none;border-radius:0 0 0 6px;}
-.cam-frame i:nth-child(4){bottom:0;right:0;border-left:none;border-top:none;border-radius:0 0 6px 0;}
-.cam-line{position:absolute;left:6%;right:6%;top:50%;height:2px;background:var(--accent3);box-shadow:0 0 8px var(--accent3);}
-.cam-text{position:absolute;bottom:12px;left:0;right:0;text-align:center;font-family:'Space Mono',monospace;
-  font-size:.6rem;color:var(--accent2);letter-spacing:.04em;padding:0 10px;}
-.cam-start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  background:rgba(5,6,10,.82);}
-.cam-start.hidden{display:none;}
-
 /* ── Cards ── */
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:16px;}
 .card-header{padding:12px 18px;border-bottom:1px solid var(--border);background:var(--surface2);
@@ -569,23 +573,27 @@ body::before{content:'';position:fixed;inset:0;
 /* ── Cart (lignes d'articles ; total déplacé en zone bas) ── */
 .cart-item{background:var(--bg);border:1px solid var(--border);border-radius:9px;
   padding:8px 11px;display:flex;align-items:center;gap:8px;flex:0 0 auto;}
-.cart-item.dup-orange{border:2px solid #fb923c;background:rgba(251,146,60,.06);}
-.cart-item.dup-red{border:2px solid var(--accent3);background:rgba(255,107,107,.07);}
 .cart-item.unknown{border:2px dashed #fbbf24;background:rgba(251,191,36,.06);}
 .ci-unknown{color:var(--warning);font-size:.85rem;margin-right:2px;}
-/* (1.18.0) Pastille d'ancienneté (cartes) — point coloré devant le nom */
-.age-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;
-  vertical-align:middle;flex:0 0 auto;border:1px solid rgba(255,255,255,.18);}
-.age-green{background:#4ade80;}
-.age-blue{background:#47c8ff;}
-.age-orange{background:#fb923c;}
-.age-black{background:#1a1a1a;border-color:rgba(255,255,255,.35);}
+
+/* (1.24.0) Ancienneté = le NOM est écrit dans un bandeau de la couleur (remplace le point).
+   Le prix unitaire reste flotté à droite, hors du bandeau coloré. */
+.age-band{border-radius:6px;padding:3px 8px;}
+.age-band-green{background:rgba(74,222,128,.16);box-shadow:inset 0 0 0 1px rgba(74,222,128,.45);}
+.age-band-blue{background:rgba(71,200,255,.16);box-shadow:inset 0 0 0 1px rgba(71,200,255,.45);}
+.age-band-orange{background:rgba(251,146,60,.16);box-shadow:inset 0 0 0 1px rgba(251,146,60,.5);}
+.age-band-black{background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1px rgba(255,255,255,.32);}
+
 .ci-del{flex:0 0 auto;align-self:center;background:transparent;border:none;cursor:pointer;
   font-size:1.05rem;line-height:1;padding:2px;opacity:.85;}
 .ci-del:active{opacity:1;transform:scale(.92);}
 .ci-qty{flex:0 0 auto;align-self:center;font-family:'Space Mono',monospace;font-size:.85rem;
   font-weight:700;color:var(--text);border:1px dashed var(--border);border-bottom-color:var(--accent2);
   border-radius:6px;padding:4px 7px;cursor:pointer;user-select:none;}
+/* (1.24.0) Panneau de doublon autour de la quantité : orange = carte ancien format scannée ≥2× ;
+   rouge = carte nouveau format scannée ≥2× (exemplaires censés uniques). */
+.ci-qty.dup-orange{border:2px solid #fb923c;background:rgba(251,146,60,.14);color:#fb923c;}
+.ci-qty.dup-red{border:2px solid var(--accent3);background:rgba(255,107,107,.16);color:var(--accent3);}
 .ci-name{flex:1;min-width:0;font-size:.92rem;font-weight:700;line-height:1.2;color:var(--text);}
 .ci-price{float:right;margin-left:10px;font-family:'Space Mono',monospace;font-size:.9rem;
   font-weight:700;color:var(--accent);cursor:pointer;border-bottom:1px dashed transparent;}
@@ -912,44 +920,18 @@ body::before{content:'';position:fixed;inset:0;
         </div>
       </div>
 
-      <!-- Carrousel : 2 sous-écrans (panier / caméra) -->
-      <div class="swipe-track" id="swipeTrack">
-
-        <!-- Sous-écran 1 : panier -->
-        <div class="swipe-pane">
-          <div class="cart-scroll" id="cartItems">
-            <!-- 1er emplacement = zone de scan (fine) -->
-            <div class="scan-slot" id="scanZone" onclick="focusScan()">
-              <span class="scan-icon" id="scanIcon">📷</span>
-              <span class="scan-status" id="scanStatus">Prochain article scanné ici</span>
-              <button class="slot-act" onclick="event.stopPropagation();openManualItem()" title="Article manuel">+ manuel</button>
-              <button class="slot-act" onclick="event.stopPropagation();confirmClearCart()" title="Vider le panier">🗑</button>
-              <input class="scan-input" id="scanInput" type="text" autocomplete="off" autofocus inputmode="none">
-            </div>
-            <div class="cart-empty hidden" id="cartEmpty">Panier vide — scannez un article</div>
-          </div>
+      <!-- (1.24.0) Carrousel caméra QR retiré : la douchette est l'unique voie de scan.
+           La saisie manuelle (+ manuel) couvre les articles sans code lisible. -->
+      <div class="cart-scroll" id="cartItems">
+        <!-- 1er emplacement = zone de scan (fine) -->
+        <div class="scan-slot" id="scanZone" onclick="focusScan()">
+          <span class="scan-icon" id="scanIcon">📷</span>
+          <span class="scan-status" id="scanStatus">Prochain article scanné ici</span>
+          <button class="slot-act" onclick="event.stopPropagation();openManualItem()" title="Article manuel">+ manuel</button>
+          <button class="slot-act" onclick="event.stopPropagation();confirmClearCart()" title="Vider le panier">🗑</button>
+          <input class="scan-input" id="scanInput" type="text" autocomplete="off" autofocus inputmode="none">
         </div>
-
-        <!-- Sous-écran 2 : caméra du téléphone -->
-        <div class="swipe-pane">
-          <div class="cam-screen" id="camScreen">
-            <video id="camVideo" playsinline muted></video>
-            <div class="cam-overlay">
-              <div class="cam-frame"><i></i><i></i><i></i><i></i><span class="cam-line"></span></div>
-              <div class="cam-text" id="camText">Visez un code-barres ou un QR code</div>
-            </div>
-            <div class="cam-start" id="camStart">
-              <button class="btn btn-secondary" onclick="startCamera()">📷 Activer la caméra</button>
-            </div>
-          </div>
-        </div>
-
-      </div>
-
-      <!-- 2 points indicateurs des sous-écrans -->
-      <div class="swipe-dots">
-        <span class="swipe-dot active" id="dotCart" onclick="goPane(0)" title="Panier"></span>
-        <span class="swipe-dot" id="dotCam" onclick="goPane(1)" title="Caméra"></span>
+        <div class="cart-empty hidden" id="cartEmpty">Panier vide — scannez un article</div>
       </div>
 
     </div>
@@ -1188,7 +1170,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.23.0';
+const APP_VERSION      = '1.24.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -2289,9 +2271,8 @@ document.addEventListener('click', e => {
   if (document.querySelector('.modal-backdrop:not(.hidden)')) return;
   if (e.target.closest('button') || e.target.closest('.auth-pill') || e.target.closest('.tab-btn') ||
       e.target.closest('.modal-backdrop') || e.target.closest('input') || e.target.closest('select') ||
-      e.target.closest('.total-display') || e.target.closest('.cam-screen') ||
-      e.target.closest('.swipe-dots')) return;
-  if (curPane === 0 && document.getElementById('tab1').classList.contains('active')) focusScan();
+      e.target.closest('.total-display')) return;
+  if (document.getElementById('tab1').classList.contains('active')) focusScan();
 });
 
 // (1.14.4) #1 — Filet global « la douchette est toujours prête » : après TOUTE perte de focus,
@@ -2304,12 +2285,35 @@ document.addEventListener('focusout', () => {
     if (document.querySelector('.modal-backdrop:not(.hidden)')) return;
     const ae = document.activeElement;
     if ((!ae || ae === document.body)
-        && curPane === 0
         && document.getElementById('tab1').classList.contains('active')) {
       focusScan();
     }
   }, 0);
 });
+
+// (1.24.0) Re-focus auto de la zone de scan après 5 s SANS activité. En convention, après
+// une pause (échange de monnaie, discussion client…), la douchette doit rester armée sans
+// avoir à re-tapper l'écran. Le timer est réarmé à chaque interaction. Garde-fous : seulement
+// sur l'onglet vente, hors modale, et on ne vole JAMAIS un focus déjà posé sur un autre champ
+// (prix/qté/acheteur) — si activeElement est un input/select/textarea autre que la douchette,
+// on ne touche à rien.
+const SCAN_IDLE_REFOCUS_MS = 5000;
+let scanIdleTimer = null;
+function armScanIdleRefocus() {
+  clearTimeout(scanIdleTimer);
+  scanIdleTimer = setTimeout(() => {
+    if (document.querySelector('.modal-backdrop:not(.hidden)')) return;
+    if (!document.getElementById('tab1').classList.contains('active')) return;
+    const ae = document.activeElement;
+    const editing = ae && ae !== scanInput &&
+      (ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA');
+    if (editing) return;   // saisie en cours ailleurs → ne pas voler le focus
+    focusScan();
+  }, SCAN_IDLE_REFOCUS_MS);
+}
+['pointerdown', 'keydown', 'touchstart'].forEach(evt =>
+  document.addEventListener(evt, armScanIdleRefocus, { passive: true }));
+armScanIdleRefocus();
 
 async function processScan(rawValue) {
   // (#26 split) Pendant l'encaissement, le panier est figé : on ignore les scans.
@@ -2337,8 +2341,8 @@ async function processScan(rawValue) {
     }
 
     if (item.reserved) {
-      statusEl.textContent = '🔒 ' + item.name + ' — réservée, vente bloquée';
-      showToast('🔒 Article réservé — vente bloquée', true);
+      statusEl.textContent = '🔒 Réservée — vente bloquée';
+      showToast('🔒 ' + item.name + ' — réservée, vente bloquée', true);
       if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
       scanFlash(false);
       scanZone.classList.remove('scanning');
@@ -2346,7 +2350,10 @@ async function processScan(rawValue) {
     }
 
     addToCart(item);
-    statusEl.textContent = '✓ ' + item.name + ' ajouté';
+    // (1.24.0) Le slot bleu = zone de scan toujours prête : on confirme juste l'ajout
+    // (« ✓ ajouté »), sans répéter le nom — l'article est déjà visible dans le panier
+    // juste en dessous. Le nom complet reste dans le toast éphémère.
+    statusEl.textContent = '✓ ajouté';
     showToast('✓ ' + item.name);
     scanFlash(true);
   } catch (e) {
@@ -2360,10 +2367,8 @@ async function processScan(rawValue) {
   // (1.14.1) Bug iOS : renderCart() a déplacé #scanZone dans le DOM, ce qui DÉFOCUSE l'input
   // HID caché sur WebKit → la douchette suivante n'avait plus de cible (il fallait re-toucher
   // la zone). On ré-arme le focus pour enchaîner les scans sans re-tap. L'input est
-  // inputmode="none" → aucun clavier ne surgit. Garde : seulement sur le panier (pane 0),
-  // onglet ventes actif, hors modale, pour ne jamais voler le focus ailleurs.
-  if (curPane === 0
-      && document.getElementById('tab1').classList.contains('active')
+  // inputmode="none" → aucun clavier ne surgit. Garde : onglet ventes actif, hors modale.
+  if (document.getElementById('tab1').classList.contains('active')
       && !document.querySelector('.modal-backdrop:not(.hidden)')) {
     focusScan();
   }
@@ -2614,12 +2619,17 @@ function cartItemInnerHTML(c) {
   const modClass = c.priceModified ? ' modified' : '';
   const unk = (c.source === 'inconnu')
     ? '<span class="ci-unknown" title="Code non reconnu — ira en anomalies">❓</span>' : '';
-  const age = ageBadgeFor(c);   // (1.18.0) pastille d'ancienneté (cartes)
-  const badge = age ? `<span class="age-dot age-${age.color}" title="${esc(age.label)}"></span>` : '';
+  const age = ageBadgeFor(c);   // (1.18.0) ancienneté (cartes)
+  // (1.24.0) Ancienneté = le NOM est écrit dans un bandeau de la couleur (au lieu d'un point).
+  const nameCls = 'ci-name' + (age ? ' age-band age-band-' + age.color : '');
+  const nameTitle = age ? ` title="${esc(age.label)}"` : '';
+  // (1.24.0) Doublon = la QUANTITÉ est entourée d'un panneau : orange (carte ancien format
+  // scannée ≥2×) / rouge (carte nouveau format scannée ≥2×). Logique inchangée (dupStatusFor).
+  const qtyCls = 'ci-qty' + (c.dupStatus === 'red' ? ' dup-red' : c.dupStatus === 'orange' ? ' dup-orange' : '');
   return `
       <button class="ci-del" data-action="del" data-uid="${esc(c.uid)}" title="Retirer l'article">🗑</button>
-      <span class="ci-qty" data-action="qty" data-uid="${esc(c.uid)}" title="Modifier la quantité">×${c.qty}</span>
-      <div class="ci-name">${badge}${unk}${esc(c.name)}<span class="ci-price${modClass}" data-action="price" data-uid="${esc(c.uid)}" title="Corriger le prix unitaire">${formatPrice(c.prixUnit)}</span></div>
+      <span class="${qtyCls}" data-action="qty" data-uid="${esc(c.uid)}" title="Modifier la quantité">×${c.qty}</span>
+      <div class="${nameCls}"${nameTitle}>${unk}${esc(c.name)}<span class="ci-price${modClass}" data-action="price" data-uid="${esc(c.uid)}" title="Corriger le prix unitaire">${formatPrice(c.prixUnit)}</span></div>
     `;
 }
 
@@ -2666,8 +2676,8 @@ function renderCart() {
 
     let cls = 'cart-item';
     if (c.source === 'inconnu') cls += ' unknown';
-    if (c.dupStatus === 'orange') cls += ' dup-orange';
-    else if (c.dupStatus === 'red') cls += ' dup-red';
+    // (1.24.0) Le signal de doublon est désormais porté par le panneau autour de la QUANTITÉ
+    // (voir cartItemInnerHTML), plus par le contour de la ligne entière.
     if (el.className !== cls) el.className = cls;
 
     // Signature : ne réécrit l'innerHTML que si le contenu visible a changé
@@ -3081,100 +3091,62 @@ document.getElementById('qtyEditInput').addEventListener('keydown', e => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// CARROUSEL panier ⇄ caméra + scan via l'appareil photo
-// (douchette KO → swipe vers la caméra ; BarcodeDetector natif si dispo)
+// PULL-TO-REFRESH (tirer la liste du panier vers le bas → rafraîchit le stock)
+// (1.24.0) Remplace l'ancien carrousel caméra. Geste tactile uniquement, déclenché
+// seulement si la liste est déjà en haut (scrollTop ≈ 0) et le tirage franc (> seuil).
+// Anti-conflit scroll : on n'arme le geste que si le doigt part du haut.
 // ═══════════════════════════════════════════════════════════════
-let curPane = 0;
-function goPane(i) {
-  curPane = i ? 1 : 0;
-  const track = document.getElementById('swipeTrack');
-  if (track) track.style.transform = curPane ? 'translateX(-50%)' : 'translateX(0)';
-  const dc = document.getElementById('dotCart'), dm = document.getElementById('dotCam');
-  if (dc) dc.classList.toggle('active', curPane === 0);
-  if (dm) dm.classList.toggle('active', curPane === 1);
-  if (curPane === 1) { if (typeof scanInput !== 'undefined' && scanInput) scanInput.blur(); startCamera(); }
-  else { stopCamera(); focusScan(); }
-}
+(function initPullToRefresh() {
+  const scroller = document.getElementById('cartItems');
+  if (!scroller) return;
 
-(function initSwipe() {
-  const track = document.getElementById('swipeTrack');
-  if (!track) return;
-  let x0 = null, y0 = null, drag = false;
-  track.addEventListener('touchstart', e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; drag = false; }, { passive: true });
-  track.addEventListener('touchmove', e => {
-    if (x0 === null) return;
-    const t = e.touches[0], dx = t.clientX - x0, dy = t.clientY - y0;
-    if (!drag && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 12) drag = true;
+  // Indicateur visuel inséré en tête du scroller
+  const ind = document.createElement('div');
+  ind.id = 'pullRefreshInd';
+  ind.className = 'pull-refresh-ind';
+  ind.textContent = '↓ Tirer pour rafraîchir le stock';
+  scroller.parentNode.insertBefore(ind, scroller);
+
+  const THRESHOLD = 64;     // px de tirage pour déclencher
+  const MAX_PULL  = 90;     // px de retour visuel max
+  let y0 = null, pulling = false, dist = 0;
+
+  function setInd(d, ready, loading) {
+    if (loading) { ind.className = 'pull-refresh-ind loading'; ind.textContent = '⟳ Rafraîchissement…'; ind.style.height = '34px'; return; }
+    const h = Math.min(d * 0.5, MAX_PULL);
+    ind.style.height = h > 2 ? h + 'px' : '';
+    ind.className = 'pull-refresh-ind' + (ready ? ' ready' : '');
+    ind.textContent = ready ? '↑ Relâcher pour rafraîchir' : '↓ Tirer pour rafraîchir le stock';
+  }
+
+  scroller.addEventListener('touchstart', e => {
+    if (scroller.scrollTop <= 0 && !cacheLoading) {
+      y0 = e.touches[0].clientY; pulling = true; dist = 0;
+    } else { pulling = false; y0 = null; }
   }, { passive: true });
-  track.addEventListener('touchend', e => {
-    if (x0 === null) return;
-    const t = e.changedTouches[0], dx = t.clientX - x0;
-    if (drag && Math.abs(dx) > 45) {
-      if (dx < 0 && curPane === 0) goPane(1);
-      else if (dx > 0 && curPane === 1) goPane(0);
+
+  scroller.addEventListener('touchmove', e => {
+    if (!pulling || y0 === null) return;
+    dist = e.touches[0].clientY - y0;
+    if (dist > 0) setInd(dist, dist >= THRESHOLD, false);
+    else setInd(0, false, false);
+  }, { passive: true });
+
+  scroller.addEventListener('touchend', async () => {
+    if (!pulling) return;
+    pulling = false;
+    const trigger = dist >= THRESHOLD;
+    y0 = null; dist = 0;
+    if (trigger && !cacheLoading) {
+      setInd(0, false, true);
+      if (navigator.vibrate) navigator.vibrate(40);
+      try { await refreshStockCache(); showToast('✓ Stock rafraîchi'); }
+      catch (e) { showToast('✗ Rafraîchissement impossible', true); }
     }
-    x0 = y0 = null; drag = false;
+    setInd(0, false, false);
+    ind.style.height = '';
   }, { passive: true });
 })();
-
-let camStream = null, camDetector = null, camScanning = false, camTimer = null;
-let lastCamCode = null, lastCamAt = 0;
-async function startCamera() {
-  const video = document.getElementById('camVideo');
-  const startBtn = document.getElementById('camStart');
-  const txt = document.getElementById('camText');
-  if (!video) return;
-  if (camStream) { if (startBtn) startBtn.classList.add('hidden'); return; }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    if (txt) txt.textContent = 'Caméra non disponible sur cet appareil';
-    return;
-  }
-  try {
-    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-    video.srcObject = camStream;
-    await video.play();
-    if (startBtn) startBtn.classList.add('hidden');
-    if ('BarcodeDetector' in window) {
-      try {
-        camDetector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code'] });
-        camScanning = true; scanCameraLoop();
-        if (txt) txt.textContent = 'Visez un code-barres ou un QR code';
-      } catch (_) { if (txt) txt.textContent = 'Détection non supportée — utilisez la douchette'; }
-    } else {
-      if (txt) txt.textContent = 'Détection non supportée — utilisez la douchette';
-    }
-  } catch (err) {
-    if (txt) txt.textContent = 'Caméra refusée / indisponible';
-    if (startBtn) startBtn.classList.remove('hidden');
-    logEvent('warn', 'caméra indisponible', { message: err && err.message });
-  }
-}
-function stopCamera() {
-  camScanning = false;
-  if (camTimer) { clearTimeout(camTimer); camTimer = null; }
-  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
-  const video = document.getElementById('camVideo'); if (video) video.srcObject = null;
-  const startBtn = document.getElementById('camStart'); if (startBtn) startBtn.classList.remove('hidden');
-}
-async function scanCameraLoop() {
-  if (!camScanning || !camDetector) return;
-  const video = document.getElementById('camVideo');
-  try {
-    const codes = await camDetector.detect(video);
-    if (codes && codes.length) {
-      const val = (codes[0].rawValue || '').trim();
-      const now = Date.now();
-      if (val && (val !== lastCamCode || now - lastCamAt > 1500)) {
-        lastCamCode = val; lastCamAt = now;
-        if (navigator.vibrate) navigator.vibrate(60);
-        processScan(val);
-        goPane(0); // retour panier après un scan réussi
-        return;
-      }
-    }
-  } catch (_) {}
-  if (camScanning) camTimer = setTimeout(scanCameraLoop, 250);
-}
 
 // ═══════════════════════════════════════════════════════════════
 // VALIDATE SALE
