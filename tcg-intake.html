@@ -2,10 +2,21 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.6.3 (Session #27 — 2026-06-19)
+  Version : 1.6.4 (Session #31 — 2026-07-29)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.6.4  2026-07-29  Session #31 — INJECTION : extension automatique de la grille.
+         ⚠️ NON testé navigateur.
+         - [Fix 🔴] « Range exceeds grid limits. Max rows: N » : l'onglet cartes était
+           plein (rowCount atteint) et values.update refuse d'écrire au-delà de la
+           dernière ligne DÉCLARÉE de la grille (contrairement à values.append).
+         - Helper ensureGridRows(lastRowNeeded) : lit gridProperties.rowCount via
+           spreadsheets.get, et si l'injection déborde, envoie un appendDimension
+           (ROWS) avec une marge de GRID_ROW_MARGIN=500 lignes. Appelé juste avant
+           la boucle d'écriture par lots de 100, une fois par lot.
+         - Aucun autre comportement modifié ; l'écriture reste en values.update pour
+           préserver le placement exact des lignes (startRow calculé).
   1.6.3  2026-06-19  Session #27 — IMPRESSION : compensation du décalage + calage manuel.
          ⚠️ NON testé navigateur (à vérifier sur la Brother + planches CL40E réelles).
          - [Fix 🔴] Avec Custom=100 (pas d'échelle), la grille restait décalée vers le
@@ -575,10 +586,12 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
   box-shadow:0 8px 40px rgba(0,0,0,.4);
 }
 
-/* ── Label item : marge intérieure 4.2mm (zone utile 44.1 × 21.2 mm) ── */
+/* ── Label item : géométrie transposée 1:1 du script Slides (create_labels_to_be_printed) ── */
 /* Cellule calée bord-à-bord sur les découpes Multicom CL40E (52.5 × 29.6 mm). */
-/* 4.2mm = zone NON imprimable de la Brother HL-L2400DWE en A4 : le contenu reste */
-/* à >= 4.2mm de chaque bord => GARANTIE qu'aucun élément n'est rogné à l'impression. */
+/* Les positions ci-dessous reproduisent EXACTEMENT le placement Apps Script (points → mm, */
+/* ÷72×25.4). Le script applique un offset vertical global de +7pt (≈ +2.47mm) sur tous les */
+/* éléments via marginTop ; on le porte ici sur chaque bloc. Pas de marge anti-rognage : */
+/* le rendu vise l'identité visuelle avec le PDF Slides (réglage fin via --cal-x/--cal-y). */
 .label-item {
   width:52.5mm;
   height:29.6mm;
@@ -593,17 +606,17 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
 .label-item.selected  { outline:2px solid #1a56db; }
 .label-item.deselected { opacity:.25; }
 
-/* Bannière : left=4.2, top=4.2, 33×9.78 (ratio naturel 1140×338) */
+/* Bannière : insertImage(banner, 0, +7pt, 1.47in, 0.34in) → 37.33×8.64mm à (0 ; 2.47) */
 .z-banner {
-  position:absolute; left:4.2mm; top:4.2mm;
-  width:33mm; height:9.78mm; overflow:hidden;
+  position:absolute; left:0mm; top:2.47mm;
+  width:37.33mm; height:8.64mm; overflow:hidden;
 }
 .z-banner img { width:100%; height:100%; object-fit:fill; display:block; }
 
-/* Logo : left=38, top=4.2, 10.3×10.3 (carré) */
+/* Logo : insertImage(logo, bannerW−6pt, +7pt, 0.47in carré) → 11.94mm à (35.27 ; 2.47) */
 .z-logo {
-  position:absolute; left:38mm; top:4.2mm;
-  width:10.3mm; height:10.3mm; overflow:hidden;
+  position:absolute; left:35.27mm; top:2.47mm;
+  width:11.94mm; height:11.94mm; overflow:hidden;
 }
 .z-logo img {
   width:100%; height:100%;
@@ -613,30 +626,32 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
   image-rendering:crisp-edges;
 }
 
-/* QR code : left=38, top=15.1, 10.3×10.3 (carré) */
+/* QR : insertImage(qr, logoX, logoY+logoSize−2pt, 0.47in carré) → 11.94mm à (35.27 ; 16.88) */
 .z-qr {
-  position:absolute; left:38mm; top:15.1mm;
-  width:10.3mm; height:10.3mm;
+  position:absolute; left:35.27mm; top:16.88mm;
+  width:11.94mm; height:11.94mm;
   display:flex; align-items:center; justify-content:center;
 }
-.z-qr img { width:9.8mm; height:9.8mm; image-rendering:pixelated; display:block; }
+.z-qr img { width:11.94mm; height:11.94mm; image-rendering:pixelated; display:block; }
 
-/* Texte 3 lignes : left=4.2, top=14.78, 20.46×10.62 */
+/* Texte série/num/état : insertTextBox(+5pt, +bannerH+2pt, 0.85in×0.42in) → 21.59×10.67mm à (1.76 ; 6.21) */
+/* Script : alignement START (haut/gauche), 8pt non gras. */
 .z-text {
-  position:absolute; left:4.2mm; top:14.78mm;
-  width:20.46mm; height:10.62mm;
-  display:flex; flex-direction:column; justify-content:center;
+  position:absolute; left:1.76mm; top:6.21mm;
+  width:21.59mm; height:10.67mm;
+  display:flex; flex-direction:column; justify-content:flex-start;
 }
-.z-text span { display:block; white-space:nowrap; line-height:1.25; font-weight:600; color:#404040; }
+.z-text span { display:block; white-space:nowrap; line-height:1.25; font-weight:400; color:#404040; }
 
-/* Prix : left=24.66, top=14.78, 12.54×10.62 */
+/* Prix : insertTextBox(+textW−5pt, +bannerH+10pt, 0.85in×0.42in) → à (19.86 ; 9.03) */
+/* Script : alignement START, 14pt gras. La boîte démarre à 19.86mm (chevauche le QR mais */
+/* le texte « N€ » reste court) ; on borne la largeur à la cellule pour éviter tout débordement. */
 .z-price {
-  position:absolute; left:24.66mm; top:14.78mm;
-  width:12.54mm; height:10.62mm;
-  display:flex; align-items:center; justify-content:center;
-  padding-right:1mm;
+  position:absolute; left:19.86mm; top:9.03mm;
+  width:15.5mm; height:10.67mm;
+  display:flex; align-items:flex-start; justify-content:flex-start;
 }
-.z-price span { white-space:nowrap; font-weight:800; color:#595959; }
+.z-price span { white-space:nowrap; font-weight:700; color:#595959; }
 
 /* ── Misc ── */
 .hidden { display:none !important; }
@@ -695,18 +710,16 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
   .label-source-row, .flex-row, #labelEmpty { display:none !important; }
 
   /* Planche à sa TAILLE RÉELLE (210 × 296 mm), sans échelle.
-     La Brother translate l'impression de +4,2 mm vers le bas-droite (sa zone imprimable
-     commence à 4,2 mm du bord). On COMPENSE par un décalage de -4,2 mm haut/gauche, piloté
-     par les variables --cal-x / --cal-y pour permettre un réglage fin (voir #calPanel).
-     Le contenu étant en retrait de 4,2 mm dans chaque étiquette, ce recul ne rogne aucun
-     contenu : seul le support (vide) sort de la zone imprimable. */
+     Géométrie alignée sur le script Slides : les éléments sont placés à partir de l'origine
+     (0,0) de chaque cellule, comme dans le PDF Apps Script. Pas de compensation de base :
+     seul le réglage fin --cal-x/--cal-y (panneau de calage) s'applique, à 0 par défaut. */
   .label-sheet {
     box-shadow:none;
     margin:0;
     padding:0;
     width:210mm;
     page-break-after:always;
-    transform:translate(calc(-4.2mm + var(--cal-x, 0mm)), calc(-4.2mm + var(--cal-y, 0mm)));
+    transform:translate(var(--cal-x, 0mm), var(--cal-y, 0mm));
     transform-origin:top left;
   }
   /* Bordure d'écran retirée à l'impression pour ne pas marquer la ligne de découpe */
@@ -1179,7 +1192,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.6.3';
+const APP_VERSION = '1.6.4';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';
@@ -2191,6 +2204,28 @@ async function getSheetId() {
   return _sheetId;
 }
 
+// Google Sheets refuse toute écriture au-delà du rowCount déclaré de la grille
+// (« exceeds grid limits »). L'onglet cartes se remplit ligne par ligne : dès que
+// l'injection dépasse la dernière ligne existante, on étend la grille AVANT d'écrire.
+// Marge de GRID_ROW_MARGIN lignes pour éviter un appel API à chaque injection.
+const GRID_ROW_MARGIN = 500;
+async function ensureGridRows(lastRowNeeded) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${GSHEET_ID}?fields=sheets.properties`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
+  if (!res.ok) throw new Error(`Sheets METADATA ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const sheet = (data.sheets || []).find(s => s.properties.title === SHEET_NAME);
+  if (!sheet) throw new Error(`Onglet "${SHEET_NAME}" introuvable.`);
+  const rowCount = (sheet.properties.gridProperties && sheet.properties.gridProperties.rowCount) || 0;
+  if (lastRowNeeded <= rowCount) return rowCount;
+  const toAdd = (lastRowNeeded - rowCount) + GRID_ROW_MARGIN;
+  await sheetsBatchUpdate([{ appendDimension: {
+    sheetId: sheet.properties.sheetId, dimension: 'ROWS', length: toAdd
+  } }]);
+  logInject('ok', `✓ Grille étendue : +${toAdd} ligne(s) (${rowCount} → ${rowCount + toAdd})`);
+  return rowCount + toAdd;
+}
+
 async function getNextLotNumber() {
   try {
     const data = await sheetsGet(a1(SHEET_NAME, `F2:F300`));
@@ -2555,6 +2590,9 @@ async function injectIntoGSheet(preview = false) {
         cardRows.push(buildCardRow(r, lotName, seq, formulaTemplates, lastCardRow, targetRow));
       });
       currentSeq += cardCount;
+
+      // Étend la grille si l'injection dépasse la dernière ligne de l'onglet
+      await ensureGridRows(startRow + cardRows.length - 1);
 
       const BATCH = 100;
       for (let i = 0; i < cardRows.length; i += BATCH) {
@@ -2941,8 +2979,9 @@ function renderLabelSheets() {
       if (card) {
         const lines    = [card.codeSerie, card.numCarte, card.etat];
         const priceStr = _formatPrice(card.prix);
-        const infoSz   = _fitInfoSize(lines, 20.46);
-        const priceSz  = _fitPriceSize(priceStr, 12.54);
+        // Tailles fixes identiques au script Slides : 8pt (série/num/état), 14pt (prix).
+        const infoSz   = 8;
+        const priceSz  = 14;
 
         item.className = 'label-item ' + (card.selected ? 'selected' : 'deselected');
         item.innerHTML = `
