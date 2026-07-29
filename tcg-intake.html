@@ -2,10 +2,26 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.6.4 (Session #31 — 2026-07-29)
+  Version : 1.6.5 (Session #31 — 2026-07-29)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.6.5  2026-07-29  Session #31 — RÉSOLUTION D'ONGLET insensible à la casse.
+         ⚠️ NON testé navigateur.
+         - [Fix 🔴] « Onglet "cartes_stock_et_transactions" introuvable » : la constante
+           SHEET_NAME est en minuscules alors que l'onglet réel s'appelle
+           Cartes_Stock_et_Transactions. La notation A1 de l'API TOLÈRE la casse (d'où
+           des années de lectures/écritures OK), mais properties.title renvoie le titre
+           EXACT → toute comparaison stricte échoue.
+         - [Fix 🔴 SÉCURITÉ] getSheetId() souffrait du même défaut AVEC un fallback
+           silencieux `: 0`. Comme la comparaison n'a jamais matché, cette fonction
+           renvoyait TOUJOURS 0 — un sheetId valide, celui du premier onglet du
+           classeur. undoLastInjection() envoyait donc ses deleteDimension au mauvais
+           onglet. Le fallback est supprimé : on lève désormais une erreur explicite
+           listant les onglets disponibles.
+         - Helpers findSheetProps() / fetchSheetProps() : résolution normalisée
+           (trim + toLowerCase), partagée par getSheetId, ensureGridRows et
+           ensureSheetExists (fichier de sécurité).
   1.6.4  2026-07-29  Session #31 — INJECTION : extension automatique de la grille.
          ⚠️ NON testé navigateur.
          - [Fix 🔴] « Range exceeds grid limits. Max rows: N » : l'onglet cartes était
@@ -1192,7 +1208,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.6.4';
+const APP_VERSION = '1.6.5';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
 const SHEET_NAME      = 'cartes_stock_et_transactions';
@@ -2169,7 +2185,7 @@ async function getSpreadsheetSheets(spreadsheetId) {
 
 async function ensureSheetExists(spreadsheetId, sheetName, headerRow) {
   const meta = await getSpreadsheetSheets(spreadsheetId);
-  const exists = (meta.sheets || []).some(s => s.properties.title === sheetName);
+  const exists = !!findSheetProps(meta.sheets, sheetName);
   if (!exists) {
     await sheetsBatchUpdate([{ addSheet: { properties: { title: sheetName } } }], spreadsheetId);
   }
@@ -2194,13 +2210,35 @@ async function ensureSafetySheets() {
   return safetyId;
 }
 
+// La notation A1 de l'API Sheets est TOLÉRANTE à la casse ('cartes_...' matche
+// l'onglet réel 'Cartes_...'), mais properties.title renvoie le titre EXACT.
+// Toute comparaison stricte échoue donc silencieusement. On normalise.
+function findSheetProps(sheetsArr, title) {
+  const norm = s => String(s || '').trim().toLowerCase();
+  const target = norm(title);
+  const hit = (sheetsArr || []).find(s => norm(s.properties && s.properties.title) === target);
+  return hit ? hit.properties : null;
+}
+
+async function fetchSheetProps(title = SHEET_NAME, spreadsheetId = GSHEET_ID) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
+  if (!res.ok) throw new Error(`Sheets METADATA ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const props = findSheetProps(data.sheets, title);
+  if (!props) {
+    const dispo = (data.sheets || []).map(s => s.properties.title).join(', ');
+    throw new Error(`Onglet "${title}" introuvable. Onglets disponibles : ${dispo}`);
+  }
+  return props;
+}
+
 async function getSheetId() {
   if (_sheetId !== null) return _sheetId;
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${GSHEET_ID}?fields=sheets.properties`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
-  const data = await res.json();
-  const sheet = data.sheets.find(s => s.properties.title === SHEET_NAME);
-  _sheetId = sheet ? sheet.properties.sheetId : 0;
+  // ⚠️ Ne JAMAIS retomber sur 0 en cas d'échec : 0 est un sheetId valide (souvent
+  // le premier onglet du classeur) et un deleteDimension s'y appliquerait.
+  const props = await fetchSheetProps();
+  _sheetId = props.sheetId;
   return _sheetId;
 }
 
@@ -2210,17 +2248,12 @@ async function getSheetId() {
 // Marge de GRID_ROW_MARGIN lignes pour éviter un appel API à chaque injection.
 const GRID_ROW_MARGIN = 500;
 async function ensureGridRows(lastRowNeeded) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${GSHEET_ID}?fields=sheets.properties`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
-  if (!res.ok) throw new Error(`Sheets METADATA ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const sheet = (data.sheets || []).find(s => s.properties.title === SHEET_NAME);
-  if (!sheet) throw new Error(`Onglet "${SHEET_NAME}" introuvable.`);
-  const rowCount = (sheet.properties.gridProperties && sheet.properties.gridProperties.rowCount) || 0;
+  const props = await fetchSheetProps();
+  const rowCount = (props.gridProperties && props.gridProperties.rowCount) || 0;
   if (lastRowNeeded <= rowCount) return rowCount;
   const toAdd = (lastRowNeeded - rowCount) + GRID_ROW_MARGIN;
   await sheetsBatchUpdate([{ appendDimension: {
-    sheetId: sheet.properties.sheetId, dimension: 'ROWS', length: toAdd
+    sheetId: props.sheetId, dimension: 'ROWS', length: toAdd
   } }]);
   logInject('ok', `✓ Grille étendue : +${toAdd} ligne(s) (${rowCount} → ${rowCount + toAdd})`);
   return rowCount + toAdd;
