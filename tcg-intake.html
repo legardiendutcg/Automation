@@ -2,10 +2,34 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.6.5 (Session #31 — 2026-07-29)
+  Version : 1.7.0 (Session #31 — 2026-07-30)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.7.0  2026-07-30  Session #31 — PANNEAU PARAMÈTRES : fichiers de travail configurables.
+         ⚠️ NON testé navigateur.
+         - [Feature] Pilule « ⚙ Paramètres » sous la connexion Google → modale permettant
+           de changer l'ID du fichier central ET du fichier sécurité sans toucher au code.
+         - Stockage dans localStorage sous des clés PARTAGÉES entre les quatre apps du
+           stack (même origine GitHub Pages) : lgdtcg.gsheet.central / .safety. Changer
+           l'ID dans une app le change dans les quatre. Les constantes en dur deviennent
+           GSHEET_ID_DEFAULT / SAFETY_GSHEET_ID_DEFAULT (repli), GSHEET_ID et
+           SAFETY_GSHEET_ID passent de const à let, résolus au boot par loadGSheetConfig()
+           AVANT tout appel Sheets. Bouton « Réinitialiser au défaut ».
+         - [Sécurité] Bouton « Vérifier ces fichiers » : contrôle de conformité en LECTURE
+           SEULE (aucune écriture, aucune création d'onglet) → nom réel du fichier, liste
+           des onglets, présence de l'onglet cartes, taille de grille (alerte si <33
+           colonnes pour C:AG), ligne d'en-tête détectée + libellés par lettre de colonne,
+           dernière ligne de carte, prochain n° de lot, 1re ligne de lot libre, onglets du
+           fichier sécurité. Enregistrer un ID non vérifié exige une confirmation explicite.
+         - Nom du fichier actif affiché en permanence dans l'en-tête (garde-fou anti-
+           aiguillage), avec mention « (override) » si la valeur vient du localStorage.
+         - resetSheetCaches() vide _sheetId et cardHeaderRow à chaque changement d'ID :
+           sans ça on garderait le sheetId et l'offset d'en-tête de l'ancien classeur.
+         - [Refacto] findCardsHeaderRowRaw(spreadsheetId, sheetTitle) extrait de
+           findCardsHeaderRow : renvoie null si aucune ligne ne matche, ce qui permet au
+           diagnostic de distinguer « détectée » de « repli sur la constante 143 ».
+         - GSHEET_ID_DEFAULT passe au nouveau classeur (Pokemon_Activity_20260729).
   1.6.5  2026-07-29  Session #31 — RÉSOLUTION D'ONGLET insensible à la casse.
          ⚠️ NON testé navigateur.
          - [Fix 🔴] « Onglet "cartes_stock_et_transactions" introuvable » : la constante
@@ -262,7 +286,30 @@ header { display:flex; align-items:center; justify-content:space-between; margin
 .logo h1 span { color:var(--accent); }
 .logo .ver { font-family:'Space Mono',monospace; font-size:.6rem; color:var(--muted); border:1px solid var(--border); border-radius:20px; padding:5px 9px; }
 .logo p { font-family:'Space Mono',monospace; font-size:.62rem; color:var(--muted); margin-top:6px; text-transform:uppercase; letter-spacing:.15em; }
-.header-right { display:flex; align-items:center; gap:12px; }
+.header-right { display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
+.file-label {
+  font-family:'Space Mono',monospace; font-size:.55rem; color:var(--muted);
+  max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.file-label.warn { color:var(--warning); }
+
+/* ── Panneau Paramètres ── */
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(5,7,10,.82); z-index:200;
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:40px 20px; overflow-y:auto;
+}
+.modal { background:var(--surface); border:1px solid var(--border); border-radius:12px; max-width:660px; width:100%; }
+.modal-head { padding:16px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.modal-head h3 { font-size:.8rem; text-transform:uppercase; letter-spacing:.1em; }
+.modal-body { padding:20px; display:flex; flex-direction:column; gap:16px; }
+.modal-foot { padding:16px 20px; border-top:1px solid var(--border); display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; }
+.diag {
+  font-family:'Space Mono',monospace; font-size:.62rem; line-height:1.75;
+  background:var(--bg); border:1px solid var(--border); border-radius:6px;
+  padding:12px; max-height:280px; overflow-y:auto; white-space:pre-wrap;
+}
+.hint { font-family:'Space Mono',monospace; font-size:.56rem; color:var(--muted); line-height:1.65; }
 
 /* ── Auth badge ── */
 .auth-pill {
@@ -761,6 +808,8 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
     </div>
     <div class="header-right">
       <div class="auth-pill" id="authPill" onclick="toggleAuth()">🔑 Se connecter à Google</div>
+      <div class="auth-pill" id="settingsPill" onclick="openSettings()">⚙ Paramètres</div>
+      <div class="file-label" id="activeFileLabel"></div>
     </div>
   </header>
 
@@ -1197,6 +1246,37 @@ label { font-family:'Space Mono',monospace; font-size:.58rem; text-transform:upp
 
 <div class="toast" id="toast"></div>
 
+<!-- ── Panneau Paramètres : fichier de travail central + fichier sécurité ── -->
+<div class="modal-overlay hidden" id="settingsOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>⚙ Paramètres · Fichiers de travail</h3>
+      <button class="btn btn-secondary btn-sm" onclick="closeSettings()">Fermer</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">
+        Ces identifiants sont partagés par les quatre apps du stack (même origine GitHub Pages) :
+        les modifier ici les modifie partout. Vérifie TOUJOURS un nouvel ID avant de l'enregistrer.
+      </p>
+      <div class="form-group">
+        <label for="cfgCentralId">ID du fichier central (stock &amp; transactions)</label>
+        <input type="text" id="cfgCentralId" placeholder="1AbC...">
+      </div>
+      <div class="form-group">
+        <label for="cfgSafetyId">ID du fichier sécurité (logs &amp; backups)</label>
+        <input type="text" id="cfgSafetyId" placeholder="1AbC...">
+      </div>
+      <div class="diag" id="cfgDiag">Aucune vérification lancée.</div>
+      <p class="hint" id="cfgHint"></p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-danger btn-sm" onclick="resetGSheetConfig()">Réinitialiser au défaut</button>
+      <button class="btn btn-secondary btn-sm" id="btnCfgVerify" onclick="verifySettings()">Vérifier ces fichiers</button>
+      <button class="btn btn-primary btn-sm" id="btnCfgSave" onclick="saveSettings()">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 
@@ -1208,18 +1288,28 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.6.5';
+const APP_VERSION = '1.7.0';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
-const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+
+// ── Fichiers de travail ──────────────────────────────────────────────
+// Les DÉFAUTS ci-dessous sont le repli codé en dur. L'ID réellement utilisé est
+// résolu au démarrage par loadGSheetConfig() : un override éventuel en localStorage
+// (posé via le panneau Paramètres) a priorité. Les quatre apps du stack étant servies
+// depuis la même origine GitHub Pages, ces clés localStorage sont PARTAGÉES : changer
+// l'ID dans une app le change dans les quatre.
+const GSHEET_ID_DEFAULT        = '1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';
+const SAFETY_GSHEET_ID_DEFAULT = '1axA5pJeu2PLzrBnd_HLox3AEck5AjbCkFpx19rRtmJg';
+const LS_CENTRAL      = 'lgdtcg.gsheet.central';
+const LS_SAFETY       = 'lgdtcg.gsheet.safety';
+const LS_CENTRAL_NAME = 'lgdtcg.gsheet.central.name';
+let GSHEET_ID        = GSHEET_ID_DEFAULT;
+let SAFETY_GSHEET_ID = SAFETY_GSHEET_ID_DEFAULT;
+
 const SHEET_NAME      = 'cartes_stock_et_transactions';
 const CARD_HEADER_ROW_FALLBACK = 143;   // valeur de repli si la détection échoue
 let cardHeaderRow = CARD_HEADER_ROW_FALLBACK;  // résolu dynamiquement via ensureCardHeaderRow()
 let cardHeaderResolved = false;
 
-// Fichier Google Sheets dédié à la sécurité : logs + backup.
-// Crée un nouveau Google Sheet dans ton Drive, puis colle son ID ici.
-// L'app créera automatiquement les onglets LOG_INJECTIONS et BACKUP_INJECTIONS si besoin.
-const SAFETY_GSHEET_ID = '1axA5pJeu2PLzrBnd_HLox3AEck5AjbCkFpx19rRtmJg';
 const LOG_SHEET_NAME   = 'LOG_INJECTIONS';
 const BACKUP_SHEET_NAME = 'BACKUP_INJECTIONS';
 
@@ -2112,6 +2202,16 @@ function updateAuthUI() {
     pill.textContent = '🔑 Se connecter à Google';
     pill.className = 'auth-pill';
   }
+  // Le panneau Paramètres peut être ouvert au moment de la connexion : réaligne
+  // l'état du bouton de vérification (qui exige un token).
+  const ov = document.getElementById('settingsOverlay');
+  if (ov && !ov.classList.contains('hidden')) {
+    const authed = isAuthenticated();
+    document.getElementById('btnCfgVerify').disabled = !authed;
+    document.getElementById('cfgHint').textContent = authed
+      ? 'La vérification est en LECTURE SEULE : elle n\'écrit rien, ne crée aucun onglet.'
+      : '⚠ Connecte-toi à Google pour pouvoir vérifier un fichier.';
+  }
 }
 
 function toggleAuth() {
@@ -2259,6 +2359,216 @@ async function ensureGridRows(lastRowNeeded) {
   return rowCount + toAdd;
 }
 
+// ============================================================
+// PARAMÈTRES · FICHIERS DE TRAVAIL
+// ============================================================
+// Invalide tout ce qui a été résolu contre l'ancien classeur.
+function resetSheetCaches() {
+  _sheetId = null;
+  cardHeaderResolved = false;
+  cardHeaderRow = CARD_HEADER_ROW_FALLBACK;
+}
+
+function lsGet(k) { try { return localStorage.getItem(k); } catch(e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch(e) {} }
+function lsDel(k) { try { localStorage.removeItem(k); } catch(e) {} }
+
+// À appeler AVANT tout appel Sheets.
+function loadGSheetConfig() {
+  const c = (lsGet(LS_CENTRAL) || '').trim();
+  const s = (lsGet(LS_SAFETY)  || '').trim();
+  GSHEET_ID        = c || GSHEET_ID_DEFAULT;
+  SAFETY_GSHEET_ID = s || SAFETY_GSHEET_ID_DEFAULT;
+  resetSheetCaches();
+  updateActiveFileLabel();
+}
+
+function updateActiveFileLabel() {
+  const el = document.getElementById('activeFileLabel');
+  if (!el) return;
+  const custom = !!(lsGet(LS_CENTRAL) || '').trim();
+  const name = (lsGet(LS_CENTRAL_NAME) || '').trim();
+  el.textContent = '📄 ' + (name || GSHEET_ID.slice(0, 12) + '…') + (custom ? ' (override)' : '');
+  el.title = 'Fichier central : ' + GSHEET_ID;
+  el.classList.toggle('warn', custom && !name);
+}
+
+function colLetter(i) {
+  let s = '', n = i + 1;
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+function openSettings() {
+  document.getElementById('cfgCentralId').value = GSHEET_ID;
+  document.getElementById('cfgSafetyId').value  = SAFETY_GSHEET_ID;
+  document.getElementById('cfgDiag').textContent = 'Aucune vérification lancée.';
+  const authed = isAuthenticated();
+  document.getElementById('btnCfgVerify').disabled = !authed;
+  document.getElementById('cfgHint').textContent = authed
+    ? 'La vérification est en LECTURE SEULE : elle n\'écrit rien, ne crée aucun onglet.'
+    : '⚠ Connecte-toi à Google pour pouvoir vérifier un fichier.';
+  document.getElementById('settingsOverlay').classList.remove('hidden');
+}
+
+function closeSettings() {
+  document.getElementById('settingsOverlay').classList.add('hidden');
+}
+
+// Contrôle de conformité NON destructif du fichier central.
+async function diagnoseCentral(id) {
+  const L = [];
+  let ok = true;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=properties.title,sheets.properties`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
+  if (!res.ok) throw new Error(`Fichier central illisible (HTTP ${res.status}) — ID invalide ou accès refusé.`);
+  const data = await res.json();
+  const title = (data.properties && data.properties.title) || '(sans titre)';
+  L.push(`FICHIER CENTRAL : ${title}`);
+  L.push(`Onglets (${(data.sheets || []).length}) : ${(data.sheets || []).map(s => s.properties.title).join(', ')}`);
+  L.push('');
+
+  const props = findSheetProps(data.sheets, SHEET_NAME);
+  if (!props) {
+    L.push(`✗ Onglet "${SHEET_NAME}" ABSENT — injection impossible.`);
+    return { ok: false, title, lines: L };
+  }
+  L.push(`✓ Onglet cartes : "${props.title}"`);
+  const gp = props.gridProperties || {};
+  L.push(`  Grille : ${gp.rowCount || '?'} lignes × ${gp.columnCount || '?'} colonnes`);
+  if ((gp.columnCount || 0) < 33) {
+    ok = false;
+    L.push('  ✗ Moins de 33 colonnes : la plage d\'écriture C:AG ne tient pas.');
+  }
+
+  // Ligne d'en-tête cartes
+  let hdrRow = null;
+  try { hdrRow = await findCardsHeaderRowRaw(id, props.title); } catch(e) {}
+  if (!hdrRow) {
+    ok = false;
+    L.push(`  ✗ Ligne d'en-tête cartes NON détectée (col D ≠ clé/key et col AF ≠ statut).`);
+    L.push(`    L'app retomberait sur le repli codé en dur : ligne ${CARD_HEADER_ROW_FALLBACK}.`);
+  } else {
+    L.push(`  ✓ Ligne d'en-tête cartes détectée : ${hdrRow}`);
+    try {
+      const h = await sheetsGet(a1(props.title, `A${hdrRow}:AG${hdrRow}`), id);
+      const cells = (h.values && h.values[0]) || [];
+      const named = cells.map((v, i) => ({ v: String(v || '').trim(), c: colLetter(i) }))
+                         .filter(x => x.v);
+      L.push(`    En-têtes : ${named.map(x => x.c + '=' + x.v).join(' · ')}`);
+    } catch(e) { L.push('    (en-têtes illisibles)'); }
+  }
+
+  // Numérotation (lecture seule) — permet de repérer une renumérotation surprise
+  if (hdrRow) {
+    try {
+      const d = await sheetsGet(a1(props.title, `D${hdrRow + 1}:D99999`), id);
+      const rows = d.values || [];
+      let lastRow = hdrRow, count = 0;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i] && rows[i][0] && String(rows[i][0]).trim() !== '') { lastRow = hdrRow + i + 1; count++; }
+      }
+      L.push(`  Dernière ligne de carte : ${lastRow} (${count} clé(s) non vides)`);
+      if (lastRow >= (gp.rowCount || 0)) {
+        L.push('  ⚠ L\'onglet est plein : la grille sera étendue à la prochaine injection.');
+      }
+    } catch(e) { L.push('  (colonne clé illisible)'); }
+    try {
+      const f = await sheetsGet(a1(props.title, `F2:F300`), id);
+      const rows = f.values || [];
+      let lastNum = 0, firstEmpty = rows.length + 2;
+      for (let i = 0; i < rows.length; i++) {
+        const v = rows[i] && rows[i][0] ? String(rows[i][0]).trim() : '';
+        if (!v) { firstEmpty = Math.min(firstEmpty, i + 2); continue; }
+        const m = v.match(/^(\d{4})_/);
+        if (m) lastNum = Math.max(lastNum, parseInt(m[1]));
+      }
+      L.push(`  Prochain n° de lot : ${String(lastNum + 1).padStart(4, '0')} · 1re ligne de lot libre : ${firstEmpty}`);
+    } catch(e) { L.push('  (colonne lot illisible)'); }
+  }
+  return { ok, title, lines: L };
+}
+
+async function diagnoseSafety(id) {
+  const L = ['', 'FICHIER SÉCURITÉ :'];
+  let ok = true;
+  if (!id || id.includes('A_REMPLACER')) {
+    return { ok: false, lines: L.concat('✗ Non configuré.') };
+  }
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=properties.title,sheets.properties.title`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
+  if (!res.ok) {
+    return { ok: false, lines: L.concat(`✗ Illisible (HTTP ${res.status}) — ID invalide ou accès refusé.`) };
+  }
+  const data = await res.json();
+  L[1] = `FICHIER SÉCURITÉ : ${(data.properties && data.properties.title) || '(sans titre)'}`;
+  [LOG_SHEET_NAME, BACKUP_SHEET_NAME].forEach(n => {
+    if (findSheetProps(data.sheets, n)) L.push(`  ✓ Onglet ${n}`);
+    else L.push(`  · Onglet ${n} absent — sera créé automatiquement à la 1re injection.`);
+  });
+  return { ok, lines: L };
+}
+
+let cfgVerifiedFor = null;   // ID central validé lors de la dernière vérification
+
+async function verifySettings() {
+  if (!isAuthenticated()) { showToast('⚠ Connecte-toi à Google d\'abord'); return; }
+  const cId = document.getElementById('cfgCentralId').value.trim();
+  const sId = document.getElementById('cfgSafetyId').value.trim();
+  const out = document.getElementById('cfgDiag');
+  const btn = document.getElementById('btnCfgVerify');
+  if (!cId) { out.textContent = '✗ ID du fichier central vide.'; return; }
+  btn.disabled = true;
+  out.textContent = 'Vérification en cours…';
+  cfgVerifiedFor = null;
+  try {
+    const c = await diagnoseCentral(cId);
+    let lines = c.lines.slice();
+    let ok = c.ok;
+    try {
+      const s = await diagnoseSafety(sId);
+      lines = lines.concat(s.lines);
+      ok = ok && s.ok;
+    } catch(e) { lines.push('', 'FICHIER SÉCURITÉ : ✗ ' + e.message); ok = false; }
+    lines.push('', ok ? '✓ CONFORME — enregistrement possible.'
+                      : '✗ NON CONFORME — corrige avant d\'injecter.');
+    out.textContent = lines.join('\n');
+    if (ok) { cfgVerifiedFor = cId; lsSet(LS_CENTRAL_NAME, c.title); }
+  } catch(e) {
+    out.textContent = '✗ ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function saveSettings() {
+  const cId = document.getElementById('cfgCentralId').value.trim();
+  const sId = document.getElementById('cfgSafetyId').value.trim();
+  if (!cId) { showToast('⚠ ID central vide'); return; }
+  if (cfgVerifiedFor !== cId) {
+    if (!confirm('Ce fichier central n\'a PAS été vérifié avec succès.\n\n'
+      + 'Enregistrer un ID non vérifié peut envoyer une injection dans le mauvais classeur.\n\n'
+      + 'Enregistrer quand même ?')) return;
+    lsDel(LS_CENTRAL_NAME);
+  }
+  if (cId === GSHEET_ID_DEFAULT) lsDel(LS_CENTRAL); else lsSet(LS_CENTRAL, cId);
+  if (sId === SAFETY_GSHEET_ID_DEFAULT) lsDel(LS_SAFETY); else lsSet(LS_SAFETY, sId);
+  loadGSheetConfig();
+  showToast('✓ Fichiers de travail enregistrés');
+  closeSettings();
+}
+
+function resetGSheetConfig() {
+  if (!confirm('Revenir aux identifiants codés en dur dans cette version de l\'app ?')) return;
+  lsDel(LS_CENTRAL); lsDel(LS_SAFETY); lsDel(LS_CENTRAL_NAME);
+  cfgVerifiedFor = null;
+  loadGSheetConfig();
+  document.getElementById('cfgCentralId').value = GSHEET_ID;
+  document.getElementById('cfgSafetyId').value  = SAFETY_GSHEET_ID;
+  document.getElementById('cfgDiag').textContent = 'Réinitialisé aux valeurs par défaut. Vérifie avant d\'injecter.';
+  showToast('✓ Réinitialisé');
+}
+
 async function getNextLotNumber() {
   try {
     const data = await sheetsGet(a1(SHEET_NAME, `F2:F300`));
@@ -2276,19 +2586,27 @@ async function getNextLotNumber() {
 
 // Détecte dynamiquement la ligne d'en-tête des cartes (col D = clé/key, ou col AF = statut/régime).
 // Repli sur CARD_HEADER_ROW_FALLBACK. Aligné sur findCardsHeaderRow de tcg-master.html.
+// Retourne la ligne d'en-tête détectée, ou null si aucune ne matche (permet au
+// diagnostic de distinguer « détectée » de « repli sur la constante »).
+async function findCardsHeaderRowRaw(spreadsheetId = GSHEET_ID, sheetTitle = SHEET_NAME) {
+  const r = await sheetsGet(a1(sheetTitle, `A1:AF300`), spreadsheetId);
+  const rows = r.values || [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const colD  = (row[3]  || '').toString().trim().toLowerCase();
+    const colAF = (row[31] || '').toString().trim().toLowerCase();
+    if (colD === 'clé' || colD === 'cle' || colD === 'key' ||
+        colAF === 'statut' || colAF === 'status' || colAF.includes('régime')) {
+      return i + 1;   // 1-indexé
+    }
+  }
+  return null;
+}
+
 async function findCardsHeaderRow() {
   try {
-    const r = await sheetsGet(a1(SHEET_NAME, `A1:AF300`));
-    const rows = r.values || [];
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i] || [];
-      const colD  = (row[3]  || '').toString().trim().toLowerCase();
-      const colAF = (row[31] || '').toString().trim().toLowerCase();
-      if (colD === 'clé' || colD === 'cle' || colD === 'key' ||
-          colAF === 'statut' || colAF === 'status' || colAF.includes('régime')) {
-        return i + 1;   // 1-indexé
-      }
-    }
+    const hit = await findCardsHeaderRowRaw();
+    if (hit) return hit;
   } catch (e) { /* repli ci-dessous */ }
   return CARD_HEADER_ROW_FALLBACK;
 }
@@ -3168,6 +3486,7 @@ document.getElementById('mappingCount').textContent = Object.keys(MAPPING).lengt
 unlockStep(4);
 document.getElementById('step4-sub').textContent = 'Impression';
 loadCalibration();   // restaure le calage d'impression sauvegardé
+loadGSheetConfig();  // résout GSHEET_ID / SAFETY_GSHEET_ID avant tout appel Sheets
 initGisClient();
 updateAuthUI();
 
