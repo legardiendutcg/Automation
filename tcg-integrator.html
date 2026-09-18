@@ -4,6 +4,9 @@
   TCG INTEGRATOR — Le Gardien du TCG (publication multi-canal · CardMarket)
   ────────────────────────────────────────────────────────────────────────────
   CHANGELOG
+  0.4.4  2026-09-18  Bascule du fichier central (#31) : CENTRAL_GSHEET_ID repointé sur le NOUVEAU
+                     classeur 1CV1H2Rk…aUJ4Q (Pokemon_Activity_20260729) ; l'ancien 1i6Ch5L9…isNbEKk
+                     est abandonné. Une seule ligne de config touchée, aucune logique modifiée.
   0.4.3  2026-06-10  Session #22 (cosmétique pure — NON testé navigateur) : logo société ajouté
                      dans l'en-tête ; version (#ver) collée à droite du titre « TCG INTEGRATOR »
                      (.logo-title-row) ; mention « by Cassius » supprimée. Aucune logique métier
@@ -230,7 +233,7 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
       <div class="logo-text">
         <div class="logo-title-row">
           <h1>TCG <span>INTEGRATOR</span></h1>
-          <span class="ver" id="ver">v0.4.3</span>
+          <span class="ver" id="ver">v0.4.4</span>
         </div>
         <p>Publication multi-canal → CardMarket</p>
       </div>
@@ -311,10 +314,10 @@ tbody tr.done td { background:rgba(74,222,128,.05); }
 <script>
 'use strict';
 // ═══════════ CONFIG ═══════════
-const APP_VERSION='0.4.3';
+const APP_VERSION='0.4.4';
 const OAUTH_CLIENT_ID='774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES='https://www.googleapis.com/auth/spreadsheets.readonly';
-const CENTRAL_GSHEET_ID='1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+const CENTRAL_GSHEET_ID='1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';  // (#31) NOUVEAU classeur Pokemon_Activity_20260729 — l'ancien 1i6Ch5L9…isNbEKk est ABANDONNÉ
 const SHEET_CARDS='cartes_stock_et_transactions';
 const CATALOGUE_URL='./cm-catalogue.csv';   // déposé à côté de l'app dans le repo (même origine → CSP OK)
 // Proxies CORS pour récupérer la vignette (og:image de la fiche CM). DÉSACTIVÉ par défaut ([]) :

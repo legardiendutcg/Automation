@@ -1,8 +1,19 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.23.0 (Session #32 — 2026-08-16)
+  Version : 1.24.0 (2026-09-18)
 =============================================================
+  1.24.0 2026-09-18  (Dashboard borné à la JOURNÉE EN COURS ; Master seul)
+         - [Fix] KPI (CA, articles, transactions, panier moyen), 3 donuts (catégorie, licence,
+           vendeur), ⭐ Faits marquants et CA par heure sont désormais calculés sur les ventes
+           d'AUJOURD'HUI (minuit local) et non plus sur tout le buffer ventes_detail. Un event
+           ouvert depuis la veille (ou plus) cumulait les jours : ex. « CA par heure » additionnait
+           le 11h de samedi et celui de dimanche. Le filtre est recalculé à chaque rafraîchissement
+           → bascule automatique à minuit, sans rechargement.
+         - [UX] Libellé KPI « CA total » → « CA du jour ». Si l'event couvre plusieurs jours, la ligne
+           « MAJ » rappelle le cumul event (CA + nb de jours) pour ne pas perdre le total.
+         - Inchangés : 🏠 Ventes du jour (déjà borné à aujourd'hui), journal des 50 dernières ventes
+           (event entier), anomalies, sync, clôture.
   1.23.0 2026-08-16  Session #32 (PANNEAU PARAMÈTRES + BASCULE DU FICHIER CENTRAL ; Master seul)
          - [🔴 URGENT] CENTRAL_GSHEET_ID repointé sur le NOUVEAU classeur
            `1CV1H2Rk…aUJ4Q` (Pokemon_Activity_20260729). L'ancien `1i6Ch5L9…isNbEKk` est
@@ -778,7 +789,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
     <div class="dash-grid">
       <!-- KPI compacts (auto-réduction de police) -->
       <div class="area-kpis">
-        <div class="kpi"><div class="l">CA total</div><div class="v" id="kpiCA" data-fit>—</div></div>
+        <div class="kpi"><div class="l">CA du jour</div><div class="v" id="kpiCA" data-fit>—</div></div>
         <div class="kpi"><div class="l">Articles</div><div class="v blue" id="kpiNb" data-fit>—</div></div>
         <div class="kpi"><div class="l">Transactions</div><div class="v green" id="kpiTx" data-fit>—</div></div>
         <div class="kpi"><div class="l">Panier moyen</div><div class="v pink" id="kpiAvg" data-fit>—</div></div>
@@ -993,7 +1004,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.23.0';
+const APP_VERSION      = '1.24.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -3056,9 +3067,14 @@ async function loadStats() {
       await loadAnomaliesList([]);
       return;
     }
-    const allTx = new Set(allData.map(r => r[3]));
-    const totalCA = allData.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
-    const totalNb = allData.reduce((s, r) => s + (parseInt(r[9], 10) || 1), 0);
+    // (1.24.0) Dashboard borné à la JOURNÉE EN COURS (minuit local), même si l'event dure
+    // depuis la veille. Recalculé à chaque tick → bascule automatique à minuit.
+    const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+    const dayStartTs = dayStart.getTime();
+    const dayData = allData.filter(r => { const t = Date.parse(r[0]); return !isNaN(t) && t >= dayStartTs; });
+    const allTx = new Set(dayData.map(r => r[3]));
+    const totalCA = dayData.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
+    const totalNb = dayData.reduce((s, r) => s + (parseInt(r[9], 10) || 1), 0);
     const avgTx = allTx.size > 0 ? totalCA / allTx.size : 0;
     setKpi('kpiCA',  formatPrice(totalCA));
     setKpi('kpiNb',  String(totalNb));
@@ -3067,31 +3083,38 @@ async function loadStats() {
     fitKpis();
 
     const byCat = {};
-    allData.forEach(r => { const k = (String(r[7] || '').trim()) || 'Autre'; byCat[k] = (byCat[k] || 0) + (parseFloat(r[10]) || 0); });
+    dayData.forEach(r => { const k = (String(r[7] || '').trim()) || 'Autre'; byCat[k] = (byCat[k] || 0) + (parseFloat(r[10]) || 0); });
     renderDonut('donutCatSvg', 'donutCatLeg', byCat, CAT_COLORS, false);
 
     const byLic = {};
-    allData.forEach(r => { const k = (String(r[8] || '').trim()) || 'Autre'; byLic[k] = (byLic[k] || 0) + (parseFloat(r[10]) || 0); });
+    dayData.forEach(r => { const k = (String(r[8] || '').trim()) || 'Autre'; byLic[k] = (byLic[k] || 0) + (parseFloat(r[10]) || 0); });
     renderDonut('donutLicSvg', 'donutLicLeg', byLic, LIC_COLORS, true);
 
     // (#26) CA par vendeur = ventilation du CA par Type_Vente (col O). Les -RB (négatifs) se
     // déduisent du bon segment. Type vide → "Sans type" (ne devrait pas arriver : Sales bloque).
     const byType = {};
     const tvIdx = salesHeaderInfo ? (salesHeaderInfo.typeVenteCol - 1) : 14;
-    allData.forEach(r => { const k = (String(r[tvIdx] || '').trim()) || 'Sans type'; byType[k] = (byType[k] || 0) + (parseFloat(r[10]) || 0); });
+    dayData.forEach(r => { const k = (String(r[tvIdx] || '').trim()) || 'Sans type'; byType[k] = (byType[k] || 0) + (parseFloat(r[10]) || 0); });
     renderDonut('donutVendeurSvg', 'donutVendeurLeg', byType, TYPE_COLORS, true);
 
-    if (currentEventName) renderFacts(computeFacts(allData));
-    else                  renderCounter(allData);
-    renderHours(computeHours(allData));
+    if (currentEventName) renderFacts(computeFacts(dayData));
+    else                  renderCounter(allData);   // filtre déjà lui-même sur aujourd'hui
+    renderHours(computeHours(dayData));
 
     const last50 = allData.slice(-50).reverse();
     renderSalesLog(last50);
 
     await loadAnomaliesList();
 
+    // (1.24.0) Rappel du cumul event quand il couvre plusieurs jours (le dashboard n'affiche que le jour).
+    let eventRecap = '';
+    if (dayData.length < allData.length) {
+      const days = new Set(allData.map(r => { const t = Date.parse(r[0]); return isNaN(t) ? null : new Date(t).toDateString(); }).filter(Boolean));
+      const eventCA = allData.reduce((s, r) => s + (parseFloat(r[10]) || 0), 0);
+      eventRecap = ' · Cumul event (' + days.size + ' j) : ' + formatPrice(eventCA);
+    }
     document.getElementById('statsLastUpdate').textContent =
-      'MAJ ' + new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      'MAJ ' + new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) + eventRecap;
   } catch (e) {
     showToast('✗ Stats : ' + e.message, true);
     document.getElementById('statsLastUpdate').textContent = 'Erreur';

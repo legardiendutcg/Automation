@@ -1,10 +1,14 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.24.0 (Session #29 — 2026-06-19)
+  Version : 1.24.1 (2026-09-18)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.24.1 2026-09-18  (Bascule du fichier central #31 — hygiène, aucun effet fonctionnel)
+         - CENTRAL_GSHEET_ID (non lu depuis 1.9.0) repointé sur le NOUVEAU classeur 1CV1H2Rk…aUJ4Q :
+           c'est la valeur PAR DÉFAUT de sheetsGet/sheetsAppend/sheetsUpdate ; tous les appels actuels
+           passent EVENTS_GSHEET_ID explicitement, mais un futur appel sans ID aurait visé le classeur mort.
   1.24.0 2026-06-19  Session #29 (UX vente : refocus auto, pull-to-refresh, retrait caméra QR,
                                   bandeau d'ancienneté, panneau doublon sur la quantité)
          - [Feature] Refocus AUTO de la zone de scan après 5 s sans activité (timer réarmé sur
@@ -1170,10 +1174,10 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.24.0';
+const APP_VERSION      = '1.24.1';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
-const CENTRAL_GSHEET_ID  = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
+const CENTRAL_GSHEET_ID  = '1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
 const EVENTS_GSHEET_ID   = '1WxTPFgVUDGd94vWXAO6i4BSS0jePqiSwi890hb8c2_E';
 // (1.17.0) Scope Sheets + Drive.file (moindre privilège : l'app ne voit QUE les fichiers
 // qu'elle crée — jamais le reste du Drive). drive.file sert à déposer les photos d'articles

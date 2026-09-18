@@ -10,13 +10,16 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 /* ============================================================================
-   TCG · Dédoublonnage EAN scellé — v0.1.0
+   TCG · Dédoublonnage EAN scellé — v0.3.1
    ----------------------------------------------------------------------------
    Outil de mise en place (session #13bis). LECTURE SEULE de la GSheet centrale.
    N'écrit JAMAIS dans la Sheet. Produit un export JSON/CSV des décisions.
    Réutilise l'infra GIS de tcg-intake (même OAuth client, même GSHEET_ID).
 
    CHANGELOG
+   0.3.1  2026-09-18  Bascule du fichier central (#31) : GSHEET_ID repointé sur le NOUVEAU
+                      classeur 1CV1H2Rk…aUJ4Q (Pokemon_Activity_20260729). Titre d'en-tête
+                      réaligné (affichait encore v0.1.0). Aucune logique modifiée.
    0.3.0  2026-06-11  Liste de types lue en LIVE depuis la colonne G bornée par
                       Début_Liste_Types / Fin_Liste_Types (dédoublonnée), avec repli
                       sur liste codée en dur si bornes introuvables. Indicateur de
@@ -264,7 +267,7 @@ table.grid select.typein option{background:var(--panel2);color:var(--ink)}
    CONFIG — alignée sur tcg-intake (même projet OAuth, même classeur central)
    =========================================================================== */
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
-const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+const GSHEET_ID       = '1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';  // (#31) NOUVEAU classeur central — l'ancien 1i6Ch5L9…isNbEKk est ABANDONNÉ
 const SHEET_STOCK     = 'Scelle_Stock';
 const SHEET_TRANS     = 'Scelle_Transactions';
 // Lecture seule → scope readonly suffisant (plus restrictif que tcg-intake, volontaire).

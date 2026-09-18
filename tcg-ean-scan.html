@@ -2,8 +2,13 @@
 <!--
 =============================================================
   TCG EAN-SCAN — Le Gardien du TCG
-  Version : 0.4.0 (Session #28 — cascade série→type→nom + picker série combiné)
+  Version : 0.4.1 (2026-09-18 — bascule du fichier central)
 =============================================================
+  0.4.1  Bascule du fichier central (#31).
+         - GSHEET_ID repointé sur le NOUVEAU classeur 1CV1H2Rk…aUJ4Q
+           (Pokemon_Activity_20260729) ; l'ancien 1i6Ch5L9…isNbEKk est abandonné.
+           Outil en ÉCRITURE (EAN, EAN_MAPPING, Scelle_*) : il écrivait jusqu'ici
+           dans le classeur mort. Aucune logique modifiée.
   0.4.0  Cascade de définition & picker série combiné (session #28).
          - Picker « Série » UNIQUE combinant code + nom (« EV9.0 Aventures
            Ensemble », « EV3.5 151 ») ; le choix renseigne code ET nom de série.
@@ -333,13 +338,13 @@ table.grid select.skupick{background:var(--bg);border:1px solid var(--border);co
    CONFIG — alignée sur tcg-intake / tcg-ean-dedup (même projet OAuth, même classeur)
    =========================================================================== */
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
-const GSHEET_ID       = '1i6Ch5L9z1zQeye1BQ2mAfqSfxbrXijDJ4EX1isNbEKk';
+const GSHEET_ID       = '1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';  // (#31) NOUVEAU classeur central — l'ancien 1i6Ch5L9…isNbEKk est ABANDONNÉ
 const SHEET_STOCK     = 'Scelle_Stock';
 const SHEET_TRANS     = 'Scelle_Transactions';
 const SHEET_MAP       = 'EAN_MAPPING';
 const MAP_HEADERS     = ['EAN','cle_scellee','code_serie','type_item','nom_item','id_product_cm','source','maj_ts'];
 const APP_SOURCE      = 'tcg-ean-scan';
-const APP_VERSION     = '0.4.0';
+const APP_VERSION     = '0.4.1';
 /* Écriture → scope complet (≠ dedup qui était readonly). */
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
 const NA              = 'n.a.';
