@@ -1,10 +1,17 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.24.1 (2026-09-18)
+  Version : 1.24.2 (2026-09-19)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.24.2 2026-09-19  (Mise en page LAPTOP / grand écran — CSS seul, aucune logique touchée)
+         - [Fix UX] Sur laptop, la colonne unique pensée pour smartphone (560 px max) empilait
+           panier + client/type + remises + total + Valider : sur un écran de ~600 px de haut, le
+           panier ne gardait que ~130 px (2 lignes visibles), encore moins avec les bandeaux d'état.
+         - Dès 900 px de large : 2 colonnes. Panier à gauche sur toute la hauteur, contrôles de
+           vente (client, type, remises, total, Valider) dans une colonne de 380 px à droite,
+           calés en bas. Largeur max portée à 1180 px. Smartphone (< 900 px) : inchangé.
   1.24.1 2026-09-18  (Bascule du fichier central #31 — hygiène, aucun effet fonctionnel)
          - CENTRAL_GSHEET_ID (non lu depuis 1.9.0) repointé sur le NOUVEAU classeur 1CV1H2Rk…aUJ4Q :
            c'est la valeur PAR DÉFAUT de sheetsGet/sheetsAppend/sheetsUpdate ; tous les appels actuels
@@ -866,6 +873,15 @@ body::before{content:'';position:fixed;inset:0;
   #deadLetterBar .btn-sm,#restoreBar .btn-sm{padding:6px 9px!important;}
 }
 
+/* ── (1.24.2) Laptop / grand écran : panier à gauche pleine hauteur, contrôles à droite.
+   La colonne unique (smartphone) écrasait le panier à ~2 lignes sur un écran de laptop. ── */
+@media (min-width:900px){
+  .app{max-width:1180px;}
+  #tab1.tab-content.active{flex-direction:row;gap:12px;}
+  #tab1 .zone-mid{flex:1 1 auto;min-width:0;}
+  #tab1 .zone-bot{flex:0 0 380px;min-width:0;justify-content:flex-end;}
+}
+
 </style>
 </head>
 <body>
@@ -1174,7 +1190,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.24.1';
+const APP_VERSION      = '1.24.2';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
