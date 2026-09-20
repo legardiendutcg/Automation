@@ -1,8 +1,12 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.24.0 (2026-09-18)
+  Version : 1.24.1 (2026-09-19)
 =============================================================
+  1.24.1 2026-09-19  (CA par heure : plage élargie 8h → 20h)
+         - [UX] computeHours() : tranches 8h…19h (12 barres, la dernière couvre 19h–20h) au lieu de
+           10h…17h. Titre du panneau « CA par heure (8h–20h) ». Barres resserrées (hauteur 18→14 px,
+           espacement 10→4 px) pour que la rangée du dashboard garde sa hauteur d'avant.
   1.24.0 2026-09-18  (Dashboard borné à la JOURNÉE EN COURS ; Master seul)
          - [Fix] KPI (CA, articles, transactions, panier moyen), 3 donuts (catégorie, licence,
            vendeur), ⭐ Faits marquants et CA par heure sont désormais calculés sur les ventes
@@ -702,10 +706,10 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 .ctr-row .ct-amt{font-weight:700;color:var(--text);margin-left:auto;white-space:nowrap;}
 .ctr-empty{color:var(--muted);font-size:.72rem;padding:8px 2px;}
 
-.hbars{display:flex;flex-direction:column;gap:10px;flex:1;justify-content:center;}
+.hbars{display:flex;flex-direction:column;gap:4px;flex:1;justify-content:center;}   /* (1.24.1) 10→4px : 12 barres dans la hauteur des 8 d'avant */
 .hbar{display:flex;align-items:center;gap:8px;}
 .hbar .hl{width:28px;font-family:'Space Mono',monospace;font-size:.58rem;color:var(--muted);flex-shrink:0;}
-.hbar .ht{flex:1;height:18px;background:var(--surface2);border-radius:5px;overflow:hidden;}
+.hbar .ht{flex:1;height:14px;background:var(--surface2);border-radius:5px;overflow:hidden;}
 .hbar .hf{height:100%;background:linear-gradient(90deg,rgba(71,200,255,.55),var(--accent2));border-radius:5px;display:flex;align-items:center;justify-content:flex-end;padding:0 7px;min-width:44px;}
 .hbar .hf .v{font-family:'Space Mono',monospace;font-size:.56rem;font-weight:700;color:#04222e;white-space:nowrap;}
 .hbar.empty .ht{background:repeating-linear-gradient(90deg,rgba(255,255,255,.05) 0 4px,transparent 4px 8px);}
@@ -826,9 +830,9 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
           </div>
         </div>
       </div>
-      <!-- CA par heure horizontal (10h→17h réservés) -->
+      <!-- CA par heure horizontal (8h→19h réservés, 1.24.1) -->
       <div class="area-hours dpanel">
-        <div class="pt">CA par heure (10h–18h)</div>
+        <div class="pt">CA par heure (8h–20h)</div>
         <div class="hbars" id="hoursBars"></div>
       </div>
     </div>
@@ -1004,7 +1008,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.24.0';
+const APP_VERSION      = '1.24.1';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -3306,7 +3310,7 @@ function updateCenterPanelMode() {
 }
 
 function computeHours(rows) {
-  const HOURS = [10, 11, 12, 13, 14, 15, 16, 17];
+  const HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];   // (1.24.1) 8h → 20h (19h = 19:00–19:59)
   const map = {}; HOURS.forEach(h => map[h] = 0);
   rows.forEach(r => { const t = Date.parse(r[0]); if (!isNaN(t)) { const h = new Date(t).getHours(); if (h in map) map[h] += parseFloat(r[10]) || 0; } });
   return HOURS.map(h => ({ h, v: map[h] }));
