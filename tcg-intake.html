@@ -2,10 +2,29 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.7.2 (2026-10-08)
+  Version : 1.7.4 (2026-10-08)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.7.4  2026-10-08  GRILLE : extension au nombre exact de lignes.
+         ⚠️ NON testé navigateur.
+         - [Fix] ensureGridRows() ajoutait une marge fixe de 500 lignes vides en bas de
+           l'onglet à chaque extension, quelle que soit la taille du lot.
+           GRID_ROW_MARGIN passe à 0 : on n'ajoute que les lignes réellement manquantes.
+  1.7.3  2026-10-08  LIGNES DE LOT : insertion d'une vraie ligne à chaque lot.
+         ⚠️ NON testé navigateur.
+         - [Fix 🔴] La ligne de lot était ÉCRITE dans la 1re ligne vide de la zone des
+           lots, sans en créer : la zone se remplissait jusqu'à déborder sur la partie
+           cartes. Désormais insertLotRow() insère une ligne (insertDimension, mise en
+           forme héritée de la ligne de lot précédente) avant d'écrire : la zone cartes
+           descend d'une ligne à chaque lot.
+         - cardHeaderRow est décalé de +1 après chaque insertion (sinon plages $F/$Q des
+           formules de lot et lecture des cartes décalées d'une ligne), et la ligne de
+           départ des cartes déjà écrites (undo) aussi.
+         - Garde-fou : erreur explicite si la 1re ligne libre trouvée est dans la zone
+           cartes (au lieu d'écrire par-dessus l'en-tête).
+         - L'annulation (undo) supprime ces lignes insérées : la mise en page revient à
+           l'état d'avant l'injection.
   1.7.2  2026-10-08  SÉRIES « x », PRIX ≥ 50€, CLÉ EN FORMULE.
          ⚠️ NON testé navigateur.
          - [Mapping] Un code série préfixé « x » (stamp / pokéball / masterball, ex. xPRE)
@@ -1315,7 +1334,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.7.2';
+const APP_VERSION = '1.7.4';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 
 // ── Fichiers de travail ──────────────────────────────────────────────
@@ -2409,8 +2428,8 @@ async function getSheetId() {
 // Google Sheets refuse toute écriture au-delà du rowCount déclaré de la grille
 // (« exceeds grid limits »). L'onglet cartes se remplit ligne par ligne : dès que
 // l'injection dépasse la dernière ligne existante, on étend la grille AVANT d'écrire.
-// Marge de GRID_ROW_MARGIN lignes pour éviter un appel API à chaque injection.
-const GRID_ROW_MARGIN = 500;
+// Aucune marge : on ajoute exactement les lignes manquantes pour le lot.
+const GRID_ROW_MARGIN = 0;
 async function ensureGridRows(lastRowNeeded) {
   const props = await fetchSheetProps();
   const rowCount = (props.gridProperties && props.gridProperties.rowCount) || 0;
@@ -2683,6 +2702,17 @@ async function ensureCardHeaderRow() {
   cardHeaderResolved = true;
   console.log('[Cards] cardHeaderRow détecté :', cardHeaderRow);
   return cardHeaderRow;
+}
+
+// Insère une ligne vierge à targetRow dans la zone des lots (formatage hérité de la
+// ligne au-dessus), puis décale cardHeaderRow : toute la zone cartes descend d'une ligne.
+async function insertLotRow(targetRow) {
+  const sheetId = await getSheetId();
+  await sheetsBatchUpdate([{ insertDimension: {
+    range: { sheetId, dimension: 'ROWS', startIndex: targetRow - 1, endIndex: targetRow },
+    inheritFromBefore: targetRow > 2
+  } }]);
+  cardHeaderRow += 1;
 }
 
 async function getFirstEmptyLotRow() {
@@ -2982,6 +3012,11 @@ async function injectIntoGSheet(preview = false) {
 
       // 1. Lot row
       const targetLotRow = await getFirstEmptyLotRow();
+      if (targetLotRow >= cardHeaderRow) {
+        throw new Error(`Aucune ligne libre trouvée dans la zone des lots (1re ligne vide : ${targetLotRow}, en-tête cartes : ${cardHeaderRow}). Laisse au moins une ligne vide sous le dernier lot.`);
+      }
+      await insertLotRow(targetLotRow);
+      if (injLog.cardStartRow) injLog.cardStartRow += 1;   // les cartes déjà écrites ont glissé d'une ligne
       const lotRow = buildLotRow(lotName, cardCount, lotPrices[orig]||0, cards, targetLotRow);
       await sheetsUpdate(a1(SHEET_NAME, `A${targetLotRow}:V${targetLotRow}`), [lotRow]);
       logInject('ok', `✓ Ligne de lot insérée (ligne ${targetLotRow})`);
@@ -3093,6 +3128,7 @@ async function undoLastInjection() {
     logInject('ok', '── ANNULATION TERMINÉE ✓ ──');
     showToast('✓ Injection annulée');
     lastInjection = null;
+    cardHeaderResolved = false;   // les lignes de lot supprimées ont remonté l'en-tête cartes : re-détection
     document.getElementById('btnUndo').classList.add('hidden');
     document.getElementById('btnInject').disabled = false;
     document.getElementById('btnInject').textContent = '↑ Injecter dans Google Sheets';
