@@ -2,10 +2,27 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.7.1 (2026-10-08)
+  Version : 1.7.2 (2026-10-08)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.7.2  2026-10-08  SÉRIES « x », PRIX ≥ 50€, CLÉ EN FORMULE.
+         ⚠️ NON testé navigateur.
+         - [Mapping] Un code série préfixé « x » (stamp / pokéball / masterball, ex. xPRE)
+           n'est plus signalé comme série inconnue : il est résolu sur la série de base
+           (PRE). Seule la série de base est demandée si elle-même est absente du mapping.
+           Une entrée « x… » déjà présente dans MAPPING reste prioritaire.
+         - [Prix] Plus de validation manuelle au-delà de 50€ : la règle ceil+2 du palier
+           20–50€ s'applique aussi au-delà. Les cartes à 0,01€ restent à valider.
+         - [Clé] Colonne D (Key) écrite en FORMULE :
+           =REGEXREPLACE(CONCATENATE(G,"_",REGEXEXTRACT(I,"\S+$"),"_","AAAAMMJJ","_","NNNN"),"[\s/]","")
+           (espaces et « / » retirés de la clé)
+           Date FIGÉE au jour de l'injection (pas TODAY(), volatile : la clé changerait
+           chaque jour et ne correspondrait plus au QR imprimé). Séquence journalière :
+           1re carte du jour = 0010, puis +1 (DAILY_SEQ_START). buildKey() reproduit
+           exactement le résultat de la formule → le QR (col. C) reste identique à D.
+         - [Fix] Les étiquettes générées après injection utilisaient une clé à séquence 1
+           (QR ≠ clé réelle) : elles reprennent désormais la clé effectivement injectée.
   1.7.1  2026-10-08  DIAGNOSTIC « fichier Office » : message explicite et ciblé.
          ⚠️ NON testé navigateur.
          - [Fix] « Sheets METADATA 400 … must not be an Office file » remontait brut
@@ -1298,7 +1315,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.7.2';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 
 // ── Fichiers de travail ──────────────────────────────────────────────
@@ -1660,8 +1677,16 @@ function buildCardNumber(setCode, cn, me) {
 // ============================================================
 // TRANSFORM ROW
 // ============================================================
+// Code préfixé « x » (ex. xPRE) = variante stamp / pokéball / masterball de la série
+// de base : on la résout sur la série de base, sans entrée dédiée dans MAPPING.
+function resolveSetCode(rawCode) {
+  const c = String(rawCode || '').trim();
+  if (/^x[A-Z0-9]/.test(c) && !MAPPING[c]) return c.slice(1);
+  return c;
+}
+
 function transformRow(row) {
-  const setCode = (row.setCode || '').trim();
+  const setCode = resolveSetCode(row.setCode);
   const cn = (row.cn || '').trim();
   const me = MAPPING[setCode] || null;
   const langue = row.language || '';
@@ -1709,11 +1734,22 @@ function getTodayStr() {
   return d.getFullYear().toString() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
 }
 
+// Séquence journalière : la 1re carte injectée dans la journée porte 0010.
+const DAILY_SEQ_START = 10;
+
+// Reproduit EXACTEMENT le résultat de la formule écrite en colonne D (buildKeyFormula) :
+// G (code série) _ dernier mot de I (n° de carte) _ date du jour _ séquence sur 4 chiffres.
 function buildKey(codeSerie, nomCarte, dailySeq) {
-  const parts = nomCarte.trim().split(' ');
-  const numero = parts[parts.length-1].replace(/\//g,'').replace(/[^a-zA-Z0-9]/g,'');
-  const cleanCode = codeSerie.replace(/[^a-zA-Z0-9.]/g,'');
-  return `${cleanCode}_${numero}_${getTodayStr()}_${String(dailySeq).padStart(4,'0')}`;
+  const m = String(nomCarte || '').trim().match(/\S+$/);
+  const numero = m ? m[0] : '';
+  return `${String(codeSerie || '')}_${numero}_${getTodayStr()}_${String(dailySeq).padStart(4,'0')}`
+    .replace(/[\s\/]/g, '');   // sans espaces ni « / », comme REGEXREPLACE dans la formule
+}
+
+// Formule de la colonne Key. Date figée (et non TODAY(), volatile) pour que la clé
+// reste stable dans le temps et identique au QR de la colonne C.
+function buildKeyFormula(row, dailySeq) {
+  return `=REGEXREPLACE(CONCATENATE(G${row},"_",REGEXEXTRACT(I${row},"\\S+$"),"_","${getTodayStr()}","_","${String(dailySeq).padStart(4,'0')}"),"[\\s/]","")`;
 }
 
 function buildQRLink(key) {
@@ -1860,15 +1896,14 @@ function renderTable() {
 let seriesResolved = false;
 let pricesComplete = false;
 let highValueComplete = false;    // Section C
-let highValuePrices  = {};        // { rowIndex: prix } for cards >= 50€
+let highValuePrices  = {};        // { rowIndex: prix } pour les cartes à 0.01€ (prix manuel)
 let pokepediaIndex = null;
 
 // ── Prix de vente : règles d'arrondi ─────────────────────────────────────
 function applyPriceRule(prixNum) {
   if (prixNum <  10) return Math.ceil(prixNum);
   if (prixNum <  20) return Math.ceil(prixNum) + 1;
-  if (prixNum <  50) return Math.ceil(prixNum) + 2;
-  return null; // validation manuelle requise
+  return Math.ceil(prixNum) + 2;  // ≥ 20€ (plus de validation manuelle au-delà de 50€)
 }
 
 function getSellPrice(rowIndex) {
@@ -2085,7 +2120,7 @@ function checkPricesComplete() {
 }
 
 function needsManualPrice(prixNum) {
-  return prixNum >= 50 || prixNum <= 0.01;
+  return prixNum <= 0.01;
 }
 
 function renderHighValueCheck() {
@@ -2104,9 +2139,7 @@ function renderHighValueCheck() {
   body.innerHTML = '';
 
   highCards.forEach(({r, i}) => {
-    const reason = r.prixNum <= 0.01
-      ? '<span class="badge red">Prix bloqué à 0.01€</span>'
-      : '<span class="badge yellow">Prix élevé ≥ 50€</span>';
+    const reason = '<span class="badge red">Prix bloqué à 0.01€</span>';
     const div = document.createElement('div');
     div.className = 'lot-price-row' + (highValuePrices[i] > 0 ? ' price-ok' : ' price-missing');
     div.id = 'hv-row-' + i;
@@ -2685,15 +2718,16 @@ async function getLastStockSeq() {
     let maxSeq = 0;
     rows.forEach(r => {
       if (r[0]) {
-        const match = r[0].match(/_(\d{8})_(\d{4})$/);
+        const match = String(r[0]).match(/_(\d{8})_(\d{4})$/);
         if (match && match[1] === today) {
           const seq = parseInt(match[2]);
           if (seq > maxSeq) maxSeq = seq;
         }
       }
     });
-    return maxSeq;
-  } catch(e) { return 0; }
+    // Base de séquence : la prochaine carte prend base+1 → 0010 pour la 1re du jour.
+    return Math.max(maxSeq, DAILY_SEQ_START - 1);
+  } catch(e) { return DAILY_SEQ_START - 1; }
 }
 
 // Read formula row from reference row (last card row before injection)
@@ -2762,7 +2796,7 @@ function buildCardRow(r, lotName, dailySeq, formulaTemplates, refRow, targetRow)
 
   return [
     qrLink,                    // C - QR_Link (URL, encodeURIComponent → sûr)
-    safeForSheets(key),        // D - Key
+    buildKeyFormula(targetRow, dailySeq), // D - Key (formule, valeur = key)
     'Yes',                     // E - Print_Etiquette
     safeForSheets(lotName),    // F - Origine
     safeForSheets(r.codeSerie),// G - Code Série
@@ -2969,6 +3003,7 @@ async function injectIntoGSheet(preview = false) {
       cards.forEach((r, idx) => {
         const seq = currentSeq + idx + 1;
         const targetRow = startRow + idx;
+        r._key = buildKey(r.codeSerie, r.nomCarte, seq);   // clé réelle, reprise par les étiquettes
         cardRows.push(buildCardRow(r, lotName, seq, formulaTemplates, lastCardRow, targetRow));
       });
       currentSeq += cardCount;
@@ -3138,7 +3173,7 @@ function initLabelCards() {
     const parts = r.nomCarte.trim().split(' ');
     const numCarte = parts.pop();
     const sellPrice = getSellPrice(i);
-    const key = buildKey(r.codeSerie, r.nomCarte, 1);
+    const key = r._key || buildKey(r.codeSerie, r.nomCarte, DAILY_SEQ_START);
     return {
       nomCarte: parts.join(' '), numCarte,
       codeSerie: r.codeSerie, nomSerie: r.nomSerie,
