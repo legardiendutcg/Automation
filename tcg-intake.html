@@ -2,10 +2,20 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.7.0 (Session #31 — 2026-07-30)
+  Version : 1.7.1 (2026-10-08)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.7.1  2026-10-08  DIAGNOSTIC « fichier Office » : message explicite et ciblé.
+         ⚠️ NON testé navigateur.
+         - [Fix] « Sheets METADATA 400 … must not be an Office file » remontait brut
+           pendant l'injection, sans dire QUEL classeur était en cause. Les deux IDs par
+           défaut sont des Google Sheets natives → la cause est un override localStorage
+           (lgdtcg.gsheet.central / .safety, partagé entre les 4 apps) pointant vers un .xlsx.
+         - Helper sheetsError(kind, res, id) utilisé par tous les appels Sheets : en cas
+           de fichier Office, l'erreur nomme le rôle (central / sécurité), l'ID, indique
+           si l'ID vient d'un override et renvoie vers ⚙ Paramètres → « Réinitialiser au
+           défaut ». Les autres erreurs restent inchangées (status + corps de réponse).
   1.7.0  2026-07-30  Session #31 — PANNEAU PARAMÈTRES : fichiers de travail configurables.
          ⚠️ NON testé navigateur.
          - [Feature] Pilule « ⚙ Paramètres » sous la connexion Google → modale permettant
@@ -1288,7 +1298,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 
 // ── Fichiers de travail ──────────────────────────────────────────────
@@ -2244,42 +2254,63 @@ function a1(sheet, rng) {
 async function sheetsGet(range, spreadsheetId = GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
-  if (!res.ok) throw new Error(`Sheets GET ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await sheetsError('GET', res, spreadsheetId);
   return res.json();
 }
 
 async function sheetsGetFormulas(range, spreadsheetId = GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}?valueRenderOption=FORMULA`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
-  if (!res.ok) throw new Error(`Sheets GET FORMULA ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await sheetsError('GET FORMULA', res, spreadsheetId);
   return res.json();
 }
 
 async function sheetsUpdate(range, values, spreadsheetId = GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`;
   const res = await fetch(url, { method:'PUT', headers: { Authorization:`Bearer ${gAccessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify({ values }) });
-  if (!res.ok) throw new Error(`Sheets UPDATE ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await sheetsError('UPDATE', res, spreadsheetId);
   return res.json();
 }
 
 async function sheetsAppend(range, values, spreadsheetId = GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
   const res = await fetch(url, { method:'POST', headers: { Authorization:`Bearer ${gAccessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify({ values }) });
-  if (!res.ok) throw new Error(`Sheets APPEND ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await sheetsError('APPEND', res, spreadsheetId);
   return res.json();
 }
 
 async function sheetsBatchUpdate(requests, spreadsheetId = GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`;
   const res = await fetch(url, { method:'POST', headers: { Authorization:`Bearer ${gAccessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify({ requests }) });
-  if (!res.ok) throw new Error(`Sheets BATCH ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await sheetsError('BATCH', res, spreadsheetId);
   return res.json();
+}
+
+// Construit l'erreur d'un appel Sheets. Cas « fichier Office » (.xlsx importé, refusé
+// par l'API) : message ciblé nommant le classeur en cause et la marche à suivre.
+function sheetIdRole(id) {
+  if (id === GSHEET_ID) return 'fichier central';
+  if (id === SAFETY_GSHEET_ID) return 'fichier sécurité (logs/backups)';
+  return 'classeur';
+}
+async function sheetsError(kind, res, spreadsheetId) {
+  const body = await res.text();
+  if (/must not be an Office file/i.test(body)) {
+    const fromOverride =
+      (spreadsheetId === GSHEET_ID && !!(lsGet(LS_CENTRAL) || '').trim()) ||
+      (spreadsheetId === SAFETY_GSHEET_ID && !!(lsGet(LS_SAFETY) || '').trim());
+    return new Error(`Sheets ${kind} ${res.status}: le ${sheetIdRole(spreadsheetId)} (ID ${spreadsheetId}) est un fichier Office (.xlsx) importé, pas une Google Sheet native — l'API Sheets le refuse. ` +
+      (fromOverride
+        ? `Cet ID vient d'un réglage enregistré dans ⚙ Paramètres (partagé entre les 4 apps) : ouvre ⚙ Paramètres et clique « Réinitialiser au défaut », ou colle l'ID d'une Google Sheet native.`
+        : `Ouvre ce fichier dans Drive → Fichier → Enregistrer au format Google Sheets, puis colle le nouvel ID dans ⚙ Paramètres.`));
+  }
+  return new Error(`Sheets ${kind} ${res.status}: ${body}`);
 }
 
 async function getSpreadsheetSheets(spreadsheetId) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
-  if (!res.ok) throw new Error(`Sheets METADATA ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await sheetsError('METADATA', res, spreadsheetId);
   return res.json();
 }
 
@@ -2323,7 +2354,7 @@ function findSheetProps(sheetsArr, title) {
 async function fetchSheetProps(title = SHEET_NAME, spreadsheetId = GSHEET_ID) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${gAccessToken}` } });
-  if (!res.ok) throw new Error(`Sheets METADATA ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await sheetsError('METADATA', res, spreadsheetId);
   const data = await res.json();
   const props = findSheetProps(data.sheets, title);
   if (!props) {
@@ -3512,7 +3543,7 @@ function cmColIndex(letters){ let n=0; for(const c of String(letters).toUpperCas
 async function sheetsValuesBatchUpdate(data, spreadsheetId = GSHEET_ID){
   const url=`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`;
   const res=await fetch(url,{ method:'POST', headers:{ Authorization:`Bearer ${gAccessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify({ valueInputOption:'RAW', data }) });
-  if(!res.ok) throw new Error(`Sheets VALUES BATCH ${res.status}: ${await res.text()}`);
+  if(!res.ok) throw await sheetsError('VALUES BATCH', res, spreadsheetId);
   return res.json();
 }
 
