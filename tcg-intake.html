@@ -2,10 +2,30 @@
 <!--
 =============================================================
   TCG INTAKE — Le Gardien du TCG (outil back-office)
-  Version : 1.7.4 (2026-10-08)
+  Version : 1.7.7 (2026-10-08)
   (premier stamp formel de versioning pour l'Integrator —
    suivi désormais sur sa propre piste, distincte de Sales/Master)
 =============================================================
+  1.7.7  2026-10-08  30C (ME5.5 · 30 Ans) : longueur du set = 128 → numéros « 129/128 ».
+  1.7.6  2026-10-08  PRIX DE VENTE, EV10.5, QR EN FORMULE, REPRINTS.
+         ⚠️ NON testé navigateur.
+         - [Prix 🔴] La colonne Q recevait le prix CM BRUT (r.prixStr) : la règle de prix
+           ne servait qu'aux étiquettes. Q reçoit désormais le prix de vente (getSellPrice,
+           prix manuel pour les cartes à 0,01€).
+         - [Prix] Nouvelle grille applyPriceRule : arrondi à l'entier supérieur, puis
+           ≤5€ +1 · ≤15€ +2 · ≤25€ +3 · ≤50€ +4 · ≤150€ +5 · >150€ +10.
+         - [Mapping] BLK / WHT (et xBLK / xWHT) : Code_Serie « EV10.5 BLK » / « EV10.5 WHT ».
+         - [QR] Colonne C écrite en formule comme les lignes existantes :
+           ="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data="&D<ligne>
+         - [Reprints] Sets à reprints (CEL Celebrations, 30C 30 Ans / ME5.5) : un cn
+           « CODE NUM » (ex. « GE 106 ») donne le numéro « GE106 » → « Palkia Niv.X GE106 ».
+           Ajout de 30C au MAPPING (ME5.5 · 30 Ans, longueur à compléter).
+  1.7.5  2026-10-08  UPLOAD CSV BLOQUÉ SANS CONNEXION GOOGLE.
+         ⚠️ NON testé navigateur.
+         - [Garde-fou] readFile() et cmReadFile() (drop + sélecteur, onglets 1-4 et 5)
+           refusent le fichier si isAuthenticated() est faux : toast explicite, fichier
+           non lu, sélecteur réinitialisé (le même fichier peut être re-choisi après
+           connexion). Évite de préparer tout un lot qui ne pourra pas être injecté.
   1.7.4  2026-10-08  GRILLE : extension au nombre exact de lignes.
          ⚠️ NON testé navigateur.
          - [Fix] ensureGridRows() ajoutait une marge fixe de 500 lignes vides en bas de
@@ -1334,7 +1354,7 @@ const LOGO_IMG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 // ============================================================
 // CONFIG
 // ============================================================
-const APP_VERSION = '1.7.4';
+const APP_VERSION = '1.7.7';
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 
 // ── Fichiers de travail ──────────────────────────────────────────────
@@ -1408,14 +1428,15 @@ const MAPPING = {
   "CRE": { length: 198, extra: null, codeSerie: "EB6.0", nomSerie: "Règne de Glace" },
   "EVS": { length: 203, extra: null, codeSerie: "EB7.0", nomSerie: "Evolution Céleste" },
   "CEL": { length: 25, extra: null, codeSerie: "EB7.5", nomSerie: "Celebrations" },
+  "30C": { length: 128, extra: null, codeSerie: "ME5.5", nomSerie: "30 Ans" },
   "FST": { length: 264, extra: null, codeSerie: "EB8.0", nomSerie: "Poing de Fusion" },
   "BRS": { length: 172, extra: "TG30", codeSerie: "EB9.0", nomSerie: "Stars Etincelantes" },
   "SVI": { length: 198, extra: null, codeSerie: "EV1.0", nomSerie: "Ecarlate et Violet" },
   "DRI": { length: 182, extra: null, codeSerie: "EV10.0", nomSerie: "Rivalités Destinées" },
-  "BLK": { length: 86, extra: null, codeSerie: "EV10.5", nomSerie: "Foudre Noire" },
-  "WHT": { length: 86, extra: null, codeSerie: "EV10.5", nomSerie: "Flamme Blanche" },
-  "xBLK": { length: 86, extra: null, codeSerie: "EV10.5", nomSerie: "Foudre Noire" },
-  "xWHT": { length: 86, extra: null, codeSerie: "EV10.5", nomSerie: "Flamme Blanche" },
+  "BLK": { length: 86, extra: null, codeSerie: "EV10.5 BLK", nomSerie: "Foudre Noire" },
+  "WHT": { length: 86, extra: null, codeSerie: "EV10.5 WHT", nomSerie: "Flamme Blanche" },
+  "xBLK": { length: 86, extra: null, codeSerie: "EV10.5 BLK", nomSerie: "Foudre Noire" },
+  "xWHT": { length: 86, extra: null, codeSerie: "EV10.5 WHT", nomSerie: "Flamme Blanche" },
   "PAL": { length: 193, extra: null, codeSerie: "EV2.0", nomSerie: "Evolutions à Paldéa" },
   "OBF": { length: 197, extra: null, codeSerie: "EV3.0", nomSerie: "Flammes Obsidiennes" },
   "MEW": { length: 165, extra: null, codeSerie: "EV3.5", nomSerie: "151" },
@@ -1660,15 +1681,16 @@ function buildCardNumber(setCode, cn, me) {
   // RT second set (Rivaux Emergents)
   if (/^RT\d+$/i.test(c) && setCode === 'RR') return c;
 
-  // CEL (Celebrations)
+  // Sets anniversaire à reprints (CEL = 25 ans, 30C = 30 ans) : le cn d'un reprint est
+  // « CODE NUM » (ex. « GE 106 ») → numéro = code d'origine + numéro (« GE106 »).
+  if (setCode === 'CEL' || setCode === '30C') {
+    const rp = c.match(/^([A-Za-z][A-Za-z0-9]*)\s+(\S+)$/);
+    if (rp) return rp[1].toUpperCase() + rp[2];
+  }
+
+  // CEL (Celebrations) — set principal
   if (setCode === 'CEL') {
     if (/^\d+$/.test(c)) return c.padStart(3,'0') + '/025';
-    if (c.includes(' ')) {
-      const parts = c.split(' ');
-      const originCode = parts[0]; const originCn = parts[1];
-      const originEntry = MAPPING[originCode] || null;
-      return buildCardNumber(originCode, originCn, originEntry);
-    }
     return c;
   }
 
@@ -1919,10 +1941,22 @@ let highValuePrices  = {};        // { rowIndex: prix } pour les cartes à 0.01�
 let pokepediaIndex = null;
 
 // ── Prix de vente : règles d'arrondi ─────────────────────────────────────
+// Arrondi à l'entier supérieur, puis majoration selon le palier.
+// (Seuils entiers : comparer le prix brut ou arrondi donne le même palier.)
 function applyPriceRule(prixNum) {
-  if (prixNum <  10) return Math.ceil(prixNum);
-  if (prixNum <  20) return Math.ceil(prixNum) + 1;
-  return Math.ceil(prixNum) + 2;  // ≥ 20€ (plus de validation manuelle au-delà de 50€)
+  const p = Math.ceil(prixNum);
+  if (p <=   5) return p + 1;
+  if (p <=  15) return p + 2;
+  if (p <=  25) return p + 3;
+  if (p <=  50) return p + 4;
+  if (p <= 150) return p + 5;
+  return p + 10;
+}
+
+// Prix de vente formaté pour la colonne Q (repli sur le prix CM si aucun prix de vente).
+function sellPriceStr(r) {
+  const sell = getSellPrice(allRows.indexOf(r));
+  return (sell !== null && sell > 0) ? '€' + Number(sell).toFixed(2) : r.prixStr;
 }
 
 function getSellPrice(rowIndex) {
@@ -2814,8 +2848,6 @@ function buildLotRow(lotName, cardCount, prixAchat, cardsInLot, targetRow) {
 // BUILD CARD ROW
 // ============================================================
 function buildCardRow(r, lotName, dailySeq, formulaTemplates, refRow, targetRow) {
-  const key = buildKey(r.codeSerie, r.nomCarte, dailySeq);
-  const qrLink = buildQRLink(key);
 
   // Adapt formulas from reference row to target row
   const adaptF = (idx) => {
@@ -2825,7 +2857,7 @@ function buildCardRow(r, lotName, dailySeq, formulaTemplates, refRow, targetRow)
   };
 
   return [
-    qrLink,                    // C - QR_Link (URL, encodeURIComponent → sûr)
+    `="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data="&D${targetRow}`, // C - QR_Link (formule)
     buildKeyFormula(targetRow, dailySeq), // D - Key (formule, valeur = key)
     'Yes',                     // E - Print_Etiquette
     safeForSheets(lotName),    // F - Origine
@@ -2836,7 +2868,7 @@ function buildCardRow(r, lotName, dailySeq, formulaTemplates, refRow, targetRow)
     safeForSheets(r.etat),     // K - Etat
     '', '', '', '', // L M N O (masquées)
     '',             // P - Statut Carte
-    r.prixStr,      // Q - Prix vente (toujours préfixé "€", jamais une formule)
+    sellPriceStr(r),// Q - Prix vente (règle de prix appliquée, préfixé "€", jamais une formule)
     '', '', '', '', // R S T U
     adaptF(0),      // V - Prix achat (formule pro-rata)
     adaptF(1),      // W - Marge
@@ -3524,7 +3556,18 @@ dropZone.addEventListener('drop', e => {
 });
 fileInput.addEventListener('change', e => { if (e.target.files[0]) readFile(e.target.files[0]); });
 
+// Aucun CSV n'est accepté sans connexion Google active (sinon le travail de préparation
+// est perdu au moment d'injecter). Réinitialise les sélecteurs pour permettre de
+// re-choisir le même fichier une fois connecté.
+function requireAuthForUpload() {
+  if (isAuthenticated()) return true;
+  showToast('⚠ Connecte-toi à Google avant de charger un CSV');
+  ['fileInput', 'cmFileInput'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  return false;
+}
+
 function readFile(file) {
+  if (!requireAuthForUpload()) return;
   const reader = new FileReader();
   reader.onload = e => routeDroppedFile(e.target.result);
   reader.readAsText(file, 'UTF-8');
@@ -3625,6 +3668,7 @@ function cmLog(type,msg){
 }
 
 function cmReadFile(file){
+  if (!requireAuthForUpload()) return;
   const reader=new FileReader();
   reader.onload=e=>routeDroppedFile(e.target.result);
   reader.readAsText(file,'UTF-8');
