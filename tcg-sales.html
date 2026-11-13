@@ -1190,7 +1190,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.24.2';
+const APP_VERSION      = '1.24.3';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1922,8 +1922,16 @@ async function readMasterHeartbeat() {
     updateMasterStatusBar();
     updateBuyerField();
   } catch (e) {
-    // Tab app_state n'existe pas encore = master jamais lancé
-    masterStatus = { state: 'never', message: 'Master jamais initialisé · ouvre l\'app master une fois', eventName: '' };
+    // 1.24.3 : on distingue la cause réelle (avant, toute erreur = « jamais initialisé »).
+    // 400/404 = onglet app_state absent → master jamais lancé ; 403 = pas d'accès au classeur events ;
+    // 401 = session Google expirée ; autre = réseau / erreur inattendue.
+    const st = e && e.status;
+    let msg;
+    if (st === 403)                    msg = 'Accès refusé au classeur events · vérifie le partage pour ce compte';
+    else if (st === 401)               msg = 'Session Google expirée · reconnecte-toi';
+    else if (st === 400 || st === 404) msg = 'Master jamais initialisé · ouvre l\'app master une fois';
+    else                               msg = 'Statut master illisible (' + (st || 'réseau') + ')';
+    masterStatus = { state: 'never', message: msg, eventName: '' };
     updateMasterStatusBar();
     updateBuyerField();
   }
