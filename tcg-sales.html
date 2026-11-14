@@ -1,10 +1,46 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.24.2 (2026-09-19)
+  Version : 1.26.0 (2026-11-14)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.26.0 2026-11-14  (Encaissement PAR PROPRIÉTAIRE — Sales seul, Master inchangé)
+         - [Feature] Un panier à plusieurs propriétaires s'encaisse en autant d'étapes que de
+           propriétaires (ordre d'apparition dans le panier) : « Part 1/2 · Gardien Vente Pro ·
+           30,00 € », puis « Suivant → Ben », etc. Chaque étape propose UNIQUEMENT les moyens
+           compatibles avec son propriétaire (PAY_ORDER_PRO / PAY_ORDER_PRIVATE) et doit être
+           équilibrée sur SA part. « ← Précédent » revient à l'étape d'avant (saisie conservée).
+           Remplace l'offre des 5 moyens sur panier mixte de 1.25.0 (qui permettait d'encaisser du
+           Pro en Paypal Privé ou du hors-stock sur la CB de la SRL).
+         - [QR] Libellé contextuel : « QR code (compte pro) » sur une part Pro, « QR code (compte
+           perso) » sur une part hors-stock. Même colonne Q `QR_code` : le compte se déduit du
+           Type_Vente de la ligne qui porte le montant.
+         - [Schéma] Inchangé (A:T). Les montants P:T sont écrits sur la 1ʳᵉ ligne de CHAQUE
+           propriétaire de la transaction (au lieu de la seule 1ʳᵉ ligne) → la somme des colonnes
+           reste exacte et un filtre sur Type_Vente donne l'encaissement par propriétaire.
+           Master ne lit pas P:T → aucun changement côté Master.
+         - [Roll-back] Le -RB recopie en négatif la ventilation de chaque propriétaire sur sa 1ʳᵉ
+           ligne (payload.splitByType) ; repli i===0 pour les ventes en file d'avant 1.26.0.
+  1.25.0 2026-11-14  (Type de vente PAR ARTICLE — Sales seul, Master inchangé)
+         - [Feature] Le sélecteur global « Type de vente » (zone bas) est SUPPRIMÉ. Chaque ligne du
+           panier porte sa propre pastille de propriétaire (« ❔ Proprio » tant que non choisi) ;
+           un tap ouvre un sélecteur (base codée en dur ∪ event_sellers ∪ « ➕ Ajouter un vendeur »).
+           AUCUN défaut : un nouvel article arrive toujours sans propriétaire, et la validation est
+           BLOQUÉE tant qu'un seul article n'en a pas (bouton « ⚠ Propriétaire manquant (N) »).
+           Un re-scan d'une ligne existante (qty++) conserve le propriétaire de la ligne.
+         - [Schéma] Inchangé : col O `Type_Vente` est simplement écrite par ligne (c.saleType).
+           Master route déjà la sync ligne par ligne → panier mixte OK sans toucher au Master.
+         - [Roll-back] Chaque ligne -RB recopie le Type_Vente de SON article (repli sur l'ancien
+           payload.saleType pour les ventes en file créées avant 1.25.0).
+         - [Paiement] Moyens proposés : Pro seul → PAY_ORDER_PRO ; hors-stock seul → PAY_ORDER_PRIVATE ;
+           panier MIXTE → les 5 moyens. Le sous-titre de la modale ventile alors le total par
+           propriétaire. Les montants de paiement restent sur la 1ʳᵉ ligne de la transaction.
+         - [Panier] APP_VERSION bump → un panier sauvegardé d'une version antérieure n'est pas restauré.
+  1.24.3 2026-11-14  (Diagnostic statut master — patch Sales seul)
+         - [Fix] readMasterHeartbeat() : le catch distingue 403 (accès refusé au classeur events),
+           401 (session expirée), 400/404 (app_state absent = master jamais lancé) et le reste,
+           au lieu d'afficher « Master jamais initialisé » pour toute erreur.
   1.24.2 2026-09-19  (Mise en page LAPTOP / grand écran — CSS seul, aucune logique touchée)
          - [Fix UX] Sur laptop, la colonne unique pensée pour smartphone (560 px max) empilait
            panier + client/type + remises + total + Valider : sur un écran de ~600 px de haut, le
@@ -610,6 +646,21 @@ body::before{content:'';position:fixed;inset:0;
   font-weight:700;color:var(--accent);cursor:pointer;border-bottom:1px dashed transparent;}
 .ci-price:active{border-bottom-color:var(--accent);}
 .ci-price.modified{color:var(--warning);border-bottom-color:rgba(251,191,36,.5);}
+/* (1.25.0) Pastille propriétaire par article */
+.ci-type{flex:0 0 auto;align-self:center;max-width:84px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:'Space Mono',monospace;font-size:.7rem;font-weight:700;border-radius:999px;padding:5px 9px;
+  cursor:pointer;user-select:none;border:1px solid rgba(71,200,255,.5);background:rgba(71,200,255,.12);color:var(--accent2);}
+.ci-type.pro{border-color:rgba(232,255,71,.55);background:rgba(232,255,71,.12);color:var(--accent);}
+.ci-type.unset{border:2px dashed var(--accent3);background:rgba(255,107,107,.12);color:var(--accent3);}
+.pay-owner{margin:4px 0 10px;padding:9px 12px;border-radius:9px;font-weight:700;font-size:.92rem;
+  border:1px solid rgba(71,200,255,.45);background:rgba(71,200,255,.1);color:var(--accent2);}
+.pay-owner.pro{border-color:rgba(232,255,71,.5);background:rgba(232,255,71,.1);color:var(--accent);}
+.pay-owner.hidden{display:none;}
+.type-opts{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.type-opt{width:100%;text-align:left;background:var(--bg);border:1px solid var(--border);border-radius:9px;
+  padding:13px 14px;color:var(--text);font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;cursor:pointer;}
+.type-opt.sel{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);}
+.type-opt.add{border-style:dashed;color:var(--muted);font-weight:600;}
 
 .cart-empty{text-align:center;padding:14px;font-family:'Space Mono',monospace;
   font-size:.6rem;color:var(--muted);}
@@ -765,7 +816,7 @@ body::before{content:'';position:fixed;inset:0;
    ZONE BAS — client · type de vente · total · valider
    ════════════════════════════════════════════════════════ */
 .zone-bot{flex:0 0 auto;display:flex;flex-direction:column;gap:8px;}
-.bot-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.bot-fields{display:grid;grid-template-columns:1fr;gap:8px;}   /* (1.25.0) plus de sélecteur global */
 .bot-field{min-width:0;}
 .bot-field input,.bot-select{width:100%;background:var(--bg);border:1px solid var(--border);
   border-radius:9px;padding:11px;color:var(--text);font-family:'Syne',sans-serif;font-size:.8rem;outline:none;}
@@ -853,7 +904,7 @@ body::before{content:'';position:fixed;inset:0;
   .cart-item-name{font-size:.88rem;}
   .modal-panel{padding:18px;}
   .modal-field input,.modal-field select{font-size:1rem;padding:12px;}
-  #saleTypeSelect,#buyerInput{font-size:1rem!important;}
+  #buyerInput{font-size:1rem!important;}
   .reel{width:42px;}
 }
 
@@ -966,9 +1017,6 @@ body::before{content:'';position:fixed;inset:0;
             <span style="font-family:'Space Mono',monospace;font-size:.55rem;color:var(--muted);"> · Master</span>
           </div>
         </div>
-        <select id="saleTypeSelect" class="bot-select" onchange="onSaleTypeChange()">
-          <option value="" disabled selected>— Type de vente —</option>
-        </select>
       </div>
 
       <!-- (1.18.0) Réductions rapides : base = total courant, arrondi à l'euro SUPÉRIEUR.
@@ -1081,6 +1129,18 @@ body::before{content:'';position:fixed;inset:0;
 </div>
 
 <!-- Modal: Ajouter un vendeur (type de vente à la volée) [#26] -->
+<!-- (1.25.0) Modal: propriétaire d'un article (type de vente par ligne) -->
+<div class="modal-backdrop hidden" id="typePickerModal" onclick="if(event.target===this)closeTypePicker()">
+  <div class="modal-panel">
+    <div class="modal-title">À qui est cet article ?</div>
+    <div class="modal-subtitle" id="typePickerItem">—</div>
+    <div class="type-opts" id="typePickerOpts"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeTypePicker()">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop hidden" id="addSellerModal" onclick="if(event.target===this)closeAddSeller()">
   <div class="modal-panel">
     <div class="modal-title">➕ Ajouter un vendeur</div>
@@ -1104,6 +1164,7 @@ body::before{content:'';position:fixed;inset:0;
   <div class="modal-panel">
     <div class="modal-title">💳 Encaissement</div>
     <div class="modal-subtitle" id="paySubtitle">—</div>
+    <div class="pay-owner hidden" id="payOwner"></div>
     <div id="payMeans"></div>
     <div id="payAdd"></div>
     <div class="pay-residual" id="payResidual"></div>
@@ -1190,7 +1251,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.24.3';
+const APP_VERSION      = '1.26.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -1293,7 +1354,6 @@ let cartEventReconciled = false;// réconciliation initiale (1ère confirmation 
 // (#26) Types de vente : vendeurs ajoutés à la volée (lus depuis EVENTS/event_sellers, append-only)
 // + type actuellement sélectionné (null = aucun → validation bloquée).
 let eventSellers     = [];      // libellés ajoutés en cours d'event (hors base codée en dur)
-let selectedSaleType = null;    // libellé choisi par le vendeur ('' / null = pas encore choisi)
 let eventSellersLoadedAt = 0;   // dernière lecture réussie de event_sellers
 
 // (#26 split) État du pop-up d'encaissement (null = fermé).
@@ -1530,8 +1590,9 @@ function updateValidateButton() {
   const hasBlockingDup = cart.some(c => c.dupStatus === 'red');
   // Bloque si acheteur requis (Master ne le fournit pas) et vide
   const buyerMissing = !getResolvedBuyer();
-  // (#26) Bloque tant qu'aucun type de vente n'est choisi
-  const saleTypeMissing = !getSaleType();
+  // (1.25.0) Bloque tant qu'un article n'a pas de propriétaire
+  const saleTypeMissingN = missingSaleTypeCount();
+  const saleTypeMissing = saleTypeMissingN > 0;
   if (hasBlockingDup) {
     btn.disabled = true;
     btn.classList.add('warn');
@@ -1539,7 +1600,7 @@ function updateValidateButton() {
   } else if (saleTypeMissing) {
     btn.disabled = true;
     btn.classList.add('warn');
-    btn.textContent = '⚠ Choisissez le type de vente';
+    btn.textContent = `⚠ Propriétaire manquant (${saleTypeMissingN})`;
   } else if (buyerMissing) {
     btn.disabled = true;
     btn.classList.add('warn');
@@ -1976,53 +2037,64 @@ function allSaleTypes() {
   return out;
 }
 
-// (Re)construit le <select>. Conserve la sélection courante si elle existe encore ; sinon laisse
-// le placeholder (AUCUN défaut — le vendeur DOIT choisir, décision #26).
-function populateSaleTypeSelect() {
-  const sel = document.getElementById('saleTypeSelect');
-  if (!sel) return;
-  const types = allSaleTypes();
-  sel.innerHTML = '';
-  // Placeholder non sélectionnable
-  const ph = document.createElement('option');
-  ph.value = ''; ph.textContent = '— Type de vente —'; ph.disabled = true;
-  sel.appendChild(ph);
-  types.forEach(t => {
-    const o = document.createElement('option');
-    o.value = t; o.textContent = t;
-    sel.appendChild(o);
-  });
-  // Option d'ajout à la volée (toujours en dernier)
-  const add = document.createElement('option');
-  add.value = ADD_SELLER_SENTINEL; add.textContent = '➕ Ajouter un vendeur…';
-  sel.appendChild(add);
-  // Restaure la sélection si toujours présente, sinon placeholder
-  if (selectedSaleType && types.some(t => normAccent(t) === normAccent(selectedSaleType))) {
-    sel.value = types.find(t => normAccent(t) === normAccent(selectedSaleType));
-  } else {
-    selectedSaleType = null;
-    sel.value = '';
-  }
+// (1.25.0) TYPE DE VENTE PAR ARTICLE — chaque ligne du panier porte c.saleType (aucun défaut).
+// Pastille sur la ligne → sélecteur modal (base ∪ event_sellers ∪ « ➕ Ajouter un vendeur »).
+let typePickerTargetUid = null;
+
+function shortSaleTypeLabel(t) {
+  if (isProSaleType(t)) return 'PRO';
+  const first = (t || '').toString().trim().split(/\s+/)[0] || '?';
+  return first.length > 9 ? first.slice(0, 8) + '…' : first;
+}
+function saleTypeBadgeHTML(c) {
+  const t = (c.saleType || '').trim();
+  if (!t) return `<span class="ci-type unset" data-action="type" data-uid="${esc(c.uid)}" title="Choisir le propriétaire de cet article">❔ Proprio</span>`;
+  const cls = 'ci-type' + (isProSaleType(t) ? ' pro' : '');
+  return `<span class="${cls}" data-action="type" data-uid="${esc(c.uid)}" title="${esc(t)} — toucher pour changer">${esc(shortSaleTypeLabel(t))}</span>`;
+}
+function missingSaleTypeCount() {
+  return cart.filter(c => !(c.saleType && c.saleType.trim())).length;
+}
+// La liste des types a pu changer (event_sellers rechargé / vendeur ajouté) → rafraîchit le picker ouvert.
+function refreshSaleTypeUI() {
+  const m = document.getElementById('typePickerModal');
+  if (m && !m.classList.contains('hidden')) renderTypePicker();
   updateValidateButton();
 }
 
-// Changement du sélecteur : soit on choisit un type, soit on déclenche l'ajout d'un vendeur.
-function onSaleTypeChange() {
-  const sel = document.getElementById('saleTypeSelect');
-  if (!sel) return;
-  if (sel.value === ADD_SELLER_SENTINEL) {
-    // Revenir à la sélection précédente le temps de la saisie, puis ouvrir la modale.
-    sel.value = selectedSaleType || '';
-    openAddSeller();
-    return;
-  }
-  selectedSaleType = sel.value || null;
-  updateValidateButton();
+function openTypePicker(uidToEdit) {
+  const c = cart.find(x => x.uid === uidToEdit);
+  if (!c) return;
+  typePickerTargetUid = uidToEdit;
+  document.getElementById('typePickerItem').textContent = c.name + (c.qty > 1 ? ' ×' + c.qty : '');
+  renderTypePicker();
+  document.getElementById('typePickerModal').classList.remove('hidden');
+  // Rafraîchit la liste partagée des vendeurs (best-effort, anti-spam 5s)
+  if (isAuth() && (Date.now() - eventSellersLoadedAt) > 5000) loadEventSellers();
 }
-
-// Type de vente effectivement retenu pour la vente (null si non choisi).
-function getSaleType() {
-  return (selectedSaleType && selectedSaleType.trim()) ? selectedSaleType.trim() : null;
+function renderTypePicker() {
+  const wrap = document.getElementById('typePickerOpts');
+  const c = cart.find(x => x.uid === typePickerTargetUid);
+  if (!wrap || !c) return;
+  const cur = normAccent((c.saleType || '').trim());
+  wrap.innerHTML = allSaleTypes().map((t, i) =>
+    `<button class="type-opt${normAccent(t) === cur ? ' sel' : ''}" data-i="${i}">${isProSaleType(t) ? '🏪 ' : '👤 '}${esc(t)}</button>`
+  ).join('') + `<button class="type-opt add" data-add="1">➕ Ajouter un vendeur…</button>`;
+  wrap.querySelectorAll('.type-opt').forEach(b => b.addEventListener('click', ev => {
+    ev.stopPropagation();
+    if (b.dataset.add) { document.getElementById('typePickerModal').classList.add('hidden'); openAddSeller(); return; }
+    pickSaleType(allSaleTypes()[+b.dataset.i]);
+  }));
+}
+function pickSaleType(name) {
+  const c = cart.find(x => x.uid === typePickerTargetUid);
+  if (c && name) { c.saleType = name; renderCart(); }
+  closeTypePicker();
+}
+function closeTypePicker() {
+  document.getElementById('typePickerModal').classList.add('hidden');
+  typePickerTargetUid = null;
+  focusScan();
 }
 
 // (#26 split) Vrai si le type correspond à la vente Pro (résolution tolérante accents/casse).
@@ -2042,7 +2114,7 @@ async function loadEventSellers() {
     const seen = new Set(); eventSellers = [];
     for (const n of names) { const k = normAccent(n); if (!seen.has(k)) { seen.add(k); eventSellers.push(n); } }
     eventSellersLoadedAt = Date.now();
-    populateSaleTypeSelect();
+    refreshSaleTypeUI();
   } catch (e) {
     logEvent('warn', 'lecture event_sellers impossible', { err: e.message });
   }
@@ -2070,6 +2142,7 @@ function openAddSeller() {
 }
 function closeAddSeller() {
   document.getElementById('addSellerModal').classList.add('hidden');
+  typePickerTargetUid = null;   // (1.25.0)
   focusScan();
 }
 
@@ -2084,10 +2157,10 @@ async function confirmAddSeller() {
   }
   // Ajout local immédiat (visible tout de suite sur cet appareil)
   if (!allSaleTypes().some(t => normAccent(t) === normAccent(name))) eventSellers.push(name);
-  selectedSaleType = name;
-  populateSaleTypeSelect();
-  const sel = document.getElementById('saleTypeSelect'); if (sel) sel.value = name;
-  updateValidateButton();
+  // (1.25.0) Attribue directement le nouveau vendeur à l'article d'où vient la demande
+  const target = cart.find(x => x.uid === typePickerTargetUid);
+  if (target) { target.saleType = name; renderCart(); }
+  refreshSaleTypeUI();
   closeAddSeller();
   // Partage best-effort (crée l'onglet au besoin, puis append). N'empêche pas la vente locale.
   try {
@@ -2658,6 +2731,7 @@ function cartItemInnerHTML(c) {
       <button class="ci-del" data-action="del" data-uid="${esc(c.uid)}" title="Retirer l'article">🗑</button>
       <span class="${qtyCls}" data-action="qty" data-uid="${esc(c.uid)}" title="Modifier la quantité">×${c.qty}</span>
       <div class="${nameCls}"${nameTitle}>${unk}${esc(c.name)}<span class="ci-price${modClass}" data-action="price" data-uid="${esc(c.uid)}" title="Corriger le prix unitaire">${formatPrice(c.prixUnit)}</span></div>
+      ${saleTypeBadgeHTML(c)}
     `;
 }
 
@@ -2709,7 +2783,7 @@ function renderCart() {
     if (el.className !== cls) el.className = cls;
 
     // Signature : ne réécrit l'innerHTML que si le contenu visible a changé
-    const sig = JSON.stringify([c.dupStatus, c.name, c.prixUnit, c.qty, !!c.priceModified, c.dateEntree || '']);
+    const sig = JSON.stringify([c.dupStatus, c.name, c.prixUnit, c.qty, !!c.priceModified, c.dateEntree || '', c.saleType || '']);
     if (el.dataset.sig !== sig) {
       el.innerHTML = cartItemInnerHTML(c);
       el.dataset.sig = sig;
@@ -2813,6 +2887,7 @@ document.getElementById('cartItems').addEventListener('click', e => {
   // 'del' laisse propager : on VEUT que le focus revienne à la zone de scan après suppression.
   else if (action === 'qty')   { e.stopPropagation(); openQtyEdit(uid); }
   else if (action === 'price') { e.stopPropagation(); openEditPrice(uid); }
+  else if (action === 'type')  { e.stopPropagation(); openTypePicker(uid); }   // (1.25.0)
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -3207,24 +3282,74 @@ function validateSale() {
     if (input && !input.classList.contains('hidden')) input.focus();
     return;
   }
-  const saleType = getSaleType();
-  if (!saleType) { showToast('⚠ Choisissez le type de vente avant de valider', true); return; }
-  openPaymentSplit(saleType, acheteur);
+  const nMissing = missingSaleTypeCount();
+  if (nMissing > 0) { showToast(`⚠ Choisissez le propriétaire de chaque article (${nMissing} manquant${nMissing > 1 ? 's' : ''})`, true); return; }
+  openPaymentSplit(acheteur);
 }
 
-function openPaymentSplit(saleType, acheteur) {
-  const totalCents = Math.round(getCartTotal() * 100);
-  const order = isProSaleType(saleType) ? PAY_ORDER_PRO : PAY_ORDER_PRIVATE;
-  splitState = {
-    totalCents, order, saleType, acheteur, confirming: false,
-    active: [{ id: order[0], cents: totalCents }],   // Cash pré-rempli au total
-  };
-  const nItems = cart.reduce((s, c) => s + c.qty, 0);
-  document.getElementById('paySubtitle').textContent =
-    `${nItems} article${nItems > 1 ? 's' : ''} · Total ${formatPrice(getCartTotal())}`;
+function openPaymentSplit(acheteur) {
+  // (1.26.0) Un groupe par propriétaire (ordre d'apparition), chacun avec SES moyens compatibles.
+  const groups = [];
+  const byKey = {};
+  cart.forEach(c => {
+    const key = normAccent((c.saleType || '').trim());
+    if (!byKey[key]) {
+      const pro = isProSaleType(c.saleType);
+      byKey[key] = { key, type: c.saleType.trim(), pro, totalCents: 0, nItems: 0,
+                     order: pro ? PAY_ORDER_PRO : PAY_ORDER_PRIVATE, active: null };
+      groups.push(byKey[key]);
+    }
+    byKey[key].totalCents += Math.round(c.prixUnit * c.qty * 100);
+    byKey[key].nItems += c.qty;
+  });
+  splitState = { acheteur, groups, step: 0, confirming: false, totalCents: 0, order: [], active: [] };
   document.getElementById('paymentSplitModal').classList.remove('hidden');
+  loadSplitGroup(0);
+}
+
+// (1.26.0) Charge le groupe i comme « étape courante » (totalCents/order/active = champs lus par
+// le reste du split, inchangé). Une saisie déjà faite sur ce groupe est restaurée.
+function loadSplitGroup(i) {
+  const g = splitState.groups[i];
+  const n = splitState.groups.length;
+  splitState.step = i;
+  splitState.confirming = false;
+  splitState.totalCents = g.totalCents;
+  splitState.order = g.order;
+  splitState.active = g.active ? g.active.map(m => ({ ...m })) : [{ id: g.order[0], cents: g.totalCents }];  // Cash pré-rempli
+  const nItems = cart.reduce((s, c) => s + c.qty, 0);
+  let sub = `${nItems} article${nItems > 1 ? 's' : ''} · Total ${formatPrice(getCartTotal())}`;
+  const own = document.getElementById('payOwner');
+  if (n > 1) {
+    sub += ' · ' + splitState.groups.map(x => `${shortSaleTypeLabel(x.type)} ${formatPrice(x.totalCents / 100)}`).join(' / ');
+    own.className = 'pay-owner' + (g.pro ? ' pro' : '');
+    own.textContent = `Part ${i + 1}/${n} · ${g.pro ? '🏪' : '👤'} ${g.type} · ${formatPrice(g.totalCents / 100)} (${g.nItems} art.)`;
+  } else {
+    own.className = 'pay-owner hidden';
+  }
+  document.getElementById('paySubtitle').textContent = sub;
   renderSplitMeans();
   updateSplitFooter();
+}
+function saveSplitGroup() {
+  splitState.groups[splitState.step].active = splitState.active.map(m => ({ ...m }));
+}
+function nextSplitGroup() {
+  if (!splitState || !splitIsBalanced()) return;
+  saveSplitGroup();
+  loadSplitGroup(splitState.step + 1);
+}
+function prevSplitGroup() {
+  if (!splitState || splitState.step === 0) return;
+  saveSplitGroup();
+  loadSplitGroup(splitState.step - 1);
+}
+// Libellé d'un moyen ; le QR précise le compte selon le propriétaire de l'étape courante.
+function payMeanLabel(id) {
+  if (id === 'QR_code' && splitState && splitState.groups) {
+    return splitState.groups[splitState.step].pro ? 'QR code (compte pro)' : 'QR code (compte perso)';
+  }
+  return PAY_MEANS[id] || id;
 }
 
 function closePaymentSplit() {
@@ -3240,7 +3365,7 @@ function renderSplitMeans() {
   // Les chips d'ajout dépendent du reste → gérés dans updateSplitFooter() à chaque frappe.
   wrap.innerHTML = splitState.active.map(m => `
     <div class="pay-row">
-      <span class="pay-label">${PAY_MEANS[m.id] || m.id}</span>
+      <span class="pay-label">${payMeanLabel(m.id)}</span>
       <input class="pay-amt" type="text" inputmode="decimal" data-id="${m.id}"
              value="${centsToEur(m.cents)}" oninput="onSplitAmount('${m.id}', this.value)">
       <button class="pay-del" onclick="removeSplitMean('${m.id}')" title="Retirer">🗑</button>
@@ -3255,7 +3380,7 @@ function renderSplitAdd() {
   const remaining = splitState.order.filter(id => !used.has(id));
   if (splitResidualCents() > 0 && remaining.length) {
     el.innerHTML = `<div class="pay-add-row">` +
-      remaining.map(id => `<button class="pay-chip" onclick="addSplitMean('${id}')">+ ${PAY_MEANS[id] || id}</button>`).join('') +
+      remaining.map(id => `<button class="pay-chip" onclick="addSplitMean('${id}')">+ ${payMeanLabel(id)}</button>`).join('') +
       `</div>`;
   } else {
     el.innerHTML = '';
@@ -3306,9 +3431,14 @@ function updateSplitFooter() {
        <button class="btn btn-primary" onclick="confirmSplitStep2()">Oui</button>`;
   } else {
     const dis = splitIsBalanced() ? '' : 'disabled';
-    actions.innerHTML =
-      `<button class="btn btn-secondary" onclick="closePaymentSplit()">Annuler</button>
-       <button class="btn btn-primary" ${dis} onclick="confirmSplitStep1()">Confirmer</button>`;
+    const n = splitState.groups.length, i = splitState.step;
+    const left = i > 0
+      ? `<button class="btn btn-secondary" onclick="prevSplitGroup()">← Précédent</button>`
+      : `<button class="btn btn-secondary" onclick="closePaymentSplit()">Annuler</button>`;
+    const right = i < n - 1
+      ? `<button class="btn btn-primary" ${dis} onclick="nextSplitGroup()">Suivant → ${esc(shortSaleTypeLabel(splitState.groups[i + 1].type))}</button>`
+      : `<button class="btn btn-primary" ${dis} onclick="confirmSplitStep1()">Confirmer</button>`;
+    actions.innerHTML = left + right;
   }
 }
 
@@ -3324,15 +3454,21 @@ function backFromConfirm() {
 }
 function confirmSplitStep2() {
   if (!splitState || !splitIsBalanced()) return;
-  const payCents = {};
-  splitState.active.forEach(m => { payCents[m.id] = (payCents[m.id] || 0) + m.cents; });
-  const { saleType, acheteur } = splitState;
+  saveSplitGroup();
+  // (1.26.0) Ventilation PAR propriétaire : { cléPropriétaire: { moyen: cents } }
+  const payByKey = {};
+  splitState.groups.forEach(g => {
+    const pc = {};
+    (g.active || []).forEach(m => { pc[m.id] = (pc[m.id] || 0) + m.cents; });
+    payByKey[g.key] = pc;
+  });
+  const { acheteur } = splitState;
   closePaymentSplit();
-  finalizeSale(saleType, acheteur, payCents);
+  finalizeSale(acheteur, payByKey);
 }
 
 // Enregistre réellement la vente (outbox), avec la ventilation de paiement.
-function finalizeSale(saleType, acheteur, payCents) {
+function finalizeSale(acheteur, payByKey) {
   const tvaVente = SALE_TVA_DEFAULT;  // (#26) Master tranche le régime pour une vente Pro
   const btn = document.getElementById('btnValidate');
   btn.disabled = true;
@@ -3342,7 +3478,13 @@ function finalizeSale(saleType, acheteur, payCents) {
   const txId = now.getTime().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
   // Schéma ventes_detail A:T — paiements (P:T) UNIQUEMENT sur la 1ʳᵉ ligne (sommables sans double comptage).
-  const rows = cart.map((c, i) => [
+  // (1.26.0) Paiements P:T sur la 1ʳᵉ ligne de CHAQUE propriétaire (somme des colonnes toujours exacte).
+  const seenOwner = new Set();
+  const rows = cart.map((c, i) => {
+    const ok = normAccent((c.saleType || '').trim());
+    const firstOfOwner = !seenOwner.has(ok); seenOwner.add(ok);
+    const pc = firstOfOwner ? (payByKey[ok] || {}) : {};
+    return [
     ts, safeForSheets(gUserName), safeForSheets(gUserEmail), txId,
     safeForSheets(c.key), safeForSheets(c.name), safeForSheets(c.type),
     safeForSheets(c.category), safeForSheets(c.licence),
@@ -3351,16 +3493,16 @@ function finalizeSale(saleType, acheteur, payCents) {
     c.source,
     safeForSheets(tvaVente),                       // col M
     safeForSheets(acheteur),                       // col N
-    safeForSheets(saleType),                       // col O (#26)
-    ...PAYMENT_COLS.map(col => (i === 0 && payCents[col] > 0) ? Math.round(payCents[col]) / 100 : '')  // P:T
-  ]);
+    safeForSheets(c.saleType || ''),               // col O (#26) — par article depuis 1.25.0
+    ...PAYMENT_COLS.map(col => (pc[col] > 0) ? Math.round(pc[col]) / 100 : '')  // P:T
+  ]; });
 
   const total = getCartTotal();
-  const payload = { range: a1(SHEET_SALES, 'A:T'), values: rows, ts, txId, total, tvaVente, acheteur, saleType,
-                    split: payCents, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
+  const payload = { range: a1(SHEET_SALES, 'A:T'), values: rows, ts, txId, total, tvaVente, acheteur,
+                    split: payByKey, splitByType: true, cartSnapshot: JSON.parse(JSON.stringify(cart)) };
 
   queueOfflineSale(payload);
-  logEvent('info', 'vente mise en file', { txId, n: rows.length, total, split: payCents, online: navigator.onLine });
+  logEvent('info', 'vente mise en file', { txId, n: rows.length, total, split: payByKey, online: navigator.onLine });
   clearCartSilent();
   armRollback(payload);
   btn.textContent = '✓ Valider la vente';
@@ -3458,11 +3600,18 @@ function sendRollbackCompensation(payload) {
   const ts = new Date().toISOString();
   const tva = payload.tvaVente || SALE_TVA_DEFAULT;
   const buyer = payload.acheteur || '';
-  const saleType = payload.saleType || '';  // (#26) recopié → Master no-op CENTRAL si hors-stock
+  const legacyType = payload.saleType || '';  // (1.25.0) repli : ventes en file créées avant 1.25.0
   const split = payload.split || {};         // (#26 split) ventilation à recopier en négatif
   // Une ligne -RB par article : qty négative ; col K = prix d'origine (cartes, à restaurer dans Q
   // par Master) ou total négatif (scellé/manuel, informatif — Master utilise |qty| + le txId estampillé).
+  const seenOwnerRb = new Set();
   const rows = (payload.cartSnapshot || []).map((c, i) => {
+    // (1.26.0) ventilation par propriétaire → recopiée sur la 1ʳᵉ ligne de chacun ; sinon (ancien format) ligne 0
+    let pc = {};
+    if (payload.splitByType) {
+      const ok = normAccent((c.saleType || '').trim());
+      if (!seenOwnerRb.has(ok)) { seenOwnerRb.add(ok); pc = split[ok] || {}; }
+    } else if (i === 0) pc = split;
     const colK = (c.source === 'cartes')
       ? c.prixOriginal
       : -(Math.round(c.prixUnit * c.qty * 100) / 100);
@@ -3471,8 +3620,8 @@ function sendRollbackCompensation(payload) {
       safeForSheets(c.key), safeForSheets(c.name), safeForSheets(c.type),
       safeForSheets(c.category), safeForSheets(c.licence),
       -c.qty, colK, c.source, safeForSheets(tva), safeForSheets(buyer),
-      safeForSheets(saleType),   // col O
-      ...PAYMENT_COLS.map(col => (i === 0 && split[col] > 0) ? -(Math.round(split[col]) / 100) : '')  // P:T (négatif)
+      safeForSheets(c.saleType || legacyType),   // col O — type de l'article (Master no-op CENTRAL si hors-stock)
+      ...PAYMENT_COLS.map(col => (pc[col] > 0) ? -(Math.round(pc[col]) / 100) : '')  // P:T (négatif)
     ];
   });
   const rbPayload = { range: a1(SHEET_SALES, 'A:T'), values: rows, ts, txId: rbTxId, total: -payload.total };
@@ -3650,17 +3799,7 @@ async function init() {
   }
 
   updateNet();
-  // (#26) Sélecteur de type de vente : placeholder + base codée en dur dès le boot (avant auth).
-  populateSaleTypeSelect();
-  // Rafraîchit la liste partagée des vendeurs à l'ouverture du sélecteur (best-effort, anti-spam 5s).
-  const stSel = document.getElementById('saleTypeSelect');
-  if (stSel) {
-    const refreshSellers = () => {
-      if (isAuth() && (Date.now() - eventSellersLoadedAt) > 5000) loadEventSellers();
-    };
-    stSel.addEventListener('mousedown', refreshSellers);
-    stSel.addEventListener('focus', refreshSellers);
-  }
+  // (1.25.0) Plus de sélecteur global : le type se choisit par article (pastille du panier).
   // (#21 v1.12.0) Migration : purge de tout ancien jeton resté en clair sur le disque.
   lsClear(LS_TOKEN);
   // GIS : on initialise le client mais on NE déclenche PAS de demande automatique au boot.
