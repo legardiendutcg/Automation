@@ -1,8 +1,26 @@
 <!--
 =============================================================
   TCG MASTER — Le Gardien du TCG
-  Version : 1.24.1 (2026-09-19)
+  Version : 1.25.0 (2026-11-14)
 =============================================================
+  1.25.0 2026-11-14  (Mode OBSERVATEUR ; Master seul)
+         - [Feature] Quand une session est déjà active ailleurs, l'écran « Session active ailleurs »
+           propose, en plus de la reprise, « 👁 Observer seulement ». Cette instance affiche alors
+           le dashboard (KPI, donuts, faits, CA/heure, journal, anomalies) en LECTURE SEULE, sans
+           jamais toucher au bail : pas d'écriture dans app_state (ni nom d'event, ni heartbeat),
+           pas de sync, pas de publication STOCK_PUBLIC, pas de clôture.
+         - [Lock] En observateur, la surveillance du verrou continue (nom d'event et appareil
+           pilote rafraîchis) mais la REPRISE AUTO est désactivée, même si le bail est libre ou
+           périmé. Le bandeau signale alors « ⚠ le master principal ne répond plus ». Sortie via
+           « ⤓ Prendre la main » (même confirmation/course que la reprise forcée).
+         - [Garde] refreshStockCache() et openCloseEventModal()/confirmCloseEvent() refusent
+           désormais d'agir sans le bail (défense en profondeur ; boutons aussi désactivés).
+  1.24.2 2026-11-14  (Dashboard : donut « CA par caissier » ; Master seul)
+         - [Feature] Nouveau donut « CA par caissier » sous « CA par vendeur » : CA du jour ventilé
+           par compte Google connecté dans Sales (col B `Vendeur`, repli col C `Email`, sinon
+           « Inconnu »). Complète « CA par vendeur » (= à qui appartient l'article, Type_Vente) par
+           « qui a encaissé ». Les -RB portent le compte de qui annule → se déduisent de ce segment.
+           Aucune modification de Sales ni du schéma ventes_detail.
   1.24.1 2026-09-19  (CA par heure : plage élargie 8h → 20h)
          - [UX] computeHours() : tranches 8h…19h (12 barres, la dernière couvre 19h–20h) au lieu de
            10h…17h. Titre du panneau « CA par heure (8h–20h) ». Barres resserrées (hauteur 18→14 px,
@@ -645,6 +663,11 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 .event-strip .event-banner-icon{font-size:1.05rem;flex-shrink:0;}
 .event-strip .etxt{font-weight:600;font-size:.9rem;color:var(--success);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .event-strip.warn .etxt{color:var(--warning);}
+/* (1.25.0) Mode observateur : bandeau bleu, contrôles d'écriture masqués */
+.event-strip.obs{background:rgba(71,200,255,.08);border-color:rgba(71,200,255,.3);}
+.event-strip.obs .etxt{color:var(--accent2);}
+.app.observer #eventNameInput,.app.observer #btnSaveEvent,.app.observer #btnForceSync,
+.app.observer #btnToggleSync,.app.observer #refreshBtn{display:none !important;}
 .event-strip input{background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:7px 11px;color:var(--text);font-family:'Syne',sans-serif;font-size:.85rem;width:230px;outline:none;}
 .event-strip input:focus{border-color:var(--accent);}
 
@@ -760,6 +783,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
       <span id="eventBannerText" class="etxt">Aucun event nommé.</span>
       <input id="eventNameInput" type="text" placeholder="Nom de l'event (optionnel)" autocomplete="off">
       <button class="btn btn-primary btn-sm" onclick="saveEventConfig()" id="btnSaveEvent">💾 Enregistrer</button>
+      <button class="btn btn-secondary btn-sm" onclick="forceTakeover()" id="btnObsTakeover" style="display:none;">⤓ Prendre la main</button>
       <button class="help-btn" onclick="toggleHelp('helpEvent')" title="Aide">?</button>
       <div class="help-pop" id="helpEvent">Optionnel et non bloquant. S'il est rempli, il est imposé comme acheteur par défaut aux vendeurs (non-modifiable côté TCG Sales) ; s'il est vide, c'est au(x) vendeur(s) d'indiquer l'acheteur. La référence de facture est gérée par formule dans la GSheet.</div>
     </div>
@@ -812,6 +836,11 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
         <div class="dpanel">
           <div class="pt">CA par vendeur</div>
           <div class="donut-wrap"><div id="donutVendeurSvg"></div><div class="legend two" id="donutVendeurLeg"></div></div>
+        </div>
+        <!-- (1.24.2) Donut CA par caissier (compte Google connecté dans Sales : col B, repli col C) -->
+        <div class="dpanel">
+          <div class="pt">CA par caissier</div>
+          <div class="donut-wrap"><div id="donutCaissierSvg"></div><div class="legend two" id="donutCaissierLeg"></div></div>
         </div>
       </div>
       <!-- Center : ⭐ Faits marquants (convention) ⇄ 🏠 Récap comptoir (pas de nom d'event) -->
@@ -906,6 +935,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
     <p id="lockOverlayText">Une session master est déjà active sur un autre appareil. Cette instance reste en lecture seule pour éviter deux masters simultanés.</p>
     <div class="holder-label" id="lockHolderLabel">—</div>
     <button class="google-btn" style="background:var(--accent);color:var(--bg);" onclick="forceTakeover()" id="btnForceTakeover">⤓ Forcer la reprise sur cet appareil</button>
+    <div style="margin-top:10px;"><button class="btn btn-secondary" onclick="enterObserverMode()" id="btnObserve">👁 Observer seulement (lecture seule)</button></div>
   </div>
 </div>
 
@@ -1008,7 +1038,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.24.1';
+const APP_VERSION      = '1.25.0';
 
 const OAUTH_CLIENT_ID = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const GSHEET_SCOPES   = 'https://www.googleapis.com/auth/spreadsheets';
@@ -1102,6 +1132,7 @@ let lockLabel       = '';     // libellé lisible de cette instance
 let lockHeld        = false;  // true = cette instance détient le bail et pilote la sync
 let lockHolderLabel = '';     // libellé du détenteur quand ce n'est pas nous
 let manualLockOnly  = false;  // true après éviction → pas de reprise automatique (anti-ping-pong)
+let observerMode    = false;  // (1.25.0) lecture seule volontaire : stats sans bail, sans reprise auto
 let lockResolved    = false;  // false tant que l'acquisition initiale n'a pas tranché (évite un flash d'overlay)
 let lockWatchTimer  = null;
 let lastSeenLockTs  = null;   // dernier horodatage de verrou observé (détection de changement)
@@ -1378,7 +1409,7 @@ async function logout() {
   stopStatsLoop();
   stopLockWatch();
   if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
-  lockHeld = false; manualLockOnly = false; lockHolderLabel = ''; lockResolved = false;
+  lockHeld = false; manualLockOnly = false; lockHolderLabel = ''; lockResolved = false; observerMode = false;
   lastSeenLockTs = null; lastLockChangeAt = 0;
   const tok = gAccessToken;
   gAccessToken = null; gTokenExpiry = 0; gUserEmail = ''; gUserName = '';
@@ -1989,6 +2020,7 @@ async function loadStockCache() {
 
 async function refreshStockCache() {
   if (cacheLoading) return;
+  if (!lockHeld) { showToast('⚠ Session inactive sur cet appareil', true); return; }   // (1.25.0)
   await loadStockCache();
 }
 
@@ -2186,6 +2218,7 @@ async function acquireLock() {
 function promoteToHolder() {
   stopLockWatch();
   lockHeld = true; manualLockOnly = false; lockHolderLabel = ''; lockResolved = true;
+  observerMode = false;   // (1.25.0)
   renderLockUI();
   renderEventBanner();
   loadStockCache();
@@ -2197,6 +2230,7 @@ function promoteToHolder() {
 
 function demoteToLockedOut(label, manual) {
   lockHeld = false;
+  observerMode = false;   // (1.25.0) l'utilisateur rechoisit sur l'overlay
   manualLockOnly = !!manual;
   lockResolved = true;
   if (label) lockHolderLabel = label;
@@ -2209,6 +2243,19 @@ function onEvicted(label) {
   showToast('⚠ Session reprise par un autre appareil', true);
   logEvent('warn', 'instance évincée du verrou', { byLabel: label });
   demoteToLockedOut(label, true);
+}
+
+// (1.25.0) Mode observateur : dashboard en lecture seule, sans bail ni reprise auto.
+function enterObserverMode() {
+  if (!(isAuth() && isAuthorizedMaster) || lockHeld) return;
+  observerMode = true;
+  lockResolved = true;
+  renderLockUI();
+  renderEventBanner();
+  startStatsLoop();
+  if (!lockWatchTimer) startLockWatch();   // garde nom d'event / appareil pilote à jour
+  showToast('👁 Mode observateur — lecture seule');
+  logEvent('info', 'mode observateur activé', { holder: lockHolderLabel });
 }
 
 async function forceTakeover() {
@@ -2250,6 +2297,12 @@ async function lockWatchTick() {
   try { cell = await readLockCell(); } catch (e) { return; }
   reflectEventFromCell(cell);
   noteLockTs(cell.tsRaw);
+  if (observerMode) {
+    // (1.25.0) observateur : on suit l'état, on ne prend JAMAIS le bail automatiquement
+    lockHolderLabel = (cell.uuid && cell.uuid !== lockUuid) ? (cell.label || '(appareil inconnu)') : '';
+    renderEventBanner();
+    return;
+  }
   if (!cell.uuid || cell.uuid === lockUuid) {
     // libre (ou c'est nous) → on prend, sauf si on attend une action manuelle après éviction
     if (!manualLockOnly) { if (await acquireLock()) { promoteToHolder(); return; } }
@@ -2270,10 +2323,19 @@ function renderLockUI() {
   const saveBtn = document.getElementById('btnSaveEvent');
   if (lockHeld) {
     lockOverlay.classList.remove('show');
-    app.classList.remove('locked');
+    app.classList.remove('locked', 'observer');
     if (saveBtn) saveBtn.disabled = false;
     return;
   }
+  // (1.25.0) Observateur : pas de flou ni d'overlay, contrôles d'écriture masqués/désactivés
+  if (observerMode) {
+    lockOverlay.classList.remove('show');
+    app.classList.remove('locked');
+    app.classList.add('observer');
+    if (saveBtn) saveBtn.disabled = true;
+    return;
+  }
+  app.classList.remove('observer');
   // Acquisition pas encore tranchée → simple flou de chargement, sans overlay anxiogène
   if (!lockResolved) {
     app.classList.add('locked');
@@ -2369,6 +2431,21 @@ function renderEventBanner() {
   const closeBtn = document.getElementById('btnCloseEvent');
   if (!banner || !txt) return;
   updateCenterPanelMode();  // (#13) facts ⇄ comptoir dès qu'on (dé)fixe un nom d'event
+  const obsBtn = document.getElementById('btnObsTakeover');
+  if (obsBtn) obsBtn.style.display = observerMode ? '' : 'none';
+  if (!lockHeld && observerMode) {
+    // (1.25.0) bandeau observateur
+    banner.className = 'event-strip obs';
+    if (icon) icon.textContent = '👁';
+    const ev = currentEventName ? ('Event : <strong>' + esc(currentEventName) + '</strong>') : 'Aucun event nommé';
+    let who;
+    if (!lockHolderLabel) who = ' · ⚠ aucun master actif — la sync est à l\'arrêt';
+    else if (holderStale()) who = ' · ⚠ le master principal (' + esc(lockHolderLabel) + ') ne répond plus';
+    else who = ' · piloté par ' + esc(lockHolderLabel);
+    txt.innerHTML = 'Observateur (lecture seule) — ' + ev + who;
+    if (closeBtn) closeBtn.disabled = true;
+    return;
+  }
   if (!lockHeld) {
     banner.className = 'event-strip warn';
     if (icon) icon.textContent = '🔒';
@@ -3101,6 +3178,11 @@ async function loadStats() {
     dayData.forEach(r => { const k = (String(r[tvIdx] || '').trim()) || 'Sans type'; byType[k] = (byType[k] || 0) + (parseFloat(r[10]) || 0); });
     renderDonut('donutVendeurSvg', 'donutVendeurLeg', byType, TYPE_COLORS, true);
 
+    // (1.24.2) CA par caissier = compte Google connecté dans Sales (col B Vendeur, repli col C Email).
+    const byCashier = {};
+    dayData.forEach(r => { const k = (String(r[1] || '').trim()) || (String(r[2] || '').trim()) || 'Inconnu'; byCashier[k] = (byCashier[k] || 0) + (parseFloat(r[10]) || 0); });
+    renderDonut('donutCaissierSvg', 'donutCaissierLeg', byCashier, {}, true);
+
     if (currentEventName) renderFacts(computeFacts(dayData));
     else                  renderCounter(allData);   // filtre déjà lui-même sur aujourd'hui
     renderHours(computeHours(dayData));
@@ -3127,7 +3209,7 @@ async function loadStats() {
 
 function renderStatsEmpty() {
   ['kpiCA','kpiNb','kpiTx','kpiAvg'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
-  ['donutCatSvg','donutLicSvg','donutVendeurSvg','donutCatLeg','donutLicLeg','donutVendeurLeg','factsList','hoursBars'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+  ['donutCatSvg','donutLicSvg','donutVendeurSvg','donutCaissierSvg','donutCatLeg','donutLicLeg','donutVendeurLeg','donutCaissierLeg','factsList','hoursBars'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
   const sl = document.getElementById('salesLog');  if (sl) sl.innerHTML = '<div style="font-family:\'Space Mono\',monospace;font-size:.65rem;color:var(--muted);">Aucune vente pour cet event.</div>';
   const an = document.getElementById('anomalies'); if (an) an.innerHTML = '<div style="font-family:\'Space Mono\',monospace;font-size:.65rem;color:var(--muted);">—</div>';
   ['salesLogBadge','anomBadge'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '0'; });
@@ -3400,6 +3482,7 @@ function renderAnomalies(rows) {
 // CLOSE EVENT
 // ═══════════════════════════════════════════════════════════════
 function openCloseEventModal() {
+  if (!lockHeld) { showToast('⚠ Session inactive sur cet appareil', true); return; }   // (1.25.0)
   if (!currentEventName) { showToast('⚠ Aucun event à clôturer', true); return; }
   document.getElementById('closeModalEventName').textContent = currentEventName;
   document.getElementById('closeModalSummary').innerHTML = 'Chargement du résumé…';
@@ -3434,6 +3517,7 @@ async function loadCloseSummary() {
 }
 
 async function confirmCloseEvent() {
+  if (!lockHeld) { showToast('⚠ Session inactive sur cet appareil', true); return; }   // (1.25.0)
   const btn = document.getElementById('btnConfirmClose');
   btn.disabled = true; btn.textContent = '⏳ Clôture en cours…';
   try {
