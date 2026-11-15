@@ -1,10 +1,14 @@
 <!--
 =============================================================
   TCG SALES — Le Gardien du TCG
-  Version : 1.26.0 (2026-11-14)
+  Version : 1.27.0 (2026-11-15)
 =============================================================
   HISTORIQUE DES VERSIONS
   -----------------------
+  1.27.0 2026-11-15  (Propriétaire par défaut = Gardien Vente Pro — Sales seul)
+         - [UX] Tout nouvel article du panier (scan, manuel, inconnu) arrive avec
+           c.saleType = PRO_SALE_TYPE. La pastille reste modifiable par article. Les gardes
+           « propriétaire manquant » de 1.25.0 restent en place (filet de sécurité).
   1.26.0 2026-11-14  (Encaissement PAR PROPRIÉTAIRE — Sales seul, Master inchangé)
          - [Feature] Un panier à plusieurs propriétaires s'encaisse en autant d'étapes que de
            propriétaires (ordre d'apparition dans le panier) : « Part 1/2 · Gardien Vente Pro ·
@@ -1251,7 +1255,7 @@ body::before{content:'';position:fixed;inset:0;
 // ═══════════════════════════════════════════════════════════════
 // CONFIG — modifier selon besoin
 // ═══════════════════════════════════════════════════════════════
-const APP_VERSION      = '1.26.0';
+const APP_VERSION      = '1.27.0';
 
 const OAUTH_CLIENT_ID    = '774473792747-6ogjf5msksq995s0kssqo61b3co5rj96.apps.googleusercontent.com';
 const CENTRAL_GSHEET_ID  = '1CV1H2RkXNe4nuQVx3axpabUvWHTrTY0O4qFpH5aUJ4Q';  // (plus lu par Sales depuis 1.9.0 — stock lu via EVENTS/STOCK_PUBLIC)
@@ -2556,6 +2560,7 @@ function ageBadgeFor(c) {
 
 function addToCart(item) {
   invalidateDiscountOnCartChange();
+  if (!item.saleType) item.saleType = PRO_SALE_TYPE;   // (1.27.0) défaut = Gardien Vente Pro
   if (item.source === 'manuel' || item.source === 'inconnu') {
     // Manuel / inconnu : pas de regroupement (chaque ajout = une ligne distincte)
     item.qty = item.qty || 1;
@@ -3020,6 +3025,7 @@ function confirmManualItem() {
     source: 'manuel'
   };
   attachPhotoToItem(item);   // (1.17.0) upload de la photo si prise (non bloquant)
+  item.saleType = PRO_SALE_TYPE;   // (1.27.0) défaut = Gardien Vente Pro
   cart.push(item);
   closeManualItem();
   renderCart();
